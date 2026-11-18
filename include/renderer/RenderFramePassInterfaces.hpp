@@ -55,6 +55,9 @@ struct PassBuildContext
         uint32_t msaaSamples = 1u;
         // Backend can bind extra colour targets (FrameRecipe::sceneOutputs).
         bool mrtSupported = false;
+        // View allows a depth prepass. Contributors that list
+        // FrameRecipe::opaqueInputs only do so when this is set.
+        bool enableDepthPrepass = false;
 
         [[nodiscard]] uint32_t ActiveShadowResolution() const noexcept
         {

@@ -425,6 +425,8 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     settings.rendering.msaaSamples = 4u;
     settings.rendering.brdfPerLightFresnel = false;
     settings.rendering.specularOcclusion = false;
+    settings.rendering.gtaoEnabled = false;
+    settings.rendering.gtaoRadius = 1.5f;   // above the old 1.0 m limit
     JsonWriter out;
     out.BeginObject();
     WriteProjectSettings(out, settings);
@@ -435,6 +437,8 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK(ctx, error.empty());
     CHECK(ctx, oldProject.renderingStored);
     CHECK_EQ(ctx, oldProject.rendering.msaaSamples, 2u);
+    CHECK(ctx, oldProject.rendering.gtaoEnabled);   // missing key: GTAO stays on
+    CHECK_EQ(ctx, oldProject.rendering.gtaoRadius, 0.5f);   // missing key: default radius
     const auto result = ReadProjectSettings(JsonParser::Parse(out.GetString(), error));
     CHECK(ctx, error.empty());
     CHECK_EQ(ctx, result.windowTitle, settings.windowTitle);
@@ -454,6 +458,8 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK(ctx, !result.rendering.brdfPerLightFresnel);
     CHECK(ctx, result.rendering.brdfMultiScatter);
     CHECK(ctx, !result.rendering.specularOcclusion);
+    CHECK(ctx, !result.rendering.gtaoEnabled);
+    CHECK_EQ(ctx, result.rendering.gtaoRadius, 1.5f);
     CHECK_EQ(ctx, result.actions.size(), size_t{1});
     if (!result.actions.empty())
     {

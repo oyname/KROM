@@ -350,10 +350,22 @@ public:
         return !m_declaredResource.empty() && name == m_declaredResource;
     }
 
+    // The produced resource becomes an input of the opaque pass on this slot
+    // (FrameRecipe::opaqueInputs), as GTAO does, when the view allows a prepass.
+    void SetOpaqueInputSlot(uint32_t slot) noexcept
+    {
+        m_opaqueInputSlot = slot;
+        m_hasOpaqueInput = true;
+    }
+
     void BuildPass(const PassBuildContext& ctx) const override
     {
         if (m_resourceName.empty() || m_passName.empty() || m_executorName.empty())
             return;
+        if (m_hasOpaqueInput && !ctx.frame.enableDepthPrepass)
+            return;
+        if (m_hasOpaqueInput)
+            ctx.recipe.opaqueInputs.push_back({ m_resourceName, m_opaqueInputSlot });
 
         ctx.recipe.resources.push_back(FrameRecipeResourceDesc{
             m_resourceName,
@@ -386,6 +398,8 @@ private:
     std::string m_resourceName;
     std::string m_passName;
     std::string m_executorName;
+    uint32_t    m_opaqueInputSlot = 0u;
+    bool        m_hasOpaqueInput = false;
 };
 
 class MockPassContributorFeature final : public IEngineFeature
@@ -1095,6 +1109,7 @@ static void TestGtaoDepthPrepassRecipe(test::TestContext& ctx)
 
             FrameRecipe ao{};
             ao.resources.push_back({"GTAOOutput"});
+            ao.opaqueInputs.push_back({"GTAOOutput", TexSlots::PassSRV0});
             ao.passes.push_back({"GtaoLinearizeDepth"});
             ao.passes.push_back({"GtaoMain"});
             ao.passes.push_back({"GtaoBlur"});
@@ -1199,6 +1214,94 @@ static void TestForwardPipelineKeepsBuiltInShadowWithoutShadowDeclaringContribut
     CHECK(ctx, pipeline->Build(buildContext, buildResult));
     CHECK(ctx, FindGraphPass(renderGraph, "ShadowPass") != nullptr);
     CHECK(ctx, FindGraphResource(renderGraph, "ShadowMap") != nullptr);
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+// A contributor of the AfterDepthPrepass phase that lists an opaque input gets
+// the depth prepass and a read on the opaque pass, whatever its resource is
+// called; without such an input, or when the view does not allow a prepass,
+// the frame keeps the single-pass path.
+static void TestForwardPipelineOpaqueInputEnablesDepthPrepass(test::TestContext& ctx)
+{
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::renderer::addons::forward::CreateForwardFeature()));
+
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    const IRenderPipeline* pipeline = registry.GetActiveRenderPipeline();
+    CHECK(ctx, pipeline != nullptr);
+    if (!pipeline)
+        return;
+
+    MockPassContributor withInput(0x1101u, PassPhase::AfterDepthPrepass, {},
+        "ContactInput", "ContactInputPass", "contact_input.exec");
+    withInput.SetOpaqueInputSlot(14u);
+    MockPassContributor withoutInput(0x1102u, PassPhase::AfterDepthPrepass, {},
+        "PlainAfterDepth", "PlainAfterDepthPass", "plain_after_depth.exec");
+
+    struct Case
+    {
+        const IPassContributor* contributor;
+        bool prepassAllowed;
+        bool expectPrepass;
+    };
+    for (const Case& c : { Case{ &withInput, true, true },
+                           Case{ &withInput, false, false },
+                           Case{ &withoutInput, true, false } })
+    {
+        rendergraph::RenderGraph renderGraph;
+        RenderQueue renderQueue{};
+        MaterialSystem materials;
+        FramePipelineCallbacks callbacks{};
+        auto runtimeBindings = std::make_shared<FrameGraphRuntimeBindings>();
+        const std::vector<const IPassContributor*> contributors{ c.contributor };
+
+        RenderPipelineBuildContext buildContext{
+            renderGraph,
+            800u,
+            600u,
+            RenderTargetHandle::Make(3u, 1u),
+            TextureHandle::Make(3u, 1u),
+            true,
+            renderQueue,
+            shaderRuntime,
+            materials,
+            BufferHandle::Invalid(),
+            MaterialHandle::Invalid(),
+            nullptr,
+            nullptr,
+            callbacks,
+            runtimeBindings,
+            BackgroundMode::Skybox,
+            true,
+            {0.3f, 0.3f, 0.3f, 1.f},
+            contributors
+        };
+        buildContext.enableDepthPrepass = c.prepassAllowed;
+        RenderPipelineBuildResult buildResult{};
+
+        CHECK(ctx, pipeline->Build(buildContext, buildResult));
+        const rendergraph::RGPass* depth = FindGraphPass(renderGraph, "DepthPrepass");
+        const rendergraph::RGPass* opaque = FindGraphPass(renderGraph, "MainOpaquePass");
+        CHECK(ctx, opaque != nullptr);
+        CHECK_EQ(ctx, depth != nullptr, c.expectPrepass);
+        if (!opaque)
+            continue;
+
+        const rendergraph::RGResourceDesc* input = FindGraphResource(renderGraph, "ContactInput");
+        const bool opaqueReadsInput = input && std::any_of(opaque->accesses.begin(), opaque->accesses.end(),
+            [input](const rendergraph::RGResourceAccess& access) {
+                return access.resource == input->id && access.mode == rendergraph::RGAccessMode::Read;
+            });
+        CHECK_EQ(ctx, opaqueReadsInput, c.expectPrepass);
+    }
 
     registry.ShutdownAll(FeatureShutdownContext{});
     shaderRuntime.Shutdown();
@@ -5900,6 +6003,7 @@ int RunRendererTests()
         .Add("PlatformRenderLoop",        TestPlatformRenderLoop)
         .Add("Recipe extra colour targets (MRT)", TestRecipeExtraColorTargets)
         .Add("GTAO depth prepass recipe", TestGtaoDepthPrepassRecipe)
+        .Add("Forward pipeline: opaque input enables depth prepass", TestForwardPipelineOpaqueInputEnablesDepthPrepass)
         .Add("GTAO depth pipeline states", TestGtaoDepthPipelineStates)
         .Add("Depth mask shader variants", TestDepthMaskShadersCompile)
         .Add("PBR shaders compile SSR output", TestPbrShadersCompileSsrOutput);

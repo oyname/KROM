@@ -3267,15 +3267,13 @@ int KromEditorApp::Run(IAppScene& scene)
                 for (const addons::text::TextCommand& command : m_game.Text().Commands())
                     ui.gameOverlayText.push_back({command.text, command.x, command.y, command.size, command.color});
         }
-        const bool enableDepthPrepass = m_gtaoResources &&
-            m_gtaoResources->initialized && m_gtaoResources->settings.enabled;
         renderer::RenderView gameView{};
         if (gameInPanel &&
             engine::addons::camera::BuildPrimaryRenderView(*m_world, m_gameView.width, m_gameView.height,
                                                            gameView, m_cameraOptions))
         {
             renderer::IDevice* device = m_renderLoop.GetRenderSystem().GetDevice();
-            gameView.enableDepthPrepass = enableDepthPrepass;
+            gameView.enableDepthPrepass = true;   // runs only when an add-on needs it
             gameView.sceneOutputRT = m_gameView.rt;
             gameView.sceneOutputTex = device ? device->GetRenderTargetColorTexture(m_gameView.rt)
                                              : TextureHandle::Invalid();
@@ -3350,8 +3348,7 @@ int KromEditorApp::Run(IAppScene& scene)
             return -4;
         }
 
-        view.enableDepthPrepass = m_gtaoResources &&
-            m_gtaoResources->initialized && m_gtaoResources->settings.enabled;
+        view.enableDepthPrepass = true;   // runs only when an add-on needs it
         view.debugFlags = context.debugFlags | m_editorState.editorDebugFlags;
         if (m_editorState.editorDebugFlags != 0u)
             view.enableBloom = false;
@@ -3737,9 +3734,10 @@ int KromEditorApp::Run(IAppScene& scene)
             }
             if (m_gtaoResources)
             {
-                // Radius, intensity and bias only: "enabled" also switches the
-                // depth prepass and is not a project option.
+                // Switching "enabled" changes the GTAO structure revision; the
+                // frame graph is rebuilt with or without the depth prepass.
                 renderer::addons::gtao::GtaoSettings& gtao = m_gtaoResources->settings;
+                gtao.enabled   = m_editorState.gtaoSettings.enabled;
                 gtao.radius    = m_editorState.gtaoSettings.radius;
                 gtao.intensity = m_editorState.gtaoSettings.intensity;
                 gtao.bias      = m_editorState.gtaoSettings.bias;
@@ -6096,6 +6094,7 @@ void KromEditorApp::ApplyProjectRenderSettings()
     m_editorState.ssrMaxRoughness = rendering.ssrMaxRoughness;
     m_editorState.ssrMaxDistance = rendering.ssrMaxDistance;
     m_editorState.ssrThickness = rendering.ssrThickness;
+    m_editorState.gtaoSettings.enabled = rendering.gtaoEnabled;
     m_editorState.gtaoSettings.radius = rendering.gtaoRadius;
     m_editorState.gtaoSettings.intensity = rendering.gtaoIntensity;
     m_editorState.gtaoSettings.bias = rendering.gtaoBias;
@@ -6120,6 +6119,8 @@ public:
         out.perLightDiffuseFresnel = m_state.shading.perLightDiffuseFresnel;
         out.multiScatterCompensation = m_state.shading.multiScatterCompensation;
         out.specularOcclusion = m_state.specularOcclusion;
+        out.gtaoEnabled = m_state.gtaoSettings.enabled;
+        out.ssrEnabled = m_state.ssrEnabled;
         return out;
     }
 
@@ -6131,6 +6132,8 @@ public:
         m_state.msaaSamples = NormalizeMsaaSamples(in.msaaSamples);
         m_state.shading = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel, in.multiScatterCompensation };
         m_state.specularOcclusion = in.specularOcclusion;
+        m_state.gtaoSettings.enabled = in.gtaoEnabled;
+        m_state.ssrEnabled = in.ssrEnabled;
     }
 
 private:

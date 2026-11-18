@@ -1445,6 +1445,13 @@ struct EditorLoadingSmokeTest final : IAppScene
         constexpr int kWarmup = 60;
         constexpr int kMeasured = 300;
         // KROM_PERF_SELECT=<Name>: Entity auswaehlen (Inspector-Kosten mitmessen).
+        // GPU pass timing runs while the profiler shows its GPU section (bit 1 << 2,
+        // kSectionGpu in EditorProfilerWindow.cpp); the window costs the same in both states.
+        if (std::getenv("KROM_PERF_GPU_PASSES"))
+        {
+            app.m_editorState.showProfiler = true;
+            app.m_editorState.profilerSections |= 1u << 2;
+        }
         if (frames == 30)
             if (const char* wanted = std::getenv("KROM_PERF_SELECT"))
                 app.m_world->ForEachAlive([&](EntityID e) {
@@ -1480,18 +1487,29 @@ struct EditorLoadingSmokeTest final : IAppScene
                 if (frameMs > ms * 2.0)
                     ++spikes;
             }
-            std::printf("PERF frame=%.2f ms (%.1f FPS) max=%.1f ms spikes(>2x)=%d scene=%s gtao=%s"
+            std::printf("PERF frame=%.2f ms (%.1f FPS) max=%.1f ms spikes(>2x)=%d scene=%s gtao=%s passes=%u"
                         " descriptorUpdates/frame=%.1f descriptorBinds/frame=%.1f"
                         " firstFrame=%.0f ms warmupEnd=%.0f ms\n",
                 ms, 1000.0 / ms, maxMs, spikes, app.m_currentSceneName.c_str(),
                 app.m_gtaoResources && app.m_gtaoResources->settings.enabled ? "on" : "off",
+                context.renderLoop.GetRenderSystem().GetStats().graphPassCount,
                 static_cast<double>(perfDescriptorUpdates) / kMeasured,
                 static_cast<double>(perfDescriptorBinds) / kMeasured,
                 perfFirstFrameMs, perfWarmupEndMs);
+            if (std::getenv("KROM_PERF_GPU_PASSES"))
+            {
+                // Smoothed GPU time per pass (KROM_PERF_GPU_PASSES=1).
+                const auto report = context.renderLoop.GetRenderSystem().GetGpuPassTimings();
+                std::printf("PERF gpu total=%.3f ms", report.totalMs);
+                for (const auto& pass : report.passes)
+                    std::printf(" %s=%.3f", pass.name.c_str(), pass.ms);
+                std::printf("%s\n", report.supported ? "" : " (no GPU timestamps)");
+            }
             std::fflush(stdout);
             if (std::getenv("KROM_PERF_COMPARE_GTAO") && app.m_gtaoResources && !perfComparedGtao)
             {
-                app.m_gtaoResources->settings.enabled = false;
+                // The editor hands its state to the add-on every frame.
+                app.m_editorState.gtaoSettings.enabled = false;
                 perfComparedGtao = true;
                 sceneShadersReady = false;
                 readyFrames = 0;

@@ -72,6 +72,8 @@ struct FrameGraphStageContext
     bool enableSelectionOutline = true;
     // Screen-space reflections (SSR add-on); off for captures and previews.
     bool enableScreenSpaceReflections = true;
+    // View allows a depth prepass (RenderView::enableDepthPrepass).
+    bool enableDepthPrepass = false;
 };
 
 class FrameGraphStage

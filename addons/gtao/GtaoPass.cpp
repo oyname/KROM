@@ -15,7 +15,8 @@ namespace engine::renderer::addons::gtao {
 
 static constexpr std::string_view kResSceneLinearDepth = "SceneLinearDepth";
 static constexpr std::string_view kResGTAORaw          = "GTAORaw";
-static constexpr std::string_view kResGTAOOutput       = StandardFrameRecipeBuilder::kGTAOOutputResource;
+// Read by the opaque pass on PassSRV0 (FrameRecipe::opaqueInputs).
+static constexpr std::string_view kResGTAOOutput       = "GTAOOutput";
 static constexpr std::string_view kResGTAOComposite    = "GTAOComposite";
 static constexpr std::string_view kExecLinearize       = "frame.gtao_linearize";
 static constexpr std::string_view kExecGtaoMain        = "frame.gtao_main";
@@ -126,64 +127,169 @@ float main(PSInput IN) : SV_TARGET
 }
 )";
 
-// Horizon-based AO (HBAO style), 4 directions x 4 steps.
+// Ground-truth AO (Jimenez et al. 2016, "Practical Real-Time Strategies for Accurate
+// Indirect Occlusion"): per slice two horizons (both screen directions), the depth-
+// reconstructed normal projected into the slice plane and the analytic cosine-weighted
+// visibility integral. Output is the diffuse visibility (1 = unoccluded); the lit shaders
+// apply intensity and the multi-bounce approximation.
 static const std::string kGtaoMainPsHlsl = std::string(kPerFramePrefixHlsl) + R"(
 Texture2D<float> uLinearDepth : register(t8);
-SamplerState     uSampler     : register(s2);
 
 struct PSInput { float4 pos : SV_POSITION; float2 uv : TEXCOORD0; };
 
-static const int   kNumDir  = 4;
-static const int   kNumStep = 4;
-static const float kPi      = 3.14159265f;
+static const int   kSliceCount   = 3;
+static const int   kStepsPerSide = 4;
+static const float kPi           = 3.14159265f;
+static const float kHalfPi       = 1.57079633f;
+// Upper bound for the screen-space radius. Large radii only thin out the samples and
+// thrash the texture cache; 0.25 of the view height keeps world-space AO up close.
+static const float kMaxRadiusFraction = 0.25f;
+// Thickness heuristic: a sample below the current horizon pulls the horizon back by this
+// share (scaled by the falloff weight). Thin objects in front of the surface then stop
+// occluding everything behind them.
+static const float kThicknessBlend = 0.25f;
 
-float3 ViewPos(float2 uv, float linearZ)
+static int2 gDepthSize;
+
+float LinearZ(int2 pixel)
 {
-    float2 ndc    = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
-    float2 viewXY = ndc * float2(1.0f / projMatrix[0][0], 1.0f / projMatrix[1][1]) * linearZ;
-    return float3(viewXY, -linearZ);
+    return uLinearDepth.Load(int3(clamp(pixel, int2(0, 0), gDepthSize - 1), 0));
+}
+
+// View space: x right, y up, camera looks down -z; linearZ is the forward distance.
+float3 ViewPos(float2 pixelCenter, float linearZ)
+{
+    const float2 uv  = pixelCenter / float2(gDepthSize);
+    const float2 ndc = float2(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f);
+    const float2 xy  = ndc * float2(1.0f / abs(projMatrix[0][0]), 1.0f / abs(projMatrix[1][1])) * linearZ;
+    return float3(xy, -linearZ);
+}
+
+float3 ViewPosAt(int2 pixel)
+{
+    const int2 p = clamp(pixel, int2(0, 0), gDepthSize - 1);
+    return ViewPos(float2(p) + 0.5f, LinearZ(p));
+}
+
+// Normal from the depth buffer; per axis the neighbour with the smaller depth step is
+// used, so silhouettes do not bend the normal. Oriented towards the camera.
+float3 ReconstructNormal(int2 pixel, float3 P)
+{
+    const float3 pl = ViewPosAt(pixel + int2(-1,  0));
+    const float3 pr = ViewPosAt(pixel + int2( 1,  0));
+    const float3 pu = ViewPosAt(pixel + int2( 0, -1));
+    const float3 pd = ViewPosAt(pixel + int2( 0,  1));
+    const float3 dx = (abs(pr.z - P.z) < abs(P.z - pl.z)) ? (pr - P) : (P - pl);
+    const float3 dy = (abs(pd.z - P.z) < abs(P.z - pu.z)) ? (pd - P) : (P - pu);
+    float3 N = cross(dx, dy);
+    const float len = length(N);
+    N = (len > 1e-12f) ? N / len : float3(0.0f, 0.0f, 1.0f);
+    return (dot(N, -P) < 0.0f) ? -N : N;
+}
+
+// Interleaved gradient noise (Jimenez 2014).
+float InterleavedGradientNoise(float2 pixel)
+{
+    return frac(52.9829189f * frac(dot(pixel, float2(0.06711056f, 0.00583715f))));
 }
 
 float main(PSInput IN) : SV_TARGET
 {
-    float centerDepth = uLinearDepth.SampleLevel(uSampler, IN.uv, 0).r;
+    uint dw, dh;
+    uLinearDepth.GetDimensions(dw, dh);
+    gDepthSize = int2(dw, dh);
+
+    const int2  pixel       = int2(IN.pos.xy);
+    const float centerDepth = LinearZ(pixel);
     if (farPlane >= 1.0f && centerDepth >= farPlane * 0.99f)
         return 1.0f;
 
-    float radius = max(gtaoRadius, 0.01f);
-    float bias   = max(gtaoBias,   0.0f);
+    const float radius = max(gtaoRadius, 0.01f);
+    const float bias   = max(gtaoBias,   0.0f);
 
-    float3 P         = ViewPos(IN.uv, centerDepth);
-    float  focalY    = abs(projMatrix[1][1]);
-    float  radiusPx  = clamp(radius * focalY / max(centerDepth, 0.001f) * screenSize.y * 0.5f, 4.0f, 64.0f);
-    float  stepSizePx = radiusPx / float(kNumStep);
-    float2 texelSize = 1.0f / screenSize.xy;
+    const float3 P = ViewPos(float2(pixel) + 0.5f, centerDepth);
+    const float3 V = normalize(-P);
+    const float3 N = ReconstructNormal(pixel, P);
 
-    float noise = frac(sin(dot(floor(IN.pos.xy), float2(127.1f, 311.7f))) * 43758.547f);
+    // Samples reach the radius on screen; the falloff weight runs from 1 at one radius
+    // to 0 at two radii, so occluders far in front of the surface fade out.
+    const float focalY   = abs(projMatrix[1][1]);
+    const float radiusPx = min(radius * focalY / max(centerDepth, 0.001f) * float(gDepthSize.y) * 0.5f,
+                               float(gDepthSize.y) * kMaxRadiusFraction);
+    if (radiusPx < 1.0f)
+        return 1.0f;
+    const float minS = 1.3f / radiusPx; // first sample at least ~1 px away
 
-    float ao = 0.0f;
-    [unroll] for (int d = 0; d < kNumDir; d++)
+    const float sliceNoise = InterleavedGradientNoise(float2(pixel));
+    const float stepNoise  = InterleavedGradientNoise(float2(pixel.yx) + float2(17.0f, 31.0f));
+
+    float visibility = 0.0f;
+    [unroll] for (int slice = 0; slice < kSliceCount; ++slice)
     {
-        float  theta    = (float(d) + noise) * (kPi / float(kNumDir));
-        float2 dir      = float2(cos(theta), sin(theta));
-        float  maxSinH  = sin(bias);
+        const float  phi   = (float(slice) + sliceNoise) * (kPi / float(kSliceCount));
+        const float2 omega = float2(cos(phi), -sin(phi));          // screen direction (y down)
+        const float3 dirVS = float3(omega.x, -omega.y, 0.0f);      // same direction in view space
 
-        [unroll] for (int s = 1; s <= kNumStep; s++)
+        // Slice plane spanned by V and dirVS; project the normal into it.
+        const float3 orthoDir   = dirVS - dot(dirVS, V) * V;
+        const float3 axis       = normalize(cross(orthoDir, V));
+        const float3 projN      = N - axis * dot(N, axis);
+        const float  projNLenRaw = length(projN);
+        if (projNLenRaw < 1e-4f)
         {
-            float2 sampleUV = saturate(IN.uv + dir * (float(s) * stepSizePx) * texelSize);
-            float3 H        = ViewPos(sampleUV, uLinearDepth.SampleLevel(uSampler, sampleUV, 0).r) - P;
-            float  lenH     = length(H);
-            if (lenH < 1e-4f) continue;
+            visibility += 1.0f;
+            continue;
+        }
+        const float signN = (dot(orthoDir, projN) >= 0.0f) ? 1.0f : -1.0f;
+        const float cosN  = saturate(dot(projN, V) / projNLenRaw);
+        const float n     = signN * acos(cosN);
 
-            float falloff     = saturate(1.0f - lenH / (radius * 2.0f));
-            float weightedSin = lerp(maxSinH, H.z / lenH, falloff);
-            maxSinH           = max(maxSinH, weightedSin);
+        // Horizons start at the tangent plane of the projected normal.
+        const float lowCos0 = cos(n + kHalfPi);
+        const float lowCos1 = cos(n - kHalfPi);
+        float horizonCos0 = lowCos0;
+        float horizonCos1 = lowCos1;
+
+        [unroll] for (int step = 0; step < kStepsPerSide; ++step)
+        {
+            float s = (float(step) + stepNoise) / float(kStepsPerSide);
+            s = s * s + minS; // denser near the centre (contact detail)
+            const float2 offset = omega * (s * radiusPx);
+
+            const float3 S0 = ViewPosAt(int2(floor(float2(pixel) + 0.5f + offset)));
+            const float3 S1 = ViewPosAt(int2(floor(float2(pixel) + 0.5f - offset)));
+            const float3 d0 = S0 - P;
+            const float3 d1 = S1 - P;
+            const float  l0 = length(d0);
+            const float  l1 = length(d1);
+            const float  c0 = (l0 > 1e-5f) ? dot(d0 / l0, V) : lowCos0;
+            const float  c1 = (l1 > 1e-5f) ? dot(d1 / l1, V) : lowCos1;
+            const float  w0 = saturate(2.0f - l0 / radius);
+            const float  w1 = saturate(2.0f - l1 / radius);
+
+            const float shc0 = lerp(lowCos0, c0, w0);
+            const float shc1 = lerp(lowCos1, c1, w1);
+            horizonCos0 = (shc0 > horizonCos0) ? shc0 : lerp(horizonCos0, max(shc0, lowCos0), kThicknessBlend * w0);
+            horizonCos1 = (shc1 > horizonCos1) ? shc1 : lerp(horizonCos1, max(shc1, lowCos1), kThicknessBlend * w1);
         }
 
-        ao += 1.0f - max(0.0f, maxSinH);
+        // Bias tilts both horizons away from the view vector (against self-occlusion),
+        // then both are clamped to the hemisphere around the projected normal.
+        float h0 = -acos(clamp(horizonCos1, -1.0f, 1.0f)) - bias;
+        float h1 =  acos(clamp(horizonCos0, -1.0f, 1.0f)) + bias;
+        h0 = n + clamp(h0 - n, -kHalfPi, kHalfPi);
+        h1 = n + clamp(h1 - n, -kHalfPi, kHalfPi);
+
+        // Cosine-weighted visibility of the slice (Jimenez et al. 2016, eq. 10).
+        const float sinN  = sin(n);
+        const float iarc0 = (cosN + 2.0f * h0 * sinN - cos(2.0f * h0 - n)) * 0.25f;
+        const float iarc1 = (cosN + 2.0f * h1 * sinN - cos(2.0f * h1 - n)) * 0.25f;
+        // Slight pull towards 1 keeps slices almost parallel to the normal stable.
+        const float projNLen = lerp(projNLenRaw, 1.0f, 0.05f);
+        visibility += projNLen * (iarc0 + iarc1);
     }
 
-    return saturate(ao / float(kNumDir));
+    return saturate(visibility / float(kSliceCount));
 }
 )";
 
@@ -389,7 +495,8 @@ bool GtaoPass::DeclaresResource(std::string_view name) const noexcept
 
 void GtaoPass::BuildPass(const PassBuildContext& ctx) const
 {
-    if (!ctx.frame.enableAmbientOcclusion || !Active())
+    // Same-frame AO needs the depth prepass; views without it get no GTAO.
+    if (!ctx.frame.enableAmbientOcclusion || !ctx.frame.enableDepthPrepass || !Active())
         return;
     if (m_phase == PassPhase::BeforeTransparent)
     {
@@ -450,6 +557,7 @@ void GtaoPass::BuildPass(const PassBuildContext& ctx) const
         pass.renderPass.clearColor         = false;
         ctx.recipe.passes.push_back(std::move(pass));
     }
+    ctx.recipe.opaqueInputs.push_back({ std::string(kResGTAOOutput), TexSlots::PassSRV0 });
 
     auto res        = m_resources;
     auto rtBindings = ctx.frame.runtimeBindings;

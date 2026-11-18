@@ -1536,13 +1536,18 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
     ImGui::PushID("gtao");
     // Without the add-on (OpenGL) the values stay editable in the file but are greyed out here.
     if (!ctx.gtaoAvailable) ImGui::BeginDisabled();
-    ImGui::SliderFloat(TranslateLabel("gtao.radius", "Radius").c_str(), &rendering.gtaoRadius, 0.01f, 1.0f, "%.2f m",
+    ImGui::Checkbox(TranslateLabel("gtao.enabled", "Enabled").c_str(), &rendering.gtaoEnabled);
+    ImGui::SetItemTooltip("%s", Translate("gtao.enabled_tip"));
+    const bool gtaoValuesDisabled = !rendering.gtaoEnabled;
+    if (gtaoValuesDisabled) ImGui::BeginDisabled();
+    ImGui::SliderFloat(TranslateLabel("gtao.radius", "Radius").c_str(), &rendering.gtaoRadius, 0.01f, 2.0f, "%.2f m",
                        ImGuiSliderFlags_Logarithmic);
     ImGui::SetItemTooltip("%s", Translate("gtao.radius_tip"));
     ImGui::SliderFloat(TranslateLabel("gtao.intensity", "Intensity").c_str(), &rendering.gtaoIntensity, 0.0f, 1.0f, "%.2f");
     ImGui::SetItemTooltip("%s", Translate("gtao.intensity_tip"));
     ImGui::SliderFloat(TranslateLabel("gtao.bias", "Bias").c_str(), &rendering.gtaoBias, 0.0f, 0.5f, "%.3f");
     ImGui::SetItemTooltip("%s", Translate("gtao.bias_tip"));
+    if (gtaoValuesDisabled) ImGui::EndDisabled();
     if (!ctx.gtaoAvailable)
     {
         ImGui::EndDisabled();
