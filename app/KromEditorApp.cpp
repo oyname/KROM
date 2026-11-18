@@ -2558,6 +2558,32 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         m_config.clearColor = color;
     };
     RefreshSceneList();
+    m_editorFrameCtx->windowHasCustomFrame = [this]() {
+        const auto* win = m_renderLoop.GetWindow();
+        return win && !win->IsDecorated();
+    };
+    m_editorFrameCtx->windowIsMaximized = [this]() {
+        const auto* win = m_renderLoop.GetWindow();
+        return win && win->IsWindowMaximized();
+    };
+    m_editorFrameCtx->minimizeWindow = [this]() {
+        if (auto* win = m_renderLoop.GetWindow())
+            win->Minimize();
+    };
+    m_editorFrameCtx->toggleMaximizeWindow = [this]() {
+        if (auto* win = m_renderLoop.GetWindow())
+        {
+            if (win->IsWindowMaximized())
+                win->Restore();
+            else
+                win->Maximize();
+        }
+    };
+    m_editorFrameCtx->setWindowCaptionArea = [this](float x, float y, float width, float height) {
+        if (auto* win = m_renderLoop.GetWindow())
+            win->SetCaptionArea(static_cast<int32_t>(x), static_cast<int32_t>(y),
+                                static_cast<int32_t>(width), static_cast<int32_t>(height));
+    };
     // Native Datei-Dialoge: Callbacks nur setzen wenn die Plattform sie unterstuetzt.
     // Auf Windows: IFileOpenDialog (Win32 COM).
     // Auf Linux/macOS: IsAvailable() == false → Callbacks bleiben nullptr → kein "..."-Button.
@@ -3077,6 +3103,7 @@ int KromEditorApp::Run(IAppScene& scene)
             m_maximizeAfterProjectLoad = false;
             if (auto* window = m_renderLoop.GetWindow())
             {
+                // Stays frameless: the editor's menu bar is the title bar.
                 window->SetResizable(true);
                 if (m_config.visible)
                     window->Maximize();
@@ -8328,8 +8355,10 @@ bool KromEditorApp::InitializeRenderLoop()
     windowDesc.height     = m_config.height;
     windowDesc.windowMode = m_config.windowMode;
     windowDesc.visible    = m_config.visible;
-    // The project launcher has a fixed size; opening a project unlocks the editor window.
+    // No OS frame: launcher and editor draw their own title bar. The launcher
+    // has a fixed size; opening a project unlocks resizing.
     windowDesc.resizable  = false;
+    windowDesc.decorated  = false;
     if (m_config.backend == renderer::DeviceFactory::BackendType::OpenGL)
     {
         windowDesc.openglContext = true;

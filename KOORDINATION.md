@@ -17,6 +17,33 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Editor: frameless window with own title bar (Claude, 2026-11-18)
+
+- Branch `feature/frameless-editor-window`. User request: launcher and main editor window
+  without the OS frame; minimize/maximize/close in the editor theme.
+- `IWindow`: `WindowDesc::decorated`, `Minimize`, `Restore`, `IsWindowMaximized` (not
+  `IsMaximized`: `windowsx.h` macro), `SetDecorated`/`IsDecorated`, `SetCaptionArea` (client
+  rect that drags like a title bar). Defaults are no-ops; GLFW keeps its frame (`IsDecorated()`
+  stays true, so no custom title bar is drawn there).
+- `Win32Window`: undecorated windows keep `WS_OVERLAPPEDWINDOW` (snap, Win+arrows, taskbar
+  minimize, animations); `WM_NCCALCSIZE` makes the whole window client area (maximized: clamped
+  to the monitor work area), `WM_NCHITTEST` returns resize edges (6 px at 96 DPI, only with
+  `WS_THICKFRAME`, not maximized) and `HTCAPTION` inside the caption rect, `WM_NCACTIVATE`
+  passes lParam -1. `DwmExtendFrameIntoClientArea` (1 px) keeps the drop shadow; links
+  `dwmapi`. Undecorated windows without a target monitor are centered in the primary work area
+  (`CW_USEDEFAULT` put them at 0,0, under a top taskbar).
+- Editor: launcher has a full-width title bar (panel background, separator, "KROM Editor",
+  buttons); the preview starts below it; footer text is now "Version 0.5". In the main window
+  the menu bar is the title bar: project - scene centered, buttons on the right, the gap
+  between menus and buttons is the drag area (cleared while a popup/menu is open). Save button
+  (diskette) is the first toolbar button, same action as File > Save scene/prefab.
+- Checked by screenshots (DX11): launcher centered, title bar, maximized editor after loading.
+  Not checked by hand: dragging, edge resizing, snapping, button clicks, Vulkan run, multi-monitor
+  with different DPI.
+- Please review: `WM_NCCALCSIZE`/`WM_NCHITTEST` handling, `SetDecorated`/`SetResizable` size
+  handling for undecorated windows, and the ImGui hook order (ImGui handler runs first but does
+  not consume `WM_NCHITTEST`).
+
 ## Vulkan: pipeline cache file no longer grows without limit (Claude, 2026-11-18)
 
 - Branch `fix/vulkan-pipeline-cache-growth`, follow-up to the entry below.

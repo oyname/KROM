@@ -424,6 +424,14 @@ struct EditorFrameContext
     std::function<uint32_t(EntityID)> particleCount;
     std::function<void(EntityID)> restartAnimationParticles;
     std::function<uint32_t(EntityID)> animationParticleCount;
+    // Main OS window without its own frame (project launcher): the UI draws the
+    // title bar. Unset callbacks = the window keeps the OS frame.
+    std::function<bool()> windowHasCustomFrame;
+    std::function<bool()> windowIsMaximized;
+    std::function<void()> minimizeWindow;
+    std::function<void()> toggleMaximizeWindow;
+    // Drag region of the custom title bar in main viewport pixels; zero size clears it.
+    std::function<void(float x, float y, float width, float height)> setWindowCaptionArea;
     // Öffnet einen nativen OS-Datei-Dialog für krom-project.json.
     // Gibt den ausgewählten Pfad zurück, oder "" wenn abgebrochen / nicht verfügbar.
     std::function<std::string()> browseForProjectFile;

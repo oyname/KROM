@@ -15,6 +15,7 @@
 #include <cstdio>
 #include <functional>
 #include <cfloat>
+#include <cmath>
 #include <iterator>
 #include <unordered_set>
 
@@ -714,7 +715,7 @@ static void DrawCloseConfirmDialogImpl(EditorFrameContext& ctx)
 
 // ── Snap-Schalter in der Menueleiste (wie die Unreal-Viewport-Toolbar) ──────────
 // Je Art ein Umschalter (hervorgehoben = an) plus Auswahl der Schrittweite.
-enum class ToolbarGlyph { Select, Move, Rotate, Scale, Magnet, Arrow, Play, Pause, Stop, Grid, Icons, Particles, CameraPreview };
+enum class ToolbarGlyph { Save, Select, Move, Rotate, Scale, Magnet, Arrow, Play, Pause, Stop, Grid, Icons, Particles, CameraPreview };
 
 static bool ToolbarButton(const char* id, ToolbarGlyph glyph, bool selected,
                           const char* tooltip, const char* label = nullptr)
@@ -737,6 +738,7 @@ static bool ToolbarButton(const char* id, ToolbarGlyph glyph, bool selected,
     ImU32 iconColor = color;
     switch (glyph)
     {
+    case ToolbarGlyph::Save:      icon = ICON_LC_SAVE; break;
     case ToolbarGlyph::Select:    icon = ICON_LC_MOUSE_POINTER_2; break;
     case ToolbarGlyph::Move:      icon = ICON_LC_MOVE; break;
     case ToolbarGlyph::Rotate:    icon = ICON_LC_ROTATE_CW; break;
@@ -860,6 +862,18 @@ static void DrawEditorToolbar(EditorFrameContext& ctx)
     const float leftReserve = kEditorLogoOnRight ? 0.f : logoWidth;
     const float rightReserve = kEditorLogoOnRight ? logoWidth : 0.f;
     ImGui::SetCursorPos(ImVec2(leftReserve > 0.f ? leftReserve : 12.f, 6.f * uiScale));
+    // Save first: same as File > Save (the prefab in prefab mode).
+    {
+        const bool inPrefabMode = IsInPrefabMode(state);
+        const bool canSave = inPrefabMode || static_cast<bool>(ctx.saveScene);
+        const std::string saveTip = std::string(Translate(inPrefabMode ? "menu.save_prefab" : "menu.save_scene")) +
+                                    " (" + EditorShortcutLabel(0) + ")";
+        ImGui::BeginDisabled(!canSave);
+        if (ToolbarButton("##toolSave", ToolbarGlyph::Save, false, saveTip.c_str()) && canSave)
+            SaveCurrentSceneFromUI(ctx);
+        ImGui::EndDisabled();
+    }
+    ToolbarSeparator();
     if (ToolbarButton("##toolSelect", ToolbarGlyph::Select, state.gizmoMode == GizmoMode::Select, Translate("toolbar.select")))
         state.gizmoMode = GizmoMode::Select;
     ImGui::SameLine(0, 4);
@@ -1921,6 +1935,165 @@ static void DrawStartProjectLoadBar(const std::string& name, float width, float 
     ImGui::EndChild();
 }
 
+// Frameless launcher window: the UI draws the title bar. Zero when the OS frame is kept.
+static float StartTitleBarHeight(const EditorFrameContext& ctx, float scale)
+{
+    if (!ctx.windowHasCustomFrame || !ctx.windowHasCustomFrame())
+        return 0.f;
+    return std::round(std::max(28.f, 34.f * scale));
+}
+
+enum class StartCaptionButton { Minimize, Maximize, Restore, Close };
+
+static void DrawStartCaptionGlyph(ImDrawList* dl, StartCaptionButton kind, const ImVec2& center,
+                                  float size, float thickness, ImU32 color)
+{
+    // Snap to pixel centers so the 1 px strokes stay crisp.
+    const ImVec2 c(std::floor(center.x) + 0.5f, std::floor(center.y) + 0.5f);
+    const float h = std::floor(size * 0.5f);
+    switch (kind)
+    {
+    case StartCaptionButton::Minimize:
+        dl->AddLine(ImVec2(c.x - h, c.y), ImVec2(c.x + h + 1.f, c.y), color, thickness);
+        break;
+    case StartCaptionButton::Maximize:
+        dl->AddRect(ImVec2(c.x - h, c.y - h), ImVec2(c.x + h, c.y + h), color, 0.f, 0, thickness);
+        break;
+    case StartCaptionButton::Restore:
+    {
+        const float o = std::max(2.f, std::floor(size * 0.2f));
+        dl->AddRect(ImVec2(c.x - h, c.y - h + o), ImVec2(c.x + h - o, c.y + h), color, 0.f, 0, thickness);
+        dl->AddLine(ImVec2(c.x - h + o, c.y - h + o), ImVec2(c.x - h + o, c.y - h), color, thickness);
+        dl->AddLine(ImVec2(c.x - h + o, c.y - h), ImVec2(c.x + h, c.y - h), color, thickness);
+        dl->AddLine(ImVec2(c.x + h, c.y - h), ImVec2(c.x + h, c.y + h - o), color, thickness);
+        dl->AddLine(ImVec2(c.x + h, c.y + h - o), ImVec2(c.x + h - o, c.y + h - o), color, thickness);
+        break;
+    }
+    case StartCaptionButton::Close:
+        dl->AddLine(ImVec2(c.x - h, c.y - h), ImVec2(c.x + h + 1.f, c.y + h + 1.f), color, thickness);
+        dl->AddLine(ImVec2(c.x + h, c.y - h), ImVec2(c.x - h - 1.f, c.y + h + 1.f), color, thickness);
+        break;
+    }
+}
+
+// Drag region of a frameless main window (main viewport pixels). Popups and open
+// menus may overlap the bar; they need the clicks there, not the OS.
+static void UpdateWindowCaptionArea(EditorFrameContext& ctx, float x, float y, float width, float height)
+{
+    if (!ctx.setWindowCaptionArea)
+        return;
+    if (width <= 0.f || ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId | ImGuiPopupFlags_AnyPopupLevel))
+        ctx.setWindowCaptionArea(0.f, 0.f, 0.f, 0.f);
+    else
+        ctx.setWindowCaptionArea(x, y, width, height);
+}
+
+// 1 px outline of a frameless main window; a maximized window has no edge.
+static void DrawFramelessWindowBorder(EditorFrameContext& ctx)
+{
+    if (ctx.windowIsMaximized && ctx.windowIsMaximized())
+        return;
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    ImGui::GetForegroundDrawList(const_cast<ImGuiViewport*>(viewport))->AddRect(
+        viewport->Pos, ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y),
+        theme::U32(theme::kBorder));
+}
+
+// Minimize / maximize / close in the editor theme, laid out from screenMin in the
+// current window. Close asks for confirmation like the OS close does.
+static void DrawWindowCaptionButtons(EditorFrameContext& ctx, const ImVec2& screenMin, float buttonW,
+                                     float barH, float scale, bool closeEnabled)
+{
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    // The buttons reach the window edge; menu bars clip a little short of it.
+    dl->PushClipRect(viewport->Pos, ImVec2(viewport->Pos.x + viewport->Size.x, viewport->Pos.y + viewport->Size.y));
+    const bool maximized = ctx.windowIsMaximized && ctx.windowIsMaximized();
+    const float glyphSize = std::round(std::max(8.f, 10.f * scale));
+    const float thickness = std::max(1.f, std::floor(scale));
+    auto button = [&](const char* id, StartCaptionButton kind, const char* tooltipKey, int index, bool enabled) {
+        ImGui::SetCursorScreenPos(ImVec2(screenMin.x + index * buttonW, screenMin.y));
+        if (!enabled) ImGui::BeginDisabled();
+        const bool clicked = ImGui::InvisibleButton(id, ImVec2(buttonW, barH));
+        const bool hovered = enabled && ImGui::IsItemHovered();
+        const bool held = enabled && ImGui::IsItemActive();
+        if (!enabled) ImGui::EndDisabled();
+        const ImVec2 min = ImGui::GetItemRectMin();
+        const ImVec2 max = ImGui::GetItemRectMax();
+        const bool close = kind == StartCaptionButton::Close;
+        if (hovered || held)
+        {
+            ImVec4 fill = close ? theme::kDanger : (held ? theme::kButtonActive : theme::kButtonHover);
+            if (close && held)
+                fill.w = 0.8f;
+            // Leave the separator line visible below the hover fill.
+            dl->AddRectFilled(min, ImVec2(max.x, max.y - 1.f), theme::U32(fill));
+        }
+        const ImVec4& glyph = !enabled ? theme::kTextDisabled
+            : (hovered || held) ? (close ? ImVec4(1.f, 1.f, 1.f, 1.f) : theme::kText) : theme::kTextSecondary;
+        DrawStartCaptionGlyph(dl, kind, ImVec2((min.x + max.x) * 0.5f, (min.y + max.y) * 0.5f),
+                              glyphSize, thickness, theme::U32(glyph));
+        if (hovered && ImGui::IsItemHovered(ImGuiHoveredFlags_DelayNormal))
+            ImGui::SetTooltip("%s", Translate(tooltipKey));
+        return clicked && enabled;
+    };
+    if (button("##windowMinimize", StartCaptionButton::Minimize, "start.window_minimize", 0, true) && ctx.minimizeWindow)
+        ctx.minimizeWindow();
+    if (button("##windowMaximize", maximized ? StartCaptionButton::Restore : StartCaptionButton::Maximize,
+               maximized ? "start.window_restore" : "start.window_maximize", 1, true) &&
+        ctx.toggleMaximizeWindow)
+        ctx.toggleMaximizeWindow();
+    if (button("##windowClose", StartCaptionButton::Close, "common.close", 2, closeEnabled))
+        ctx.state.closeConfirmOpen = true;
+    dl->PopClipRect();
+}
+
+// Title bar across the full width: panel background, separator line, window
+// title and the window buttons. Everything but the buttons is the OS drag
+// region (move, snap, double-click maximizes).
+static void DrawStartTitleBar(EditorFrameContext& ctx, float barH, float margin, float scale)
+{
+    const ImGuiViewport* viewport = ImGui::GetMainViewport();
+    const float buttonW = std::round(barH * 1.35f);
+    const float buttonsW = buttonW * 3.f;
+
+    UpdateWindowCaptionArea(ctx, 0.f, 0.f, viewport->Size.x - buttonsW, barH);
+    DrawFramelessWindowBorder(ctx);
+
+    ImGui::SetNextWindowPos(viewport->Pos, ImGuiCond_Always);
+    ImGui::SetNextWindowSize(ImVec2(viewport->Size.x, barH), ImGuiCond_Always);
+    constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoMove |
+        ImGuiWindowFlags_NoDocking | ImGuiWindowFlags_NoSavedSettings | ImGuiWindowFlags_NoBackground |
+        ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoScrollWithMouse | ImGuiWindowFlags_NoNav;
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0.f, 0.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 0.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(0.f, 0.f));
+    KeepNextWindowInMainViewport("##KromStartTitleBar");
+    const bool visible = ImGui::Begin("##KromStartTitleBar", nullptr, flags);
+    ImGui::PopStyleVar(3);
+    if (!visible)
+    {
+        ImGui::End();
+        return;
+    }
+
+    ImDrawList* dl = ImGui::GetWindowDrawList();
+    const ImVec2 origin = ImGui::GetWindowPos();
+    const float barW = viewport->Size.x;
+    dl->AddRectFilled(origin, ImVec2(origin.x + barW, origin.y + barH), theme::U32(theme::kPanel));
+    dl->AddLine(ImVec2(origin.x, origin.y + barH - 0.5f), ImVec2(origin.x + barW, origin.y + barH - 0.5f),
+                theme::U32(theme::kBorder));
+    constexpr const char* kTitle = "KROM Editor";
+    dl->AddText(ImVec2(std::round(origin.x + margin),
+                       std::round(origin.y + (barH - ImGui::CalcTextSize(kTitle).y) * 0.5f)),
+                theme::U32(theme::kTextSecondary), kTitle);
+
+    // Same as the launcher's Close button: blocked while a project loads.
+    DrawWindowCaptionButtons(ctx, ImVec2(origin.x + barW - buttonsW, origin.y), buttonW, barH, scale,
+                             ctx.state.pendingStartProjectFile.empty());
+    ImGui::End();
+}
+
 void DrawNoProjectScreen(EditorFrameContext& ctx)
 {
     // Modals + Close-Confirm auch ohne volles Menueband verarbeiten
@@ -1933,6 +2106,7 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
     const float scale = std::max(0.5f, std::min(size.x / 1272.f, size.y / 744.f));
     const float margin = 30.f * scale;
     const float launcherW = size.x * 0.645f;
+    const float titleBarH = StartTitleBarHeight(ctx, scale);
     ImGui::SetNextWindowPos(viewport->Pos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(size, ImGuiCond_Always);
     constexpr ImGuiWindowFlags flags = ImGuiWindowFlags_NoDecoration |
@@ -1957,7 +2131,7 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
     static TextureHandle folderTexture;
     void* folderIcon = GetStartEditorTextureId(ctx, "folder.png", folderPath, folderTexture);
 
-    ImGui::SetCursorPos(ImVec2(margin, 36.f * scale));
+    ImGui::SetCursorPos(ImVec2(margin, std::max(36.f * scale, titleBarH + 16.f * scale)));
     ImGui::SetWindowFontScale(1.8f);
     ImGui::TextUnformatted(Translate("start.projects"));
     ImGui::SetWindowFontScale(1.f);
@@ -2108,15 +2282,18 @@ void DrawNoProjectScreen(EditorFrameContext& ctx)
         DrawStartProjectLoadBar(name, contentW, scale);
     }
     else
-        ImGui::TextDisabled("KROM Editor 0.3");
+        ImGui::TextDisabled("Version 0.5");
     if (!ctx.lastFileMessage.empty())
     {
         ImGui::SetCursorPosX(margin);
         ImGui::TextWrapped("%s", ctx.lastFileMessage.c_str());
     }
-    ImGui::SetCursorPos(ImVec2(launcherW, 0.f));
-    DrawStartEnginePreview(ctx, ImVec2(size.x - launcherW, size.y));
+    // The preview starts below the title bar so the bar reads as its own strip.
+    ImGui::SetCursorPos(ImVec2(launcherW, titleBarH));
+    DrawStartEnginePreview(ctx, ImVec2(size.x - launcherW, size.y - titleBarH));
     ImGui::End();
+    if (titleBarH > 0.f)
+        DrawStartTitleBar(ctx, titleBarH, margin, scale);
 
 }
 
@@ -2673,6 +2850,34 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             ImGui::TextUnformatted(Translate("menu.camera_keys"));
             ImGui::TextUnformatted(Translate("menu.snap_key"));
             ImGui::EndMenu();
+        }
+
+        // Frameless main window: the menu bar doubles as the title bar. The free
+        // space between the menus and the window buttons drags the window.
+        if (ctx.windowHasCustomFrame && ctx.windowHasCustomFrame())
+        {
+            const ImGuiViewport* viewport = ImGui::GetMainViewport();
+            const float uiScale = ImGui::GetStyle().FontScaleMain;
+            const float barH = ImGui::GetWindowHeight();
+            const float buttonW = std::round(barH * 1.6f);
+            const float buttonsX = viewport->Pos.x + viewport->Size.x - 3.f * buttonW;
+            const float menusEnd = ImGui::GetCursorScreenPos().x + 8.f * uiScale;
+
+            // Project and scene, centered in the bar when they fit between menus and buttons.
+            std::string title = ctx.currentProjectName;
+            if (!ctx.currentEditorSceneName.empty())
+                title += (title.empty() ? "" : "  -  ") + ctx.currentEditorSceneName;
+            const ImVec2 titleSize = ImGui::CalcTextSize(title.c_str());
+            const float titleX = std::max(menusEnd + 16.f * uiScale,
+                                          viewport->Pos.x + std::round((viewport->Size.x - titleSize.x) * 0.5f));
+            if (!title.empty() && titleX + titleSize.x <= buttonsX - 16.f * uiScale)
+                ImGui::GetWindowDrawList()->AddText(
+                    ImVec2(titleX, viewport->Pos.y + std::round((barH - titleSize.y) * 0.5f)),
+                    theme::U32(theme::kTextSecondary), title.c_str());
+
+            UpdateWindowCaptionArea(ctx, menusEnd - viewport->Pos.x, 0.f, buttonsX - menusEnd, barH);
+            DrawWindowCaptionButtons(ctx, ImVec2(buttonsX, viewport->Pos.y), buttonW, barH, uiScale, true);
+            DrawFramelessWindowBorder(ctx);
         }
 
         ImGui::EndMainMenuBar();
