@@ -17,6 +17,24 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## SSR: no false hits behind occluders (Claude, 2026-11-18)
+
+- `addons/ssr/SsrPass.cpp`, trace shader only. Symptom: black ring stripes on mirror objects
+  where they meet another mirror surface (chrome sphere on mirror floor).
+- Cause: `prevT` advanced on every step, also on steps already behind a surface, and the
+  binary search only tested `diff > 0` (no thickness, no self-hit test). Rays from the sphere
+  bottom run hidden behind the sphere, then "hit" the visible floor in front of it; the
+  refinement pulled that onto the dark contact area or the sphere itself.
+- Now: `frontT` = last sample visibly in front; samples behind a real surface or below the
+  start plane (by more than the origin bias) set `occluded`, and a hit while occluded is
+  rejected (probe stays). Start-plane artefact samples count as in front. Refinement uses the
+  same "behind a real surface" test; the refined point is re-validated (thickness + self-hit).
+- Follow-up: the rings became a per-pixel dither (step jitter decides hit/miss pixel by
+  pixel in contact areas). Composite now gathers with at least 1.5 px radius (13 taps) even
+  for mirrors, so the dither turns into a smooth confidence; mirrors get ~2 px softer.
+- Checked: both shaders compile with fxc ps_5_0 and dxc SPIR-V. Not checked: visual result in
+  the editor (DX11/Vulkan), loss of contact reflections at grazing angles.
+
 ## Editor: frameless window with own title bar (Claude, 2026-11-18)
 
 - Branch `feature/frameless-editor-window`. User request: launcher and main editor window

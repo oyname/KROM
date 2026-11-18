@@ -246,13 +246,20 @@ float4 main(PSInput IN) : SV_TARGET
     const float rayRise = dot(R, Ng);
     if (rayRise <= 0.02f)
         return float4(0.0f, 0.0f, 0.0f, 0.0f);
-    const float3 origin = P + Ng * max(0.01f, ViewDepth(P) * 0.003f);
+    const float bias = max(0.01f, ViewDepth(P) * 0.003f);
+    const float3 origin = P + Ng * bias;
     const float jitter = StepJitter(IN.pos.xy);
 
     // Steps grow with distance (quadratic): fine near the surface, where
     // contact reflections need them, coarse far away.
-    float prevT = 0.0f;
+    // frontT is the last point that was visibly in front of the scene. While
+    // the ray runs hidden behind a surface (occluded), the point where it
+    // meets the next surface is not in the screen data: a "hit" found then
+    // lies on some other, visible surface (e.g. the floor in front of a
+    // sphere instead of the floor under it) and is rejected.
+    float frontT = 0.0f;
     float hitT = -1.0f;
+    bool occluded = false;
     [loop]
     for (int i = 1; i <= kSteps; ++i)
     {
@@ -264,42 +271,74 @@ float4 main(PSInput IN) : SV_TARGET
             break;
         const float sceneDepth = SceneViewDepth(quv);
         const float diff = ViewDepth(Q) - sceneDepth;
-        if (diff > 0.0f && diff < ssrThickness + t * 0.02f)
+        if (diff <= 0.0f)
         {
-            // Self hit: the depth buffer at a grazing angle steps in whole
-            // pixels, so the start surface itself can appear in front of the
-            // ray. A real hit lies above the start plane, about as high as the
-            // ray point.
-            const float3 S = WorldFromDepth(quv, tSceneDepth.SampleLevel(sPoint, quv, 0));
-            const float sceneHeight = dot(S - P, Ng);
-            const float rayHeight = dot(Q - P, Ng);
-            if (sceneHeight > 0.5f * rayHeight)
+            frontT = t;
+            occluded = false;
+            continue;
+        }
+        // The depth buffer at a grazing angle steps in whole pixels, so the
+        // start surface itself can appear in front of the ray. A real surface
+        // lies above the start plane, about as high as the ray point; one on
+        // the start plane is that artefact and counts as "in front"; one
+        // clearly below it (a curved start surface, an object in front)
+        // really hides the ray.
+        const float3 S = WorldFromDepth(quv, tSceneDepth.SampleLevel(sPoint, quv, 0));
+        const float sceneHeight = dot(S - P, Ng);
+        const float rayHeight = dot(Q - P, Ng);
+        if (sceneHeight > 0.5f * rayHeight)
+        {
+            if (!occluded && diff < ssrThickness + t * 0.02f)
             {
                 hitT = t;
                 break;
             }
+            occluded = true;
         }
-        prevT = t;
+        else if (sceneHeight > -bias)
+        {
+            if (!occluded)
+                frontT = t;
+        }
+        else
+        {
+            occluded = true;
+        }
     }
     if (hitT < 0.0f)
         return float4(0.0f, 0.0f, 0.0f, 0.0f);
 
-    // Binary search between the last point in front and the first behind.
-    float lo = prevT;
+    // Binary search between the last point in front and the first behind,
+    // with the same notion of "behind a real surface" as the march.
+    float lo = frontT;
     float hi = hitT;
     [unroll]
     for (int k = 0; k < kRefine; ++k)
     {
         const float mid = 0.5f * (lo + hi);
+        const float3 M = origin + R * mid;
         float2 muv;
-        Project(origin + R * mid, muv);
-        if (ViewDepth(origin + R * mid) - SceneViewDepth(muv) > 0.0f)
+        Project(M, muv);
+        const float3 S = WorldFromDepth(muv, tSceneDepth.SampleLevel(sPoint, muv, 0));
+        const bool behind = ViewDepth(M) - SceneViewDepth(muv) > 0.0f &&
+                            dot(S - P, Ng) > 0.5f * dot(M - P, Ng);
+        if (behind)
             hi = mid;
         else
             lo = mid;
     }
     float2 hitUV;
-    Project(origin + R * hi, hitUV);
+    const float3 H = origin + R * hi;
+    if (!Project(H, hitUV))
+        return float4(0.0f, 0.0f, 0.0f, 0.0f);
+    // The refined point must still be a valid hit.
+    {
+        const float hitDiff = ViewDepth(H) - SceneViewDepth(hitUV);
+        const float3 S = WorldFromDepth(hitUV, tSceneDepth.SampleLevel(sPoint, hitUV, 0));
+        if (hitDiff < 0.0f || hitDiff > ssrThickness + hi * 0.02f ||
+            dot(S - P, Ng) <= 0.5f * dot(H - P, Ng))
+            return float4(0.0f, 0.0f, 0.0f, 0.0f);
+    }
 
     float confidence = 1.0f;
     // The ray met the back of a surface: that is not what it would see.
@@ -355,13 +394,17 @@ float4 main(PSInput IN) : SV_TARGET
     const float3 N = OctDecode(nr.xy);
     const float centerZ = LinearDepthAt(pixel);
     const float roughness01 = saturate(nr.z / max(ssrMaxRoughness, 1e-3f));
-    const float radius = roughness01 * 8.0f * max(screenSize.y / 1080.0f, 0.5f);
+    // At least ~2 px even for mirrors: the per-pixel step jitter makes hit and
+    // miss alternate pixel by pixel where the ray only sometimes finds a
+    // visible crossing (contact areas); gathering turns that dither into a
+    // smooth confidence. Normal and depth weights keep edges.
+    const float radius = max(roughness01 * 8.0f * max(screenSize.y / 1080.0f, 0.5f), 1.5f);
     const int2 maxPixel = int2(screenSize.xy) - 1;
 
     float3 sum = 0.0f;
     float  confidenceSum = 0.0f;
     float  weightSum = 0.0f;
-    const int taps = radius < 0.75f ? 1 : kTaps;
+    const int taps = kTaps;
     [loop]
     for (int i = 0; i < taps; ++i)
     {
