@@ -1071,6 +1071,11 @@ void ShaderCompiler::SetCacheDirectory(const std::filesystem::path& dir) noexcep
     internal::g_shaderCacheDir = dir;
 }
 
+std::filesystem::path ShaderCompiler::GetCacheDirectory()
+{
+    return internal::GetShaderCacheRoot();
+}
+
 void ShaderCompiler::SetEngineAssetDirectory(const std::filesystem::path& dir) noexcept
 {
     internal::g_engineAssetDir = dir;

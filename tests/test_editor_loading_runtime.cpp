@@ -1290,6 +1290,10 @@ struct EditorLoadingSmokeTest final : IAppScene
     renderer::addons::editor::EditorCameraState gtaoOrbitCamera{};
     std::chrono::steady_clock::time_point perfStart;
     std::chrono::steady_clock::time_point perfLast;
+    // Start-up cost: test start -> first perf frame -> end of warm-up (frame 60).
+    std::chrono::steady_clock::time_point perfProcessStart = std::chrono::steady_clock::now();
+    double perfFirstFrameMs = -1.0;
+    double perfWarmupEndMs = 0.0;
     std::vector<double> perfFrameMs;
     uint64_t perfDescriptorUpdates = 0u;
     uint64_t perfDescriptorBinds = 0u;
@@ -1448,8 +1452,11 @@ struct EditorLoadingSmokeTest final : IAppScene
                         app.m_editorFrameCtx->state.selectedEntity = e;
                 });
         const auto now = std::chrono::steady_clock::now();
+        if (perfFirstFrameMs < 0.0)
+            perfFirstFrameMs = std::chrono::duration<double, std::milli>(now - perfProcessStart).count();
         if (frames == kWarmup)
         {
+            perfWarmupEndMs = std::chrono::duration<double, std::milli>(now - perfProcessStart).count();
             perfStart = now;
             perfDescriptorUpdates = 0u;
             perfDescriptorBinds = 0u;
@@ -1474,11 +1481,13 @@ struct EditorLoadingSmokeTest final : IAppScene
                     ++spikes;
             }
             std::printf("PERF frame=%.2f ms (%.1f FPS) max=%.1f ms spikes(>2x)=%d scene=%s gtao=%s"
-                        " descriptorUpdates/frame=%.1f descriptorBinds/frame=%.1f\n",
+                        " descriptorUpdates/frame=%.1f descriptorBinds/frame=%.1f"
+                        " firstFrame=%.0f ms warmupEnd=%.0f ms\n",
                 ms, 1000.0 / ms, maxMs, spikes, app.m_currentSceneName.c_str(),
                 app.m_gtaoResources && app.m_gtaoResources->settings.enabled ? "on" : "off",
                 static_cast<double>(perfDescriptorUpdates) / kMeasured,
-                static_cast<double>(perfDescriptorBinds) / kMeasured);
+                static_cast<double>(perfDescriptorBinds) / kMeasured,
+                perfFirstFrameMs, perfWarmupEndMs);
             std::fflush(stdout);
             if (std::getenv("KROM_PERF_COMPARE_GTAO") && app.m_gtaoResources && !perfComparedGtao)
             {

@@ -14,6 +14,9 @@ public:
     // Muss vor dem ersten CompileForTarget-Aufruf gesetzt werden.
     // Wenn nicht gesetzt: KROM_SHADER_CACHE_DIR env-var, dann <exe-dir>/shader_artifacts.
     static void SetCacheDirectory(const std::filesystem::path& dir) noexcept;
+    // Resolved cache directory (the one set above, else the env-var/exe-dir fallback).
+    // Other per-project caches (e.g. the Vulkan pipeline cache) live beside the shaders.
+    [[nodiscard]] static std::filesystem::path GetCacheDirectory();
     // Override the engine include directory for file-backed and embedded HLSL.
     // By default, look for assets beside the executable or in the working directory.
     static void SetEngineAssetDirectory(const std::filesystem::path& dir) noexcept;
