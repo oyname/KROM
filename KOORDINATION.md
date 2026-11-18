@@ -17,6 +17,19 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Project settings: GTAO and SSR greyed out without the add-on (Claude, 2026-11-18)
+
+- User request: Project settings > Rendering offered GTAO and SSR under OpenGL, where both
+  add-ons are not registered. Same pattern as MSAA: controls greyed out, hint below.
+- `EditorFrameContext::gtaoAvailable`/`ssrAvailable`, set every frame in `KromEditorApp` from
+  `m_gtaoResources`/`m_ssrResources` (null when the add-on is not registered).
+- The MSAA hint key `msaa.unavailable` is now `settings.opengl_unavailable` (same text, de/en)
+  and used for all three sections. Values stay in the project file.
+- Same uncommitted files also carry the GTAO sliders from 2026-11-17 (entry below).
+- Checked: Debug x64 build of editors and loading tests for DX11/Vulkan/OpenGL;
+  `--settings-ui` passes on all three. That test does not open the Rendering tab: the greyed-out
+  controls are not checked.
+
 ## OpenGL: CSM cascades and tiled material-graph textures (Claude, 2026-11-18)
 
 - User request despite the OpenGL freeze: OpenGL cut shadows off and the Room 2 floor texture
@@ -180,7 +193,7 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 - User request: the "Ambient Occlusion (GTAO)" heading in Project settings > Rendering was
   empty since c47b667; it now holds sliders for radius (0.01–1 m, log), intensity (0–1)
-  and bias (0–0.5), de/en tooltips. Not committed.
+  and bias (0–0.5), de/en tooltips. Committed 2026-11-18 with the greying-out entry above.
 - `ProjectRenderSettings`: `gtaoRadius`/`gtaoIntensity`/`gtaoBias` (defaults = `GtaoSettings`),
   read clamped and written in the `rendering` block. Legacy scene settings keep the defaults.
 - Editor: `ApplyProjectRenderSettings` fills `EditorState::gtaoSettings` (was unused); the

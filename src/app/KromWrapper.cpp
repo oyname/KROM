@@ -2265,6 +2265,13 @@ static void ApplyProjectRenderSettings(State& state, const engine::ProjectRender
         ssr.maxDistance  = rendering.ssrMaxDistance;
         ssr.thickness    = rendering.ssrThickness;
     }
+    if (state.gtaoResources)
+    {
+        engine::renderer::addons::gtao::GtaoSettings& gtao = state.gtaoResources->settings;
+        gtao.radius    = rendering.gtaoRadius;
+        gtao.intensity = rendering.gtaoIntensity;
+        gtao.bias      = rendering.gtaoBias;
+    }
     if (state.probeRuntime)
     {
         engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
