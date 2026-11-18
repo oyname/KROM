@@ -132,9 +132,11 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
     if (m_gpuPassProfiler.IsEnabled())
         m_gpuPassProfiler.Collect(*m_device, timing.GetRawTimestampSeconds());
 
-    if (!offscreenRequests.empty() && std::string_view(m_device->GetBackendName()) == "Vulkan")
-        m_device->WaitIdle();
-
+    // Offscreen views and the main view share one frame slot and run in queue
+    // order, without a full GPU wait in between. A command list that records
+    // again in the same slot waits for its previous submission itself (Vulkan),
+    // frame buffers come from separate slot allocations or rings, and CPU writes
+    // into a buffer still in use wait for that buffer in UploadBufferData.
     bool allOffscreenOk = true;
     bool frameBegun = false;
     for (const OffscreenRenderRequest& request : offscreenRequests)
@@ -187,16 +189,6 @@ bool RenderSystem::RenderFrame(const ecs::World& world,
         frameBegun = true;
         allOffscreenOk = allOffscreenOk && ok;
     }
-
-    // Temporary Vulkan stabilization: the current backend still shares
-    // allocator / submission lifecycle across editor preview and main frame.
-    // Serializing before the main frame avoids hidden coupling where editor
-    // features only work after an offscreen preview has been rendered first.
-    // Only stall when offscreen work was actually submitted — otherwise this
-    // forces a full GPU sync every frame in the runtime (no offscreen requests),
-    // causing variable frame times during camera movement.
-    if (frameBegun && std::string_view(m_device->GetBackendName()) == "Vulkan")
-        m_device->WaitIdle();
 
     RenderFrameExecutionState frameState{};
     const RenderFrameOrchestratorContext context{

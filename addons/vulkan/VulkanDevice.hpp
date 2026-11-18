@@ -336,7 +336,7 @@ namespace engine::renderer::vulkan {
             VkDescriptorSet set = VK_NULL_HANDLE;
             VkDescriptorPool pool = VK_NULL_HANDLE;
             uint64_t hash = 0u;
-            uint64_t lastUsedRecording = 0u;
+            uint64_t lastUsedFrame = 0u;
         };
 
         struct RetiredDescriptorSet
@@ -465,7 +465,6 @@ namespace engine::renderer::vulkan {
         std::vector<uint32_t> m_freePersistentSetSlots;
         std::unordered_multimap<uint64_t, uint32_t> m_persistentSetLookup;
         std::vector<RetiredDescriptorSet> m_retiredDescriptorSets;
-        uint64_t m_recordingSerial = 0u;
         // Set by BuildDescriptorMaterializationState: a bound texture or UAV handle
         // no longer exists. Such a state is written into a one-off set and never
         // cached, so a cached set can only match handles that are still alive.
@@ -603,6 +602,8 @@ namespace engine::renderer::vulkan {
         [[nodiscard]] const FrameDescriptorArenaDesc& GetFrameDescriptorArenaDesc() const noexcept { return m_frameDescriptorArenaDesc; }
         [[nodiscard]] DescriptorRuntimeLayoutDesc GetDescriptorRuntimeLayout() const override { return m_descriptorRuntimeLayout; }
         [[nodiscard]] uint32_t GetCurrentFrameSlot() const noexcept { return m_currentFrameSlot; }
+        // Counts BeginFrame calls; several recordings (offscreen views) can share one frame.
+        [[nodiscard]] uint64_t GetFrameIndex() const noexcept { return m_frameIndex; }
         [[nodiscard]] VulkanDeviceResources& GetResources() noexcept { return m_resources; }
         [[nodiscard]] const VulkanDeviceResources& GetResources() const noexcept { return m_resources; }
         [[nodiscard]] VulkanSwapchain* GetActiveSwapchain() const noexcept { return m_activeSwapchain; }

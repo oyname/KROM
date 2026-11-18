@@ -17,6 +17,40 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Vulkan: no WaitIdle around offscreen views (Claude, 2026-11-18)
+
+- Open point from the descriptor-cache entry below: with an offscreen request (Scene and Game
+  panel both visible, camera/material/animation/prefab preview, thumbnails)
+  `RenderSystem::RenderFrame` called `WaitIdle()` before and after the offscreen views on
+  Vulkan. Both calls removed (branch `perf/vulkan-offscreen-no-waitidle`).
+- User check 2026-11-18: all fine in the editor; Debug editor 5-10 FPS faster.
+- Why that is safe now: a command list that records again in the same frame slot already
+  waits for its previous submission in `VulkanCommandList::Begin`
+  (`BeginQueueFrameRecording` → `WaitForFenceValue`); slot buffers are separate allocations
+  per view; ring buffers rotate per call; `UploadBufferData` waits for a host-visible
+  buffer still in use. In the measurement the `Begin` wait never fired.
+- Side effect found when removing them: 27 descriptor updates/frame instead of 0. Two causes,
+  both fixed:
+  - `GpuResourceRuntime::AcquireTransientTargets` took the first completed pooled target.
+    Which one is completed depends on GPU timing (with `WaitIdle` everything always was), so
+    texture combinations changed and missed the cache. It now prefers the target the same
+    frame slot used last time (`PooledTransientRT::lastFrameSlot`), else the one free the
+    longest. Affects all backends (only which pooled target is picked).
+  - `VulkanCommandList` retired cached sets after 8 *recordings*; with two recordings per
+    frame the sets (period: 3 frames) were gone before they came back. Now 8 *frames*
+    (`lastUsedFrame`, `VulkanDevice::GetFrameIndex()`); `m_recordingSerial` removed.
+- Measured `--perf`, Debug x64, Vulkan, car scene, `KROM_PERF_SELECT=Camera` (camera preview =
+  one offscreen view per frame): 16.9 ms → 13.3 ms, descriptor updates 0. Without preview
+  unchanged (7.5 ms, 0 updates).
+- Checked: `krom_tests` (all pass); `krom_editor_loading_tests[_dx11|_opengl]`
+  `--material-ui`, `--play-ui`, `--animation-ui` pass; Vulkan validation (perf with camera
+  preview, `--material-ui`, `--animation-ui`) shows exactly the same messages as before
+  (`08910`/`08914` format mismatches, one `09600`, `pSignalSemaphores-00067`): pre-existing,
+  not investigated.
+- Not checked: Release, the editor by hand with several previews open at once, probe capture
+  from the editor (it still has its own `WaitIdle`).
+- Please review: the transient-target pick order and the frame-based retirement.
+
 ## Project settings: GTAO and SSR greyed out without the add-on (Claude, 2026-11-18)
 
 - User request: Project settings > Rendering offered GTAO and SSR under OpenGL, where both
