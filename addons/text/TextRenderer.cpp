@@ -536,25 +536,7 @@ bool TextRenderer::EnsureGpuResources(renderer::IDevice& device, uint32_t requir
         m_atlasDirty = false;
     }
 
-    requiredVertices = std::max(requiredVertices, 6u);
-    if (!m_gpu.vertexBuffer.IsValid() || m_gpu.vertexCapacity < requiredVertices)
-    {
-        if (m_gpu.vertexBuffer.IsValid())
-            device.DestroyBuffer(m_gpu.vertexBuffer);
-        const uint32_t capacity = NextCapacity(requiredVertices);
-        renderer::BufferDesc desc{};
-        desc.byteSize = static_cast<uint64_t>(capacity) * sizeof(TextVertex);
-        desc.stride = sizeof(TextVertex);
-        desc.type = renderer::BufferType::Vertex;
-        desc.usage = renderer::ResourceUsage::VertexBuffer;
-        desc.access = renderer::MemoryAccess::CpuWrite;
-        desc.initialState = renderer::ResourceState::VertexBuffer;
-        desc.debugName = "TextVB";
-        m_gpu.vertexBuffer = device.CreateBuffer(desc);
-        m_gpu.vertexCapacity = m_gpu.vertexBuffer.IsValid() ? capacity : 0u;
-        if (!m_gpu.vertexBuffer.IsValid())
-            return false;
-    }
+    (void)requiredVertices; // Flush takes the vertex buffer copy for each frame
 
     if (m_gpu.pipeline.IsValid() && m_gpu.pipelineFormat == m_targetFormat)
         return true;
@@ -649,21 +631,32 @@ void TextRenderer::Flush(const renderer::RGExecContext& execCtx)
 
     renderer::IDevice& device = *execCtx.device;
     const uint32_t vertexCount = static_cast<uint32_t>(vertices.size());
-    device.UploadBufferData(m_gpu.vertexBuffer, vertices.data(),
+    renderer::BufferDesc desc{};
+    desc.byteSize = static_cast<uint64_t>(NextCapacity(std::max(vertexCount, 6u))) * sizeof(TextVertex);
+    desc.stride = sizeof(TextVertex);
+    desc.type = renderer::BufferType::Vertex;
+    desc.usage = renderer::ResourceUsage::VertexBuffer;
+    desc.access = renderer::MemoryAccess::CpuWrite;
+    desc.initialState = renderer::ResourceState::VertexBuffer;
+    desc.debugName = "TextVB";
+    // A new copy every frame: writing the copy of the previous frame would wait for it.
+    const BufferHandle vertexBuffer = m_gpu.vertexBuffers.Next(device, desc);
+    if (!vertexBuffer.IsValid())
+        return;
+    device.UploadBufferData(vertexBuffer, vertices.data(),
                             static_cast<size_t>(vertexCount) * sizeof(TextVertex));
 
     execCtx.cmd->SetPipeline(m_gpu.pipeline);
     execCtx.cmd->SetShaderResource(renderer::TexSlots::PassSRV0, m_gpu.atlas, renderer::ShaderStageMask::Fragment);
     execCtx.cmd->SetSampler(renderer::SamplerSlots::LinearClamp, renderer::SamplerSlots::LinearClamp,
                             renderer::ShaderStageMask::Fragment);
-    execCtx.cmd->SetVertexBuffer(0u, m_gpu.vertexBuffer, 0u);
+    execCtx.cmd->SetVertexBuffer(0u, vertexBuffer, 0u);
     execCtx.cmd->Draw(vertexCount, 1u, 0u, 0u);
 }
 
 void TextRenderer::DestroyGpuResources(renderer::IDevice& device) noexcept
 {
-    if (m_gpu.vertexBuffer.IsValid())
-        device.DestroyBuffer(m_gpu.vertexBuffer);
+    m_gpu.vertexBuffers.Release(&device);
     if (m_gpu.atlas.IsValid())
         device.DestroyTexture(m_gpu.atlas);
     if (m_gpu.pipeline.IsValid())

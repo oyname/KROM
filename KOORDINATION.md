@@ -17,6 +17,66 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Vulkan: no CPU wait for CPU-written per-frame buffers (Claude, 2026-11-18)
+
+- Follow-up to the open point from 2026-11-15 ("~4.5 ms fence wait"). Branch
+  `perf/vulkan-frame-ring-buffers`, merged into `main`.
+- User check 2026-11-18: Vulkan Debug about 7–10 FPS more; Release now runs into the
+  144 Hz monitor limit (VSync).
+- Cause: `VulkanDevice::UploadBufferData` waits for `lastSubmissionFenceValue` before it writes a
+  host-visible buffer. Features kept one CPU-written buffer each and rewrote it every frame, so
+  the first such upload of a frame waited for the whole previous frame. A temporary probe in
+  `UploadBufferData` (removed again) showed exactly one wait per frame, always on the first
+  buffer written: after one buffer was fixed the wait moved to the next one
+  (`Lighting_LightBuffer` → `Shadow_LightBuffer` → `ForwardPlus_TileHeaders` →
+  `DebugDrawLinesVB` → `ForwardBloom_PerPassCB`).
+- New `include/renderer/FrameRingBuffer.hpp`: three copies of a buffer, `Next(device, desc)`
+  once per frame takes the next copy and (re)creates it when too small; `Release`, move-only.
+  The backend wait stays, so a ring that is too short is slower, never wrong.
+- Rings now: `LightingFrameData` light buffer; shadow light/view buffers (`ShadowFeature`);
+  Forward+ CPU tile headers/indices and compute params/reset staging (GpuOnly compute tile
+  buffers now have their own fields `computeTile*Buffer`, the old shared fields are the handles
+  bound this frame); `DebugDraw` lines VB + frame CB; `ParticleRenderer` VB + frame CB;
+  `TextRenderer` VB (taken in `Flush`, `EnsureGpuResources` runs twice per frame there).
+- Bloom and tonemap per-pass CBs: the values are config/settings and almost never change, so
+  `UploadedConstants<T>` in `ForwardFeature.cpp` only writes them when the bytes differ (no ring).
+- Not changed (never waited in the four scenes): skinning palettes, outline per-object CB,
+  shadow `perFrameCB` fallback (only without the arena), material CBs (only on change).
+- Measured: `krom_editor_loading_tests --perf`, Debug x64, Vulkan, 1920x1080, copy of
+  DemoProject with `lastScene` set per run, same build tree, files reset for the baseline:
+
+  | scene | before | after |
+  |---|---|---|
+  | car | 11.38 ms | 8.62 ms |
+  | Room 0 | 16.78 ms | 15.76 ms |
+  | Room 1 | 9.49 ms | 7.62 ms |
+  | Room 2 | 17.71 ms | 17.02 ms |
+
+  With the probe the "after" runs had no fence wait in any of the four scenes.
+- Checked: full Debug x64 build; `krom_tests` (all pass); `krom_editor_loading_tests` and
+  `_dx11 --play-ui` (pass); `KROM_VALIDATION=1` perf run on Room 2 without validation messages;
+  `editor_scene_runtime_opengl`, `krom_editor_opengl`, `DemoProject_opengl` start and run 15 s.
+  Note: the full build does not relink `krom_editor_loading_tests*`; build them by target.
+- Not checked: Release, a visual check of debug lines/particles/text in the editor.
+- Please review: that every consumer reads the per-frame handle (Forward+ fields, `gpu.lightBuffer`
+  of lighting/shadow), and the Forward+ split between CPU and compute buffers.
+
+## GTAO radius/intensity/bias in the project settings (Claude, 2026-11-17)
+
+- User request: the "Ambient Occlusion (GTAO)" heading in Project settings > Rendering was
+  empty since c47b667; it now holds sliders for radius (0.01–1 m, log), intensity (0–1)
+  and bias (0–0.5), de/en tooltips. Not committed.
+- `ProjectRenderSettings`: `gtaoRadius`/`gtaoIntensity`/`gtaoBias` (defaults = `GtaoSettings`),
+  read clamped and written in the `rendering` block. Legacy scene settings keep the defaults.
+- Editor: `ApplyProjectRenderSettings` fills `EditorState::gtaoSettings` (was unused); the
+  frame loop copies only radius/intensity/bias into `m_gtaoResources->settings` (`enabled`
+  also drives the depth prepass and stays untouched). Runtime: `KromWrapper`
+  `ApplyProjectRenderSettings` sets the same three values.
+- Not in the script API (`IRenderSettingsService`). Not under OpenGL (no GTAO there).
+- Checked: Debug x64 build of editors (dx11/vulkan/opengl), `editor_scene_runtime_dx11`,
+  `krom_tests` (all pass), `krom_editor_loading_tests_dx11 --settings-ui` (pass). Visual check
+  of the sliders' effect open.
+
 ## Asset folders split: `shaders/`, `editor/`, `assets/` (Claude, 2026-11-17)
 
 - User request: engine-essential files in their own folder, editor files in their own

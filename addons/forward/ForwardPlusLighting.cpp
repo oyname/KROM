@@ -250,13 +250,25 @@ void EnsureForwardPlusBuffer(IDevice& device,
     capacity = buffer.IsValid() ? NextCapacity(requiredCount) : 0u;
 }
 
-void EnsureForwardPlusConstantBuffer(IDevice& device,
-                                     BufferHandle& buffer,
-                                     const char* debugName)
+[[nodiscard]] BufferDesc MakeForwardPlusCpuBufferDesc(uint32_t requiredCount,
+                                                     uint32_t stride,
+                                                     const char* debugName,
+                                                     ResourceUsage usage = ResourceUsage::ShaderResource,
+                                                     ResourceState initialState = ResourceState::ShaderRead)
 {
-    if (buffer.IsValid())
-        return;
+    BufferDesc desc{};
+    desc.byteSize     = static_cast<uint64_t>(NextCapacity(std::max(1u, requiredCount))) * stride;
+    desc.stride       = stride;
+    desc.type         = BufferType::Structured;
+    desc.usage        = usage;
+    desc.access       = MemoryAccess::CpuWrite;
+    desc.initialState = initialState;
+    desc.debugName    = debugName;
+    return desc;
+}
 
+[[nodiscard]] BufferDesc MakeForwardPlusConstantBufferDesc(const char* debugName)
+{
     BufferDesc desc{};
     desc.byteSize = sizeof(ForwardPlusComputeParamsGpu);
     desc.stride = sizeof(uint32_t);
@@ -265,7 +277,7 @@ void EnsureForwardPlusConstantBuffer(IDevice& device,
     desc.access = MemoryAccess::CpuWrite;
     desc.initialState = ResourceState::ConstantBuffer;
     desc.debugName = debugName;
-    buffer = device.CreateBuffer(desc);
+    return desc;
 }
 
 void BuildFixedOffsetTileHeaders(uint32_t tileCount,
@@ -439,14 +451,14 @@ void BuildFixedOffsetTileHeaders(uint32_t tileCount,
 
 void DestroyForwardPlusGpuResources(IDevice& device, ForwardPlusGpuResources& resources)
 {
-    if (resources.tileHeaderBuffer.IsValid())
-        device.DestroyBuffer(resources.tileHeaderBuffer);
-    if (resources.tileIndexBuffer.IsValid())
-        device.DestroyBuffer(resources.tileIndexBuffer);
-    if (resources.computeParamsBuffer.IsValid())
-        device.DestroyBuffer(resources.computeParamsBuffer);
-    if (resources.resetStagingBuffer.IsValid())
-        device.DestroyBuffer(resources.resetStagingBuffer);
+    resources.cpuTileHeaders.Release(&device);
+    resources.cpuTileIndices.Release(&device);
+    resources.computeParams.Release(&device);
+    resources.resetStaging.Release(&device);
+    if (resources.computeTileHeaderBuffer.IsValid())
+        device.DestroyBuffer(resources.computeTileHeaderBuffer);
+    if (resources.computeTileIndexBuffer.IsValid())
+        device.DestroyBuffer(resources.computeTileIndexBuffer);
     if (resources.computePipeline.IsValid())
         device.DestroyPipeline(resources.computePipeline);
     if (resources.computeShader.IsValid())
@@ -481,18 +493,16 @@ bool UpdateForwardPlusResources(IDevice& device,
                                   resources.metrics))
         return false;
 
-    EnsureForwardPlusBuffer(device,
-                            resources.tileHeaderBuffer,
-                            resources.tileHeaderCapacity,
-                            static_cast<uint32_t>(tileHeaders.size()),
-                            sizeof(ForwardPlusTileHeaderGpu),
-                            "ForwardPlus_TileHeaders");
-    EnsureForwardPlusBuffer(device,
-                            resources.tileIndexBuffer,
-                            resources.tileIndexCapacity,
-                            static_cast<uint32_t>(tileIndices.size()),
-                            sizeof(uint32_t),
-                            "ForwardPlus_TileIndices");
+    resources.tileHeaderBuffer = resources.cpuTileHeaders.Next(
+        device,
+        MakeForwardPlusCpuBufferDesc(static_cast<uint32_t>(tileHeaders.size()),
+                                     sizeof(ForwardPlusTileHeaderGpu),
+                                     "ForwardPlus_TileHeaders"));
+    resources.tileIndexBuffer = resources.cpuTileIndices.Next(
+        device,
+        MakeForwardPlusCpuBufferDesc(static_cast<uint32_t>(tileIndices.size()),
+                                     sizeof(uint32_t),
+                                     "ForwardPlus_TileIndices"));
 
     if (!resources.tileHeaderBuffer.IsValid() || !resources.tileIndexBuffer.IsValid())
         return false;
@@ -576,8 +586,8 @@ bool PrepareForwardPlusComputeResources(IDevice& device,
 
     const uint32_t tileCount = resources.tileCountX * resources.tileCountY;
     EnsureForwardPlusBuffer(device,
-                            resources.tileHeaderBuffer,
-                            resources.tileHeaderCapacity,
+                            resources.computeTileHeaderBuffer,
+                            resources.computeTileHeaderCapacity,
                             tileCount,
                             sizeof(ForwardPlusTileHeaderGpu),
                             "ForwardPlus_TileHeaders",
@@ -585,27 +595,25 @@ bool PrepareForwardPlusComputeResources(IDevice& device,
                             MemoryAccess::GpuOnly,
                             ResourceState::ShaderRead);
     EnsureForwardPlusBuffer(device,
-                            resources.tileIndexBuffer,
-                            resources.tileIndexCapacity,
+                            resources.computeTileIndexBuffer,
+                            resources.computeTileIndexCapacity,
                             tileCount * resources.maxLightsPerTile,
                             sizeof(uint32_t),
                             "ForwardPlus_TileIndices",
                             ResourceUsage::ShaderResource | ResourceUsage::UnorderedAccess,
                             MemoryAccess::GpuOnly,
                             ResourceState::ShaderRead);
-    EnsureForwardPlusConstantBuffer(device,
-                                    resources.computeParamsBuffer,
-                                    "ForwardPlus_ComputeParams");
-
-    EnsureForwardPlusBuffer(device,
-                            resources.resetStagingBuffer,
-                            resources.resetStagingCapacity,
-                            tileCount,
-                            sizeof(ForwardPlusTileHeaderGpu),
-                            "ForwardPlus_ResetStaging",
-                            ResourceUsage::CopySource,
-                            MemoryAccess::CpuWrite,
-                            ResourceState::CopySource);
+    resources.tileHeaderBuffer = resources.computeTileHeaderBuffer;
+    resources.tileIndexBuffer = resources.computeTileIndexBuffer;
+    resources.computeParamsBuffer = resources.computeParams.Next(
+        device, MakeForwardPlusConstantBufferDesc("ForwardPlus_ComputeParams"));
+    resources.resetStagingBuffer = resources.resetStaging.Next(
+        device,
+        MakeForwardPlusCpuBufferDesc(tileCount,
+                                     sizeof(ForwardPlusTileHeaderGpu),
+                                     "ForwardPlus_ResetStaging",
+                                     ResourceUsage::CopySource,
+                                     ResourceState::CopySource));
 
     if (!resources.tileHeaderBuffer.IsValid() ||
         !resources.tileIndexBuffer.IsValid() ||

@@ -5,6 +5,7 @@
 #include "addons/shadow/ShadowExtraction.hpp"
 #include "addons/shadow/ShadowFrameData.hpp"
 #include "renderer/FeatureID.hpp"
+#include "renderer/FrameRingBuffer.hpp"
 #include "renderer/RenderExtractionContext.hpp"
 #include "renderer/RenderFramePassInterfaces.hpp"
 #include "renderer/RenderPassRegistry.hpp"
@@ -111,10 +112,8 @@ public:
     {
         // GPU resources must be released explicitly while the device is still alive.
         m_device = nullptr;
-        m_shadowLightBuffer = BufferHandle::Invalid();
-        m_shadowViewBuffer = BufferHandle::Invalid();
-        m_shadowLightCapacity = 0u;
-        m_shadowViewCapacity = 0u;
+        m_shadowLightBuffers.Release(nullptr);
+        m_shadowViewBuffers.Release(nullptr);
     }
 
     std::string_view GetName() const noexcept override { return "shadow.frame_constants"; }
@@ -280,95 +279,63 @@ private:
     {
         shadow.gpu.lightCount = static_cast<uint32_t>(gpuLights.size());
         shadow.gpu.viewCount = static_cast<uint32_t>(gpuViews.size());
+        if (!m_device)
+            return;
 
+        // A new copy every frame: writing the copy of the previous frame would wait for it.
         if (!gpuLights.empty())
         {
-            EnsureLightBuffer(static_cast<uint32_t>(gpuLights.size()));
-            if (m_shadowLightBuffer.IsValid())
+            const BufferHandle buffer = m_shadowLightBuffers.Next(
+                *m_device,
+                MakeStructuredDesc(static_cast<uint32_t>(gpuLights.size()), sizeof(GpuShadowLightData), "Shadow_LightBuffer"));
+            if (buffer.IsValid())
             {
-                m_device->UploadBufferData(m_shadowLightBuffer,
-                                           gpuLights.data(),
-                                           gpuLights.size() * sizeof(GpuShadowLightData));
-                shadow.gpu.lightBuffer = m_shadowLightBuffer;
-                shadow.gpu.lightCapacity = m_shadowLightCapacity;
+                m_device->UploadBufferData(buffer, gpuLights.data(), gpuLights.size() * sizeof(GpuShadowLightData));
+                shadow.gpu.lightBuffer = buffer;
+                shadow.gpu.lightCapacity = static_cast<uint32_t>(m_shadowLightBuffers.CurrentByteSize() / sizeof(GpuShadowLightData));
             }
         }
 
         if (!gpuViews.empty())
         {
-            EnsureViewBuffer(static_cast<uint32_t>(gpuViews.size()));
-            if (m_shadowViewBuffer.IsValid())
+            const BufferHandle buffer = m_shadowViewBuffers.Next(
+                *m_device,
+                MakeStructuredDesc(static_cast<uint32_t>(gpuViews.size()), sizeof(GpuShadowViewData), "Shadow_ViewBuffer"));
+            if (buffer.IsValid())
             {
-                m_device->UploadBufferData(m_shadowViewBuffer,
-                                           gpuViews.data(),
-                                           gpuViews.size() * sizeof(GpuShadowViewData));
-                shadow.gpu.viewBuffer = m_shadowViewBuffer;
-                shadow.gpu.viewCapacity = m_shadowViewCapacity;
+                m_device->UploadBufferData(buffer, gpuViews.data(), gpuViews.size() * sizeof(GpuShadowViewData));
+                shadow.gpu.viewBuffer = buffer;
+                shadow.gpu.viewCapacity = static_cast<uint32_t>(m_shadowViewBuffers.CurrentByteSize() / sizeof(GpuShadowViewData));
             }
         }
     }
 
-    void EnsureLightBuffer(uint32_t requiredLights) const
+    [[nodiscard]] static renderer::BufferDesc MakeStructuredDesc(uint32_t requiredElements,
+                                                                 uint32_t stride,
+                                                                 const char* debugName)
     {
-        if (!m_device || requiredLights == 0u)
-            return;
-        if (!m_shadowLightBuffer.IsValid() || m_shadowLightCapacity < requiredLights)
-        {
-            if (m_shadowLightBuffer.IsValid())
-                m_device->DestroyBuffer(m_shadowLightBuffer);
-            renderer::BufferDesc desc{};
-            desc.byteSize = static_cast<uint64_t>(NextShadowCapacity(requiredLights)) * sizeof(GpuShadowLightData);
-            desc.stride = sizeof(GpuShadowLightData);
-            desc.type = renderer::BufferType::Structured;
-            desc.usage = renderer::ResourceUsage::ShaderResource;
-            desc.access = renderer::MemoryAccess::CpuWrite;
-            desc.initialState = renderer::ResourceState::ShaderRead;
-            desc.debugName = "Shadow_LightBuffer";
-            m_shadowLightBuffer = m_device->CreateBuffer(desc);
-            m_shadowLightCapacity = m_shadowLightBuffer.IsValid() ? NextShadowCapacity(requiredLights) : 0u;
-        }
-    }
-
-    void EnsureViewBuffer(uint32_t requiredViews) const
-    {
-        if (!m_device || requiredViews == 0u)
-            return;
-        if (!m_shadowViewBuffer.IsValid() || m_shadowViewCapacity < requiredViews)
-        {
-            if (m_shadowViewBuffer.IsValid())
-                m_device->DestroyBuffer(m_shadowViewBuffer);
-            renderer::BufferDesc desc{};
-            desc.byteSize = static_cast<uint64_t>(NextShadowCapacity(requiredViews)) * sizeof(GpuShadowViewData);
-            desc.stride = sizeof(GpuShadowViewData);
-            desc.type = renderer::BufferType::Structured;
-            desc.usage = renderer::ResourceUsage::ShaderResource;
-            desc.access = renderer::MemoryAccess::CpuWrite;
-            desc.initialState = renderer::ResourceState::ShaderRead;
-            desc.debugName = "Shadow_ViewBuffer";
-            m_shadowViewBuffer = m_device->CreateBuffer(desc);
-            m_shadowViewCapacity = m_shadowViewBuffer.IsValid() ? NextShadowCapacity(requiredViews) : 0u;
-        }
+        renderer::BufferDesc desc{};
+        desc.byteSize = static_cast<uint64_t>(NextShadowCapacity(requiredElements)) * stride;
+        desc.stride = stride;
+        desc.type = renderer::BufferType::Structured;
+        desc.usage = renderer::ResourceUsage::ShaderResource;
+        desc.access = renderer::MemoryAccess::CpuWrite;
+        desc.initialState = renderer::ResourceState::ShaderRead;
+        desc.debugName = debugName;
+        return desc;
     }
 
     void ReleaseBuffers() const
     {
         if (!m_device)
             return;
-        if (m_shadowLightBuffer.IsValid())
-            m_device->DestroyBuffer(m_shadowLightBuffer);
-        if (m_shadowViewBuffer.IsValid())
-            m_device->DestroyBuffer(m_shadowViewBuffer);
-        m_shadowLightBuffer = BufferHandle::Invalid();
-        m_shadowViewBuffer = BufferHandle::Invalid();
-        m_shadowLightCapacity = 0u;
-        m_shadowViewCapacity = 0u;
+        m_shadowLightBuffers.Release(m_device);
+        m_shadowViewBuffers.Release(m_device);
     }
 
     mutable renderer::IDevice* m_device = nullptr;
-    mutable BufferHandle m_shadowLightBuffer = BufferHandle::Invalid();
-    mutable BufferHandle m_shadowViewBuffer = BufferHandle::Invalid();
-    mutable uint32_t m_shadowLightCapacity = 0u;
-    mutable uint32_t m_shadowViewCapacity = 0u;
+    mutable renderer::FrameRingBuffer m_shadowLightBuffers;
+    mutable renderer::FrameRingBuffer m_shadowViewBuffers;
 };
 
 // ShadowPassContributor – deklariert Shadow-Atlas-Ressource und -Pass im Recipe

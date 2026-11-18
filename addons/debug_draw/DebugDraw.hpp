@@ -6,6 +6,7 @@
 // =============================================================================
 
 #include "core/Math.hpp"
+#include "renderer/FrameRingBuffer.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/RenderPipelineTypes.hpp"
 #include <array>
@@ -86,14 +87,16 @@ private:
         ShaderHandle fragmentShader = ShaderHandle::Invalid();
         PipelineHandle pipeline = PipelineHandle::Invalid();
         PipelineHandle pipelineDepthTested = PipelineHandle::Invalid();
+        // Copies used this frame; owned by the rings below.
         BufferHandle vertexBuffer = BufferHandle::Invalid();
         BufferHandle constantsBuffer = BufferHandle::Invalid();
-        uint32_t vertexCapacity = 0u;
+        renderer::FrameRingBuffer vertexBuffers;
+        renderer::FrameRingBuffer constantsBuffers;
         bool initialized = false;
     };
 
     bool EnsureGpuResources(renderer::IDevice& device, uint32_t requiredVertices);
-    bool EnsureVertexCapacity(renderer::IDevice& device, uint32_t requiredVertices);
+    bool NextFrameBuffers(renderer::IDevice& device, uint32_t requiredVertices);
     void DestroyGpuResources(renderer::IDevice& device) noexcept;
 
     DebugDrawConfig m_config{};

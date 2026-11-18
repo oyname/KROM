@@ -481,10 +481,30 @@ void main()
         };
         static_assert(sizeof(TonemapPassConstants) == 32u, "TonemapPassConstants must match PerPass in passthrough.ps.hlsl");
 
+        // Constants that rarely change, kept in one CPU-written buffer. Writing that buffer
+        // while the GPU may still read it makes the backend wait for the previous frame
+        // (Vulkan), so it is only written when the value differs from the last upload.
+        template <typename T>
+        struct UploadedConstants
+        {
+            T value{};
+            bool valid = false;
+
+            void Upload(IDevice& device, BufferHandle buffer, const T& next)
+            {
+                if (valid && std::memcmp(&value, &next, sizeof(T)) == 0)
+                    return;
+                device.UploadBufferData(buffer, &next, sizeof(T));
+                value = next;
+                valid = true;
+            }
+        };
+
         // Own constant buffer: bound on every tonemap draw, with or without bloom.
         struct TonemapGpuResources
         {
             BufferHandle perPassCB = BufferHandle::Invalid();
+            UploadedConstants<TonemapPassConstants> perPassContents;
         };
 
         struct BloomGpuResources
@@ -497,6 +517,7 @@ void main()
             PipelineHandle blurHPipeline = PipelineHandle::Invalid();
             PipelineHandle blurVPipeline = PipelineHandle::Invalid();
             BufferHandle perPassCB = BufferHandle::Invalid();
+            UploadedConstants<BloomPassConstants> perPassContents;
             bool initialized = false;
         };
 
@@ -1393,7 +1414,7 @@ void main()
                             if (!sourceTex.IsValid())
                                 return;
 
-                            execCtx.device->UploadBufferData(bloomResources->perPassCB, &bloomConstants, sizeof(bloomConstants));
+                            bloomResources->perPassContents.Upload(*execCtx.device, bloomResources->perPassCB, bloomConstants);
                             execCtx.cmd->SetPipeline(bloomResources->extractPipeline);
                             execCtx.cmd->SetConstantBuffer(CBSlots::PerPass, bloomResources->perPassCB, ShaderStageMask::Fragment);
                             execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Fragment);
@@ -1423,7 +1444,7 @@ void main()
                             if (!sourceTex.IsValid())
                                 return;
 
-                            execCtx.device->UploadBufferData(bloomResources->perPassCB, &bloomConstants, sizeof(bloomConstants));
+                            bloomResources->perPassContents.Upload(*execCtx.device, bloomResources->perPassCB, bloomConstants);
                             execCtx.cmd->SetPipeline(bloomResources->blurHPipeline);
                             execCtx.cmd->SetConstantBuffer(CBSlots::PerPass, bloomResources->perPassCB, ShaderStageMask::Fragment);
                             execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Fragment);
@@ -1453,7 +1474,7 @@ void main()
                             if (!sourceTex.IsValid())
                                 return;
 
-                            execCtx.device->UploadBufferData(bloomResources->perPassCB, &bloomConstants, sizeof(bloomConstants));
+                            bloomResources->perPassContents.Upload(*execCtx.device, bloomResources->perPassCB, bloomConstants);
                             execCtx.cmd->SetPipeline(bloomResources->blurVPipeline);
                             execCtx.cmd->SetConstantBuffer(CBSlots::PerPass, bloomResources->perPassCB, ShaderStageMask::Fragment);
                             execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Fragment);
@@ -1519,7 +1540,7 @@ void main()
                             const BufferHandle perPassCB = tonemapResources ? tonemapResources->perPassCB
                                                                             : BufferHandle::Invalid();
                             if (perPassCB.IsValid() && execCtx.device)
-                                execCtx.device->UploadBufferData(perPassCB, &tonemapConstants, sizeof(tonemapConstants));
+                                tonemapResources->perPassContents.Upload(*execCtx.device, perPassCB, tonemapConstants);
                             if (!runtimeTonemap->material.shaderRuntime->BindMaterial(*execCtx.cmd,
                                 tonemapMaterialSource,
                                 material,
@@ -1823,6 +1844,7 @@ void main()
                     desc.access = MemoryAccess::CpuWrite;
                     desc.debugName = "ForwardTonemap_PerPassCB";
                     m_tonemapResources->perPassCB = context.device.CreateBuffer(desc);
+                    m_tonemapResources->perPassContents = {};
                     // Not fatal: the tonemap pass then binds no PerPass block.
                     if (!m_tonemapResources->perPassCB.IsValid())
                         Debug::LogWarning("ForwardFeature.cpp: failed to create tonemap per-pass CB");

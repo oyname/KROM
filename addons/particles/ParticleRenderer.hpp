@@ -14,6 +14,7 @@
 
 #include "addons/particles/ParticleSystem.hpp"
 #include "core/Math.hpp"
+#include "renderer/FrameRingBuffer.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/RenderPipelineTypes.hpp"
 
@@ -109,10 +110,12 @@ private:
         ShaderHandle fragmentShader = ShaderHandle::Invalid();
         PipelineHandle pipelineAlpha = PipelineHandle::Invalid();
         PipelineHandle pipelineAdditive = PipelineHandle::Invalid();
+        // Copies used this frame; owned by the rings below.
         BufferHandle vertexBuffer = BufferHandle::Invalid();
         BufferHandle constantsBuffer = BufferHandle::Invalid();
+        renderer::FrameRingBuffer vertexBuffers;
+        renderer::FrameRingBuffer constantsBuffers;
         TextureHandle defaultTexture = TextureHandle::Invalid();   // weiche Scheibe
-        uint32_t vertexCapacity = 0u;
         bool initialized = false;
         bool shadersFailed = false;
     };
