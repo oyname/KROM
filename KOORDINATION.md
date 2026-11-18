@@ -17,6 +17,49 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Vulkan: persistent VkPipelineCache (Claude, 2026-11-18)
+
+- Branch `perf/vulkan-pipeline-cache`. Until now every `vkCreateGraphicsPipelines`/
+  `vkCreateComputePipelines` call ran without a cache.
+- `VulkanDevice` now owns one `VkPipelineCache`, used by both creation calls and destroyed at
+  `Shutdown` before `vkDestroyDevice`.
+- File: `<shader cache dir>/vulkan-pipelines.cache`, beside the SPIR-V artifacts: project
+  `shader-bin/` in the editor and the exported game, `shader_artifacts/` before a project is
+  open. Both locations were already git-ignored. The directory comes from the new
+  `ShaderCompiler::GetCacheDirectory()`. The editor sets it only after the device exists and
+  changes it when a project opens. So the device does not read the file at init:
+  `SyncPipelineCacheFile()` runs before each pipeline creation. When the directory changed,
+  it saves the old cache and creates a fresh `VkPipelineCache` from the new file. Pipelines
+  made from the old cache stay valid.
+- Loading checks the `VkPipelineCacheHeaderVersionOne` header: size, version, vendorID,
+  deviceID and pipelineCacheUUID. On a mismatch it logs the reason and starts empty. If the
+  driver still refuses the data, it retries without it.
+- Saving happens at `Shutdown` and on a directory change: `vkGetPipelineCacheData`, write
+  `<file>.tmp`, then `rename` over the file. Skipped when nothing was created, or when the data
+  equals what was loaded (size + FNV-1a). On a write failure (e.g. a read-only install folder)
+  it only logs a warning.
+- `--perf` now also prints `firstFrame`/`warmupEnd` (ms since test start). The shutdown log
+  prints the pipeline count and the time spent creating pipelines.
+- Measured on Vulkan, Debug x64, `--perf out/claude-perf-DemoProject` (car scene, 38
+  pipelines), 3 runs each without and with the file. Pipeline creation went from 60-76 ms to
+  6-7 ms. `firstFrame` is about 39 s in both cases (39.0-41.0 s), so the start-up is dominated
+  by scene/asset loading in Debug and the cache does not show up there. Setting
+  `__GL_SHADER_DISK_CACHE=0` changed nothing (66.8 ms → 6.2 ms), so the driver's own cache does
+  not hide the effect here.
+- Checked: `krom_tests` (all pass); `krom_editor_loading_tests` (Vulkan) `--material-ui`,
+  `--play-ui`, `--animation-ui` pass; `_dx11`/`_opengl --material-ui` pass. Editors build for
+  DX11/Vulkan/OpenGL. Vulkan validation with `--perf` (no file, then with the file): no
+  messages. With `KROM_PERF_SELECT=Camera`, and in the UI tests: only the known `08910`/`08914`/
+  `09600`/`pSignalSemaphores-00067`. A truncated file, a changed deviceID and a changed UUID
+  are each discarded with the right reason and rewritten. No `.tmp` is left behind.
+- Not checked: Release, the exported game, an editor project switch by hand. Also not checked:
+  a GPU/driver change in practice (only simulated by editing the header).
+- Please review:
+  - The device reads `ShaderCompiler::GetCacheDirectory()` (a hidden coupling to the shader
+    layer instead of an explicit `IDevice` call at the four `SetCacheDirectory` sites).
+  - The export warm-up runs on Vulkan, so the packaged `shader-bin/` now also carries the
+    developer's pipeline cache (~0.7 MB here). It is discarded on another GPU or driver.
+
 ## Vulkan: no WaitIdle around offscreen views (Claude, 2026-11-18)
 
 - Open point from the descriptor-cache entry below: with an offscreen request (Scene and Game

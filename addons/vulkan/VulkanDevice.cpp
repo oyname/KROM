@@ -1,12 +1,16 @@
 #include "VulkanDevice.hpp"
 #include "VKShaderReflector.hpp"
 #include "core/Debug.hpp"
+#include "core/PathUtf8.hpp"
+#include "renderer/ShaderCompiler.hpp"
 #include "renderer/TextureFormatUtils.hpp"
 #include "renderer/RenderWorldViews.hpp"
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cstring>
+#include <fstream>
+#include <iterator>
 #include <string_view>
 
 #if defined(KROM_VULKAN_HAS_GLFW) && KROM_VULKAN_HAS_GLFW
@@ -774,9 +778,13 @@ namespace engine::renderer::vulkan {
             return false;
         if (!CreateGlobalDescriptors())
             return false;
+        // Without a file yet: the shader cache directory is often set only after the
+        // device (editor: when a project opens). The first CreatePipeline loads it.
+        CreatePipelineCache({});
 
         if (!InitializeFrameContexts(m_framesInFlight))
         {
+            DestroyPipelineCache();
             DestroyGlobalDescriptors();
             vkDestroyDevice(m_device, nullptr);
             DestroyDebugMessenger(m_instance, m_debugMessenger);
@@ -1162,6 +1170,13 @@ namespace engine::renderer::vulkan {
 
         DestroyFrameContexts();
 
+        if (m_pipelinesCreated > 0u)
+            Debug::Log("VulkanDevice: %u pipelines created in %.1f ms (pipeline cache %s)",
+                m_pipelinesCreated, m_pipelineCreateMs,
+                m_pipelineCacheFile.empty() ? "<none>" : PathToUtf8(m_pipelineCacheFile).c_str());
+        SavePipelineCache();
+        DestroyPipelineCache();
+
         if (m_device)
             vkDestroyDevice(m_device, nullptr);
         DestroyDebugMessenger(m_instance, m_debugMessenger);
@@ -1175,6 +1190,181 @@ namespace engine::renderer::vulkan {
         m_debugMessenger = VK_NULL_HANDLE;
         m_activeSwapchain = nullptr;
         m_initialized = false;
+    }
+
+    // -------------------------------------------------------------------------
+    // Pipeline cache
+    // -------------------------------------------------------------------------
+
+    namespace {
+        constexpr const char* kPipelineCacheFileName = "vulkan-pipelines.cache";
+
+        uint64_t HashPipelineCacheData(const std::vector<uint8_t>& data) noexcept
+        {
+            uint64_t hash = 14695981039346656037ull; // FNV-1a
+            for (uint8_t byte : data)
+                hash = (hash ^ byte) * 1099511628211ull;
+            return hash;
+        }
+
+        // Reads the file and keeps it only if its header matches this driver and GPU.
+        // Data from another GPU, another driver version (pipelineCacheUUID) or a
+        // cut-off file is dropped; the driver then starts with an empty cache.
+        std::vector<uint8_t> ReadPipelineCacheFile(const std::filesystem::path& file,
+                                                   const VkPhysicalDeviceProperties& props)
+        {
+            std::vector<uint8_t> data;
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(file, ec))
+                return data;
+            std::ifstream in(file, std::ios::binary);
+            if (!in)
+                return data;
+            data.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+
+            VkPipelineCacheHeaderVersionOne header{};
+            const char* reason = nullptr;
+            if (data.size() < sizeof(header))
+                reason = "file too small";
+            else
+            {
+                std::memcpy(&header, data.data(), sizeof(header));
+                if (header.headerSize < sizeof(header) || header.headerSize > data.size())
+                    reason = "bad header size";
+                else if (header.headerVersion != VK_PIPELINE_CACHE_HEADER_VERSION_ONE)
+                    reason = "unknown header version";
+                else if (header.vendorID != props.vendorID || header.deviceID != props.deviceID)
+                    reason = "different GPU";
+                else if (std::memcmp(header.pipelineCacheUUID, props.pipelineCacheUUID, VK_UUID_SIZE) != 0)
+                    reason = "different driver";
+            }
+            if (reason)
+            {
+                Debug::Log("VulkanDevice: pipeline cache %s discarded (%s)", PathToUtf8(file).c_str(), reason);
+                data.clear();
+            }
+            return data;
+        }
+    }
+
+    bool VulkanDevice::CreatePipelineCache(const std::filesystem::path& file)
+    {
+        std::vector<uint8_t> initialData;
+        if (!file.empty())
+        {
+            VkPhysicalDeviceProperties props{};
+            vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
+            initialData = ReadPipelineCacheFile(file, props);
+        }
+
+        VkPipelineCacheCreateInfo info{ VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
+        info.initialDataSize = initialData.size();
+        info.pInitialData = initialData.empty() ? nullptr : initialData.data();
+        VkPipelineCache cache = VK_NULL_HANDLE;
+        VkResult result = vkCreatePipelineCache(m_device, &info, nullptr, &cache);
+        if (result != VK_SUCCESS && !initialData.empty())
+        {
+            // The header matched but the driver refused the payload: start empty.
+            Debug::LogWarning("VulkanDevice: pipeline cache %s rejected by the driver (VkResult %d)",
+                PathToUtf8(file).c_str(), static_cast<int>(result));
+            info.initialDataSize = 0u;
+            info.pInitialData = nullptr;
+            initialData.clear();
+            result = vkCreatePipelineCache(m_device, &info, nullptr, &cache);
+        }
+        if (result != VK_SUCCESS)
+        {
+            // Not fatal: pipelines are then created without a cache.
+            Debug::LogWarning("VulkanDevice: vkCreatePipelineCache failed (VkResult %d)", static_cast<int>(result));
+            return false;
+        }
+
+        DestroyPipelineCache();
+        m_pipelineCache = cache;
+        m_pipelineCacheFile = file;
+        m_pipelineCacheDirty = false;
+        m_pipelineCacheFileHash = HashPipelineCacheData(initialData);
+        m_pipelineCacheFileSize = initialData.size();
+        if (!initialData.empty())
+            Debug::Log("VulkanDevice: pipeline cache loaded (%zu bytes) from %s",
+                initialData.size(), PathToUtf8(file).c_str());
+        return true;
+    }
+
+    void VulkanDevice::SyncPipelineCacheFile()
+    {
+        const std::filesystem::path file = ShaderCompiler::GetCacheDirectory() / kPipelineCacheFileName;
+        if (file == m_pipelineCacheFile && m_pipelineCache != VK_NULL_HANDLE)
+            return;
+
+        // New location (first pipeline, or the editor opened another project):
+        // keep what the old location gathered, then start from the new file.
+        // Pipelines created from the old cache stay valid without it.
+        SavePipelineCache();
+        CreatePipelineCache(file);
+    }
+
+    void VulkanDevice::SavePipelineCache()
+    {
+        if (m_pipelineCache == VK_NULL_HANDLE || m_pipelineCacheFile.empty() || !m_pipelineCacheDirty)
+            return;
+
+        size_t size = 0u;
+        if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, nullptr) != VK_SUCCESS || size == 0u)
+            return;
+        std::vector<uint8_t> data(size);
+        if (vkGetPipelineCacheData(m_device, m_pipelineCache, &size, data.data()) != VK_SUCCESS)
+            return;
+        data.resize(size);
+
+        // All pipelines came from the loaded data: the file is already up to date.
+        const uint64_t hash = HashPipelineCacheData(data);
+        if (data.size() == m_pipelineCacheFileSize && hash == m_pipelineCacheFileHash)
+        {
+            m_pipelineCacheDirty = false;
+            return;
+        }
+
+        // Write a temp file and rename it over the old one, so a crash or a full
+        // disk never leaves a cut-off cache behind.
+        std::error_code ec;
+        std::filesystem::create_directories(m_pipelineCacheFile.parent_path(), ec);
+        std::filesystem::path tmp = m_pipelineCacheFile;
+        tmp += ".tmp";
+        bool written = false;
+        {
+            std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+            if (out)
+            {
+                out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
+                out.close();
+                written = !out.fail();
+            }
+        }
+        ec.clear();
+        if (written)
+            std::filesystem::rename(tmp, m_pipelineCacheFile, ec);
+        if (!written || ec)
+        {
+            // E.g. a game installed in a read-only folder: only the next start is slower.
+            Debug::LogWarning("VulkanDevice: could not save pipeline cache to %s",
+                PathToUtf8(m_pipelineCacheFile).c_str());
+            std::error_code removeEc;
+            std::filesystem::remove(tmp, removeEc);
+            return;
+        }
+        m_pipelineCacheDirty = false;
+        m_pipelineCacheFileHash = hash;
+        m_pipelineCacheFileSize = data.size();
+        Debug::Log("VulkanDevice: pipeline cache saved (%zu bytes) to %s",
+            data.size(), PathToUtf8(m_pipelineCacheFile).c_str());
+    }
+
+    void VulkanDevice::DestroyPipelineCache() noexcept
+    {
+        if (m_pipelineCache != VK_NULL_HANDLE && m_device != VK_NULL_HANDLE)
+            vkDestroyPipelineCache(m_device, m_pipelineCache, nullptr);
+        m_pipelineCache = VK_NULL_HANDLE;
     }
 
     void VulkanDevice::WaitIdle()
@@ -1850,11 +2040,17 @@ namespace engine::renderer::vulkan {
             ci.stage = computeStage;
             ci.layout = m_pipelineLayout;
 
-            if (vkCreateComputePipelines(m_device, VK_NULL_HANDLE, 1u, &ci, nullptr, &entry.pipeline) != VK_SUCCESS)
+            SyncPipelineCacheFile();
+            const auto createStart = std::chrono::steady_clock::now();
+            const VkResult createResult = vkCreateComputePipelines(m_device, m_pipelineCache, 1u, &ci, nullptr, &entry.pipeline);
+            m_pipelineCreateMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - createStart).count();
+            if (createResult != VK_SUCCESS)
             {
                 Debug::LogError("VulkanDevice: vkCreateComputePipelines failed");
                 return PipelineHandle::Invalid();
             }
+            ++m_pipelinesCreated;
+            m_pipelineCacheDirty = true;
 
             return m_resources.pipelines.Add(entry);
         }
@@ -2013,11 +2209,17 @@ namespace engine::renderer::vulkan {
             static_cast<unsigned long long>(desc.shaderContractHash),
             desc.debugName.c_str());
 
-        if (vkCreateGraphicsPipelines(m_device, VK_NULL_HANDLE, 1u, &pci, nullptr, &entry.pipeline) != VK_SUCCESS)
+        SyncPipelineCacheFile();
+        const auto createStart = std::chrono::steady_clock::now();
+        const VkResult createResult = vkCreateGraphicsPipelines(m_device, m_pipelineCache, 1u, &pci, nullptr, &entry.pipeline);
+        m_pipelineCreateMs += std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - createStart).count();
+        if (createResult != VK_SUCCESS)
         {
             Debug::LogError("VulkanDevice: vkCreateGraphicsPipelines failed");
             return PipelineHandle::Invalid();
         }
+        ++m_pipelinesCreated;
+        m_pipelineCacheDirty = true;
 
         return m_resources.pipelines.Add(entry);
     }

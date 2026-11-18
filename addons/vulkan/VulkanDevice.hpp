@@ -16,6 +16,7 @@
 #include "renderer/IDevice.hpp"
 #include "renderer/ShaderBindingModel.hpp"
 #include <array>
+#include <filesystem>
 #include <functional>
 #include <mutex>
 #include <memory>
@@ -659,6 +660,15 @@ namespace engine::renderer::vulkan {
         bool InitializeFrameContexts(uint32_t framesInFlight);
         void DestroyFrameContexts() noexcept;
 
+        // Pipeline cache: one VkPipelineCache for all pipelines, persisted as
+        // <shader cache dir>/vulkan-pipelines.cache. The file follows
+        // ShaderCompiler::GetCacheDirectory(), which the editor changes when a
+        // project opens; SyncPipelineCacheFile() runs before each pipeline creation.
+        bool CreatePipelineCache(const std::filesystem::path& file);
+        void SyncPipelineCacheFile();
+        void SavePipelineCache();
+        void DestroyPipelineCache() noexcept;
+
         enum class QueueFrameLifecycleState : uint8_t
         {
             Idle = 0,
@@ -730,6 +740,13 @@ namespace engine::renderer::vulkan {
         VkDebugUtilsMessengerEXT m_debugMessenger = VK_NULL_HANDLE;
         VkDescriptorSetLayout m_globalSetLayout = VK_NULL_HANDLE;
         VkPipelineLayout m_pipelineLayout = VK_NULL_HANDLE;
+        VkPipelineCache m_pipelineCache = VK_NULL_HANDLE;
+        std::filesystem::path m_pipelineCacheFile;  // empty until the first pipeline is created
+        bool m_pipelineCacheDirty = false;           // pipelines created since the last load/save
+        uint64_t m_pipelineCacheFileHash = 0u;       // content of the file as loaded/saved, to skip
+        size_t m_pipelineCacheFileSize = 0u;         // rewriting it when nothing was added
+        uint32_t m_pipelinesCreated = 0u;            // since startup, for the shutdown log
+        double m_pipelineCreateMs = 0.0;
         PipelineBindingLayoutDesc m_bindingLayout = BuildEnginePipelineBindingLayout();
         FrameDescriptorArenaDesc m_frameDescriptorArenaDesc = BuildEngineFrameDescriptorArenaDesc();
         DescriptorRuntimeLayoutDesc m_descriptorRuntimeLayout = BuildEngineDescriptorRuntimeLayout();
