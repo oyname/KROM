@@ -476,6 +476,13 @@ void OpenGLCommandList::SetSampler(uint32_t slot, uint32_t samplerIdx, ShaderSta
         glBindSampler(TexSlots::Normal, glSampler);
         glBindSampler(TexSlots::ORM, glSampler);
         glBindSampler(TexSlots::Emissive, glSampler);
+        // Material-graph textures (units set in OpenGLResources.cpp). Without a sampler
+        // object they use the texture's own CLAMP_TO_EDGE, so tiled UVs (box projection,
+        // UV scale) stretched the edge texels instead of repeating.
+        glBindSampler(13u, glSampler); // graphTexture0
+        glBindSampler(14u, glSampler); // graphTexture1
+        glBindSampler(TexSlots::GraphTexture2, glSampler);
+        glBindSampler(TexSlots::GraphTexture3, glSampler);
     }
     else if (slot == SamplerSlots::ShadowPCF)
     {

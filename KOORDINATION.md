@@ -17,6 +17,28 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## OpenGL: CSM cascades and tiled material-graph textures (Claude, 2026-11-18)
+
+- User request despite the OpenGL freeze: OpenGL cut shadows off and the Room 2 floor texture
+  did not repeat. User check 2026-11-18: looks good.
+- Found with GPU readbacks of the editor view (temporary capture in `--perf`, removed again),
+  Room 2, OpenGL against Vulkan, normal view and `DBG_VIEW_SHADOW`.
+- Shadows: the shadow view-projection outputs OpenGL clip depth -1..1
+  (`OpenGLDevice::GetShadowClipSpaceAdjustment`), and `SampleShadowAtlas` maps it with
+  `z * 0.5 + 0.5`. The CSM cascade selection in `pbr_lit.opengl.fs.glsl` and
+  `lit.opengl.fs.glsl` still tested the D3D range `ndcPos.z >= 0.0`, so receivers in the
+  light-side half of a cascade's depth range got no shadow at all. Now `ndcPos.z > -1.0`.
+  After the fix the OpenGL shadow view matches Vulkan.
+- Floor: OpenGL keeps the wrap mode per texture unit. Textures are created with
+  `CLAMP_TO_EDGE`, and `OpenGLCommandList::SetSampler` bound the LinearWrap sampler only to
+  units 0-3. Material-graph textures sit on units 13, 14, 16 and 17
+  (`OpenGLResources.cpp`), so box-projected or UV-scaled graph textures stretched their edge
+  texels. LinearWrap is now bound to those units too.
+- Still different from Vulkan/DX11, not investigated: the OpenGL image is darker overall.
+- Checked: `krom_tests` (all pass); `krom_editor_loading_tests_opengl` `--play-ui`,
+  `--material-ui`, `--animation-ui` pass; `krom_editor_opengl` builds.
+- Not checked: the car scene, other filter modes, the exported OpenGL game.
+
 ## DX11: shadow filter called once per light in the PBR pixel shaders (Claude, 2026-11-18)
 
 - Branch `perf/fxc-shadow-call-site` (on top of `perf/vulkan-descriptor-cache`).
