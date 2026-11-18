@@ -2527,19 +2527,23 @@ static void TestTonemapOperatorNames(test::TestContext& ctx)
 static void TestShadingSettingsFlags(test::TestContext& ctx)
 {
     using namespace engine::renderer::addons::forward;
-    // Default = former shading: no bit set.
-    CHECK_EQ(ctx, ShadingFlags(ShadingSettings{}), 0u);
+    // Default = former shading plus specular AA (an older variant was always on).
+    CHECK_EQ(ctx, ShadingFlags(ShadingSettings{}), 8u);
+    CHECK_EQ(ctx, ShadingFlags(ShadingSettings{ false, false, false, false }), 0u);
 
-    ShadingSettings visibility{};
+    ShadingSettings visibility{ false, false, false, false };
     visibility.heightCorrelatedVisibility = true;
     CHECK_EQ(ctx, ShadingFlags(visibility), 1u);
-    ShadingSettings fresnel{};
+    ShadingSettings fresnel{ false, false, false, false };
     fresnel.perLightDiffuseFresnel = true;
     CHECK_EQ(ctx, ShadingFlags(fresnel), 2u);
-    ShadingSettings multiScatter{};
+    ShadingSettings multiScatter{ false, false, false, false };
     multiScatter.multiScatterCompensation = true;
     CHECK_EQ(ctx, ShadingFlags(multiScatter), 4u);
-    CHECK_EQ(ctx, ShadingFlags(ShadingSettings{ true, true, true }), 7u);
+    ShadingSettings specularAA{ false, false, false, false };
+    specularAA.specularAntiAliasing = true;
+    CHECK_EQ(ctx, ShadingFlags(specularAA), 8u);
+    CHECK_EQ(ctx, ShadingFlags(ShadingSettings{ true, true, true, true }), 15u);
 
     // The block lands in featureParams[2].x, where pbr_shading_options.* reads it.
     CHECK(ctx, IsFrameParameterBlockInRange(kShadingFrameParameterBlock));

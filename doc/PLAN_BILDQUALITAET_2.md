@@ -40,7 +40,7 @@ Qualitätsstufen und Post-Process-Volumes. Zeitliche Verfahren (TAA) kommen zule
 |-----|---------|--------|
 | 1 | Tiefen-Vorpass von GTAO lösen, allgemeine Opaque-Eingaben (= Kontaktschatten Schritt 1) | erledigt (2026-11-18), Review offen |
 | 2 | Echtes GTAO | erledigt (2026-11-18), Review offen |
-| 3 | Specular-AA | offen |
+| 3 | Specular-AA | erledigt (2026-11-18), Review offen |
 | 4 | Script-API: GTAO und SSR an/aus | erledigt (2026-11-18), GTAO mit Projekt-Häkchen |
 | 5 | Post-AA: SMAA 1x, FXAA | offen |
 | 6 | Auto-Exposure | offen |
@@ -224,3 +224,25 @@ GTX 1660, Viewport 1181×709, MSAA wie Projekt, ohne Validierung), ms:
   0,533 ms, Vulkan 0,683 ms; DX11/Vulkan mit Validierung ohne Meldung; `krom_tests` grün.
 - Nicht geprüft: andere Szenen, MSAA 4×, dünne Objekte gezielt
   (Room 2 hat nur Hörner/Geländer als Beispiel).
+
+### 2026-11-18 – Schritt 3 (Claude, Arbeitsordner auf `feature/opaque-inputs`)
+
+- Umgesetzt von der Sitzung „specular-aa“, nach dem Rechnerabsturz in der GTAO-Sitzung geprüft und
+  abgeschlossen. Nicht committet; liegt uncommittet über PR #32 (eigener Zweig noch offen).
+- `ApplySpecularAA` in `shaders/pbr_lit.ps.hlsl` und `shaders/pbr_forward_plus.ps.hlsl` nach Tokuyoshi &
+  Kaplanyan 2021: Bildraum-Ableitungen der Shading-Normale → Kernel-α² = 2σ²(|dN/dx|² + |dN/dy|²),
+  σ² = 1/2π, begrenzt auf 0,18, auf α² addiert; Roughness nie kleiner als vorher. Wirkt jetzt auch ohne
+  Normal-Map (gekrümmte glänzende Geometrie); die alte Variante lief nur mit `KROM_NORMAL_MAP` und immer.
+- Shading-Option Bit 3 (`ShadingSettings::specularAntiAliasing`, Standard an): Projektschlüssel
+  `specularAntiAliasing` (fehlt = an), Häkchen in Projekteinstellungen > Shading, `RenderSettings` für
+  Scripts, krom.h über `SetShading`. OpenGL wertet Bit 3 nicht aus und behält die alte Normal-Map-Variante.
+- Testhilfen in `--gtao-motion`: `KROM_CAPTURE_LIT=1` nimmt die Lit-Ansicht statt F3 auf,
+  `KROM_CAPTURE_YAW` setzt den Drehschritt (Grad).
+- Geprüft: Debug-Build aller Ziele, `krom_tests` grün (Flags, Rundweg, fehlender Schlüssel). Room 2 Lit,
+  DX11 MSAA 1×/2× und Vulkan MSAA 2× mit `KROM_VALIDATION=1` ohne Meldung. Unterschiede an/aus nur auf
+  dem Normal-Map-Boden und an den glänzenden Masken; ein Firefly neben dem Maskenauge verschwindet
+  (`out/claude-specaa-compare-crop.png`). Drehung um 0,02° (unter 1 px), Masken: Pixel mit Sprung > 32/255
+  764 → 490 (MSAA 1×), 632 → 539 (MSAA 2×); Boden und Kisten unverändert.
+- GPU-Zeit MainOpaquePass (Debug, 1181×709): DX11 1,650 → 1,683 ms, Vulkan 1,588 → 1,612 ms.
+- Nicht geprüft: Sichtprüfung im Editor in echter Bewegung, harte Kanten flach schattierter Geometrie
+  (Roughness-Saum an Kanten möglich), MSAA 4×, Release.

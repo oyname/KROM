@@ -4,7 +4,8 @@
 // BRDF options of the PBR shaders (pbr_forward_plus.ps.hlsl, pbr_lit.ps.hlsl,
 // pbr_lit.opengl.fs.glsl). Owned by the forward add-on; the shaders read them
 // from the add-on's frame parameter block (assets/pbr_shading_options.*).
-// All options off = the shading before these options existed.
+// All options off = the shading before these options existed, except
+// specularAntiAliasing: on by default, off = no specular AA at all.
 // =============================================================================
 #include "renderer/RenderFrameConstants.hpp"
 #include <cstdint>
@@ -22,6 +23,11 @@ struct ShadingSettings
     // Specular (direct and IBL): multi-scatter energy compensation from the
     // BRDF LUT. Only in shaders built with IBL (the LUT is bound there).
     bool multiScatterCompensation = false;
+    // Geometric specular AA (Tokuyoshi/Kaplanyan): roughness widened by the
+    // screen-space variance of the shading normal. HLSL shaders only; the
+    // frozen OpenGL shader keeps its older normal-map-only variant. On by
+    // default: an older variant (normal maps only) was always on before.
+    bool specularAntiAliasing = true;
 
     [[nodiscard]] friend constexpr bool operator==(const ShadingSettings&, const ShadingSettings&) noexcept = default;
 };
@@ -29,12 +35,14 @@ struct ShadingSettings
 inline constexpr uint32_t kShadingFlagHeightCorrelatedVisibility = 1u << 0;
 inline constexpr uint32_t kShadingFlagPerLightDiffuseFresnel     = 1u << 1;
 inline constexpr uint32_t kShadingFlagMultiScatterCompensation   = 1u << 2;
+inline constexpr uint32_t kShadingFlagSpecularAntiAliasing       = 1u << 3;
 
 [[nodiscard]] inline constexpr uint32_t ShadingFlags(const ShadingSettings& settings) noexcept
 {
     return (settings.heightCorrelatedVisibility ? kShadingFlagHeightCorrelatedVisibility : 0u)
          | (settings.perLightDiffuseFresnel     ? kShadingFlagPerLightDiffuseFresnel     : 0u)
-         | (settings.multiScatterCompensation   ? kShadingFlagMultiScatterCompensation   : 0u);
+         | (settings.multiScatterCompensation   ? kShadingFlagMultiScatterCompensation   : 0u)
+         | (settings.specularAntiAliasing       ? kShadingFlagSpecularAntiAliasing       : 0u);
 }
 
 // featureParams[2]; must match the #defines in assets/pbr_shading_options.*.

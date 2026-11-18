@@ -28,6 +28,7 @@ struct ProjectRenderSettings
     bool brdfHeightCorrelated = true;
     bool brdfPerLightFresnel = true;
     bool brdfMultiScatter = true;
+    bool specularAntiAliasing = true;      // geometric specular AA (HLSL backends)
     bool specularOcclusion = true;
     // Screen-space reflections (SSR add-on, not under OpenGL).
     bool  ssrEnabled = true;
@@ -80,6 +81,7 @@ inline void ReadRenderSettingKeys(const serialization::JsonValue& object, Projec
     flag("brdfHeightCorrelated", out.brdfHeightCorrelated);
     flag("brdfPerLightFresnel", out.brdfPerLightFresnel);
     flag("brdfMultiScatter", out.brdfMultiScatter);
+    flag("specularAntiAliasing", out.specularAntiAliasing);
     flag("specularOcclusion", out.specularOcclusion);
     auto number = [&](const char* key, float& value, float lo, float hi) {
         if (const auto* v = object.Get(key); v && v->IsNumber())
@@ -207,6 +209,7 @@ inline void WriteProjectSettings(serialization::JsonWriter& out, const ProjectSe
     out.WriteBool("brdfHeightCorrelated", settings.rendering.brdfHeightCorrelated);
     out.WriteBool("brdfPerLightFresnel", settings.rendering.brdfPerLightFresnel);
     out.WriteBool("brdfMultiScatter", settings.rendering.brdfMultiScatter);
+    out.WriteBool("specularAntiAliasing", settings.rendering.specularAntiAliasing);
     out.WriteBool("specularOcclusion", settings.rendering.specularOcclusion);
     out.WriteBool("ssrEnabled", settings.rendering.ssrEnabled);
     out.WriteFloat("ssrIntensity", settings.rendering.ssrIntensity);

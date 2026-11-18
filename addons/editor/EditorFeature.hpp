@@ -327,7 +327,7 @@ struct EditorState
     renderer::addons::forward::TonemapSettings tonemap{};
     uint32_t msaaSamples = 1u;   // 1 = off, 2, 4
     bool     specularOcclusion = true;
-    renderer::addons::forward::ShadingSettings shading{ true, true, true };
+    renderer::addons::forward::ShadingSettings shading{ true, true, true, true };
     // Screen-space reflections (project settings, SSR add-on).
     bool     ssrEnabled = true;
     float    ssrIntensity = 1.0f;

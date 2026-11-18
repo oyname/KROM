@@ -17,6 +17,28 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Geometric specular AA (Claude, 2026-11-18)
+
+- Working tree on `feature/opaque-inputs`, uncommitted, on top of PR #32 (no own branch yet). Step 3 of
+  `doc/PLAN_BILDQUALITAET_2.md`. Written by the "specular-aa" session, checked and finished after a crash.
+- `ApplySpecularAA` in `pbr_lit.ps.hlsl` / `pbr_forward_plus.ps.hlsl` after Tokuyoshi & Kaplanyan 2021:
+  kernel alpha^2 = 2 sigma^2 (|dN/dx|^2 + |dN/dy|^2), sigma^2 = 1/2pi, clamped to 0.18, added to alpha^2;
+  roughness never drops. Now also without normal maps (old variant: `KROM_NORMAL_MAP` only, always on).
+- Shading option bit 3 (`ShadingSettings::specularAntiAliasing`, default on): project key
+  `specularAntiAliasing` (missing = on), checkbox in Project settings > Shading, `RenderSettings` for scripts,
+  krom.h via `SetShading`. OpenGL ignores bit 3 and keeps its normal-map-only variant (frozen).
+- Test helpers in `--gtao-motion`: `KROM_CAPTURE_LIT=1` captures the lit view, `KROM_CAPTURE_YAW` sets the
+  rotation step in degrees.
+- Checked: Debug build of all targets, `krom_tests` all passed. Room 2 lit view, DX11 MSAA 1x/2x and Vulkan
+  MSAA 2x with `KROM_VALIDATION=1`: no messages. On/off differ only on the normal-mapped floor and the glossy
+  masks; a firefly next to a mask eye disappears (`out/claude-specaa-compare-crop.png`). 0.02 deg yaw
+  (sub-pixel), masks: pixels jumping > 32/255 764 -> 490 (MSAA 1x), 632 -> 539 (MSAA 2x); floor/boxes same.
+  GPU MainOpaquePass: DX11 1.650 -> 1.683 ms, Vulkan 1.588 -> 1.612 ms.
+- Not checked: visual check in real motion in the editor, hard edges of flat-shaded geometry (possible
+  roughness seam along edges), MSAA 4x, Release.
+- Please review: derivative placement before the branch (quad uniformity), clamp(aa, roughness, 1), and
+  that the forward/shadow/prepass shader variants do not need the flag.
+
 ## Real GTAO in the main pass (Claude, 2026-11-18)
 
 - Branch `feature/opaque-inputs` (on top of the opaque-input and GTAO/SSR switch work), not committed.

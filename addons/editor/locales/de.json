@@ -388,6 +388,8 @@
   "shading.diffuse_fresnel_tip": "Der diffuse Anteil jedes Lichts wird mit dem Fresnel-Wert aus seinem Halbvektor gewichtet statt mit einem Wert aus dem Blickwinkel für alle Lichter. Aus = bisherige Rechnung.",
   "shading.multi_scatter": "Multi-Scatter-Kompensation",
   "shading.multi_scatter_tip": "Gleicht den Energieverlust rauer Glanzflächen (vor allem Metalle) über die vorhandene BRDF-LUT aus. Wirkt nur in Szenen mit IBL. Aus = bisherige Rechnung.",
+  "shading.specular_aa": "Specular-Antialiasing",
+  "shading.specular_aa_tip": "Hebt die Rauheit an, wo sich die Normale innerhalb eines Pixels stark ändert (Normal-Maps, gekrümmte glänzende Kanten). Glanzlichter flimmern dann weniger, mit und ohne MSAA. Unter OpenGL bleibt die ältere Variante nur für Normal-Maps.",
   "settings.show_selection_outline": "Auswahlumriss anzeigen",
   "settings.background": "Hintergrund",
   "settings.code_editor": "Code-Editor",
