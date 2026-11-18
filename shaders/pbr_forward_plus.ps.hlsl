@@ -292,23 +292,31 @@ float3 SampleNormal(float2 uv, float3 baseNormalWS, float4 tangentWS, float3 pos
 }
 
 
+// Geometric specular antialiasing (Tokuyoshi & Kaplanyan 2019/2021, after
+// Kaplanyan et al. 2016). The screen-space change of the shading normal is
+// treated as a normal distribution inside the pixel footprint and added to the
+// GGX alpha^2, so highlights narrower than a pixel stop flickering on
+// normal-mapped surfaces and on curved glossy geometry. Per pixel, so it acts
+// the same with and without MSAA. roughness is perceptual (alpha = r^2).
+// Shading option bit 3; off = roughness unchanged.
+static const float kSpecularAAVariance = 0.15915494f; // screen-space filter variance (1 / 2 pi)
+static const float kSpecularAAMaxAlpha2 = 0.18f;      // upper bound of the added alpha^2
+
 float ApplySpecularAA(float3 shadingNormalWS, float roughness)
 {
-#ifdef KROM_NORMAL_MAP
+    // Derivatives outside the option branch (quad-uniform anyway).
     float3 dndx = ddx(shadingNormalWS);
     float3 dndy = ddy(shadingNormalWS);
-    float variance = max(dot(dndx, dndx), dot(dndy, dndy));
-    if (!(variance >= 0.0f))
+    float kernelAlpha2 = min(2.0f * kSpecularAAVariance * (dot(dndx, dndx) + dot(dndy, dndy)),
+                             kSpecularAAMaxAlpha2);
+    // Degenerate derivatives (NaN) keep the material roughness.
+    if (!shadingSpecularAA || !(kernelAlpha2 >= 0.0f))
         return roughness;
-    variance = min(variance, 0.18f);
-    float roughness2 = roughness * roughness;
-    float aaRoughness = sqrt(max(roughness2 + variance, 0.0f));
+    float alpha = roughness * roughness;
+    float aaRoughness = sqrt(sqrt(saturate(alpha * alpha + kernelAlpha2)));
     if (!(aaRoughness >= 0.0f))
         return roughness;
-    return clamp(aaRoughness, 0.0f, 1.0f);
-#else
-    return roughness;
-#endif
+    return clamp(aaRoughness, roughness, 1.0f);
 }
 
 float CalcAttenuation(float dist, float range)

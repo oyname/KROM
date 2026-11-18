@@ -26,6 +26,7 @@ struct RenderSettings
     bool        heightCorrelatedVisibility = true;
     bool        perLightDiffuseFresnel = true;
     bool        multiScatterCompensation = true;
+    bool        specularAntiAliasing = true;  // geometric specular AA; OpenGL keeps its own variant
     bool        specularOcclusion = true;
     bool        gtaoEnabled = true;          // GTAO add-on; no effect under OpenGL
     bool        ssrEnabled = true;           // SSR add-on; no effect under OpenGL

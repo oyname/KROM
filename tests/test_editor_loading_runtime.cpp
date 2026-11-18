@@ -1349,7 +1349,8 @@ struct EditorLoadingSmokeTest final : IAppScene
             camera.yawDeg = std::atan2(-direction.x, -direction.z) * math::RAD_TO_DEG;
             camera.pitchDeg = std::asin(direction.y) * math::RAD_TO_DEG;
             gtaoOrbitCamera = camera;
-            state.editorDebugFlags = renderer::DBG_VIEW_GTAO;
+            // KROM_CAPTURE_LIT=1: capture the lit view (e.g. specular AA) instead of the GTAO view.
+            state.editorDebugFlags = std::getenv("KROM_CAPTURE_LIT") ? 0u : renderer::DBG_VIEW_GTAO;
         }
 
         const auto capture = [&](const char* file)
@@ -1387,7 +1388,13 @@ struct EditorLoadingSmokeTest final : IAppScene
             capture("still.ppm");
             break;
         }
-        case 121: state.editorCamera.yawDeg += 9.f; break;
+        case 121:
+        {
+            // KROM_CAPTURE_YAW: rotation step in degrees (default 9).
+            const char* yaw = std::getenv("KROM_CAPTURE_YAW");
+            state.editorCamera.yawDeg += yaw ? static_cast<float>(std::atof(yaw)) : 9.f;
+            break;
+        }
         case 122: capture("rotation-motion.ppm"); break;
         case 128:
             capture("rotation-still.ppm");

@@ -6087,7 +6087,7 @@ void KromEditorApp::ApplyProjectRenderSettings()
         Debug::LogWarning("KromEditorApp.cpp: unknown tonemap operator '%s'", rendering.tonemapOperator.c_str());
     m_editorState.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(rendering.msaaSamples);
     m_editorState.shading = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
-                              rendering.brdfMultiScatter };
+                              rendering.brdfMultiScatter, rendering.specularAntiAliasing };
     m_editorState.specularOcclusion = rendering.specularOcclusion;
     m_editorState.ssrEnabled = rendering.ssrEnabled;
     m_editorState.ssrIntensity = rendering.ssrIntensity;
@@ -6118,6 +6118,7 @@ public:
         out.heightCorrelatedVisibility = m_state.shading.heightCorrelatedVisibility;
         out.perLightDiffuseFresnel = m_state.shading.perLightDiffuseFresnel;
         out.multiScatterCompensation = m_state.shading.multiScatterCompensation;
+        out.specularAntiAliasing = m_state.shading.specularAntiAliasing;
         out.specularOcclusion = m_state.specularOcclusion;
         out.gtaoEnabled = m_state.gtaoSettings.enabled;
         out.ssrEnabled = m_state.ssrEnabled;
@@ -6130,7 +6131,8 @@ public:
         m_state.tonemap.op = static_cast<TonemapOperator>(std::min<uint8_t>(static_cast<uint8_t>(in.tonemap), 3u));
         m_state.tonemap.exposureEv = std::clamp(in.exposureEv, kMinExposureEv, kMaxExposureEv);
         m_state.msaaSamples = NormalizeMsaaSamples(in.msaaSamples);
-        m_state.shading = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel, in.multiScatterCompensation };
+        m_state.shading = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel, in.multiScatterCompensation,
+                            in.specularAntiAliasing };
         m_state.specularOcclusion = in.specularOcclusion;
         m_state.gtaoSettings.enabled = in.gtaoEnabled;
         m_state.ssrEnabled = in.ssrEnabled;

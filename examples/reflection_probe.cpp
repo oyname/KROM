@@ -217,6 +217,7 @@ int main()
         settings.heightCorrelatedVisibility = (bits & 1) != 0;
         settings.perLightDiffuseFresnel = (bits & 2) != 0;
         settings.multiScatterCompensation = (bits & 4) != 0;
+        settings.specularAntiAliasing = (bits & 8) != 0;
         Krom::SetShading(settings);
     }
 

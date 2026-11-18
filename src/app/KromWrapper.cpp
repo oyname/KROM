@@ -2255,7 +2255,7 @@ static void ApplyProjectRenderSettings(State& state, const engine::ProjectRender
             engine::renderer::addons::forward::NormalizeMsaaSamples(rendering.msaaSamples);
     if (state.shadingSettings)
         *state.shadingSettings = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
-                                   rendering.brdfMultiScatter };
+                                   rendering.brdfMultiScatter, rendering.specularAntiAliasing };
     if (state.ssrResources)
     {
         engine::renderer::addons::ssr::SsrSettings& ssr = state.ssrResources->settings;
@@ -2301,6 +2301,7 @@ public:
         out.heightCorrelatedVisibility = shading.heightCorrelatedVisibility;
         out.perLightDiffuseFresnel = shading.perLightDiffuseFresnel;
         out.multiScatterCompensation = shading.multiScatterCompensation;
+        out.specularAntiAliasing = shading.specularAntiAliasing;
         out.specularOcclusion = m_state.probeRuntime && m_state.probeRuntime->GetSettings().specularOcclusion;
         out.gtaoEnabled = m_state.gtaoResources && m_state.gtaoResources->settings.enabled;
         out.ssrEnabled = m_state.ssrResources && m_state.ssrResources->settings.enabled;
@@ -2320,7 +2321,7 @@ public:
             m_state.msaaSettings->sampleCount = NormalizeMsaaSamples(in.msaaSamples);
         if (m_state.shadingSettings)
             *m_state.shadingSettings = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel,
-                                         in.multiScatterCompensation };
+                                         in.multiScatterCompensation, in.specularAntiAliasing };
         if (m_state.probeRuntime)
         {
             engine::addons::probes::ProbeSettings probeSettings = m_state.probeRuntime->GetSettings();
