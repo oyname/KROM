@@ -1199,6 +1199,27 @@ namespace engine::renderer::vulkan {
     namespace {
         constexpr const char* kPipelineCacheFileName = "vulkan-pipelines.cache";
 
+        // The driver keeps every pipeline it ever saw in its cache data and hands
+        // all of it back on save. Pipelines of shader variants that no longer exist
+        // (edited shaders, deleted materials) would therefore stay in the file for
+        // good. The file starts with this header so the size can be bounded: it
+        // records how many pipelines one session needed at most and how big one
+        // pipeline is on average. Data larger than kGrowthFactor times that working
+        // set is dropped once and rebuilt from what the next session creates.
+        constexpr char kPipelineCacheMagic[8] = { 'K', 'R', 'O', 'M', 'V', 'K', 'P', 'C' };
+        constexpr uint32_t kPipelineCacheFileVersion = 1u;
+        constexpr uint64_t kPipelineCacheGrowthFactor = 2u;
+        constexpr uint64_t kPipelineCacheMinLimitBytes = 2ull * 1024ull * 1024ull;
+
+        struct PipelineCacheFileHeader
+        {
+            char magic[8];
+            uint32_t version;
+            uint32_t maxSessionPipelines;  // most pipelines one session created with this file
+            uint64_t bytesPerPipeline;     // average, measured when the data was built from empty
+            uint64_t blobSize;             // driver data that follows the header
+        };
+
         uint64_t HashPipelineCacheData(const std::vector<uint8_t>& data) noexcept
         {
             uint64_t hash = 14695981039346656037ull; // FNV-1a
@@ -1207,55 +1228,96 @@ namespace engine::renderer::vulkan {
             return hash;
         }
 
-        // Reads the file and keeps it only if its header matches this driver and GPU.
-        // Data from another GPU, another driver version (pipelineCacheUUID) or a
-        // cut-off file is dropped; the driver then starts with an empty cache.
-        std::vector<uint8_t> ReadPipelineCacheFile(const std::filesystem::path& file,
-                                                   const VkPhysicalDeviceProperties& props)
+        uint64_t PipelineCacheSizeLimit(uint32_t maxSessionPipelines, uint64_t bytesPerPipeline) noexcept
         {
-            std::vector<uint8_t> data;
+            const uint64_t workingSet = static_cast<uint64_t>(maxSessionPipelines) * bytesPerPipeline;
+            return std::max(kPipelineCacheMinLimitBytes, kPipelineCacheGrowthFactor * workingSet);
+        }
+
+        struct LoadedPipelineCache
+        {
+            std::vector<uint8_t> data;  // driver data; empty = start from an empty cache
+            uint32_t maxSessionPipelines = 0u;
+            uint64_t bytesPerPipeline = 0u;
+        };
+
+        // Reads the file and keeps the driver data only if it matches this driver and
+        // GPU and has not outgrown its limit. Otherwise the driver starts empty.
+        LoadedPipelineCache ReadPipelineCacheFile(const std::filesystem::path& file,
+                                                  const VkPhysicalDeviceProperties& props)
+        {
+            LoadedPipelineCache loaded;
             std::error_code ec;
             if (!std::filesystem::is_regular_file(file, ec))
-                return data;
+                return loaded;
             std::ifstream in(file, std::ios::binary);
             if (!in)
-                return data;
-            data.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+                return loaded;
+            std::vector<uint8_t> bytes((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
 
+            PipelineCacheFileHeader fileHeader{};
             VkPipelineCacheHeaderVersionOne header{};
             const char* reason = nullptr;
-            if (data.size() < sizeof(header))
+            if (bytes.size() < sizeof(fileHeader))
                 reason = "file too small";
             else
             {
-                std::memcpy(&header, data.data(), sizeof(header));
-                if (header.headerSize < sizeof(header) || header.headerSize > data.size())
-                    reason = "bad header size";
-                else if (header.headerVersion != VK_PIPELINE_CACHE_HEADER_VERSION_ONE)
-                    reason = "unknown header version";
-                else if (header.vendorID != props.vendorID || header.deviceID != props.deviceID)
-                    reason = "different GPU";
-                else if (std::memcmp(header.pipelineCacheUUID, props.pipelineCacheUUID, VK_UUID_SIZE) != 0)
-                    reason = "different driver";
+                std::memcpy(&fileHeader, bytes.data(), sizeof(fileHeader));
+                if (std::memcmp(fileHeader.magic, kPipelineCacheMagic, sizeof(kPipelineCacheMagic)) != 0 ||
+                    fileHeader.version != kPipelineCacheFileVersion)
+                    reason = "old or unknown file format";
+                else if (fileHeader.blobSize != bytes.size() - sizeof(fileHeader))
+                    reason = "file cut off";
+                else if (fileHeader.blobSize < sizeof(header))
+                    reason = "no driver data";
+                else
+                {
+                    std::memcpy(&header, bytes.data() + sizeof(fileHeader), sizeof(header));
+                    if (header.headerSize < sizeof(header) || header.headerSize > fileHeader.blobSize)
+                        reason = "bad header size";
+                    else if (header.headerVersion != VK_PIPELINE_CACHE_HEADER_VERSION_ONE)
+                        reason = "unknown header version";
+                    else if (header.vendorID != props.vendorID || header.deviceID != props.deviceID)
+                        reason = "different GPU";
+                    else if (std::memcmp(header.pipelineCacheUUID, props.pipelineCacheUUID, VK_UUID_SIZE) != 0)
+                        reason = "different driver";
+                }
             }
             if (reason)
             {
                 Debug::Log("VulkanDevice: pipeline cache %s discarded (%s)", PathToUtf8(file).c_str(), reason);
-                data.clear();
+                return loaded;
             }
-            return data;
+
+            const uint64_t limit = PipelineCacheSizeLimit(fileHeader.maxSessionPipelines, fileHeader.bytesPerPipeline);
+            if (fileHeader.blobSize > limit)
+            {
+                Debug::Log("VulkanDevice: pipeline cache %s discarded (%llu bytes, limit %llu bytes for %u pipelines): "
+                           "rebuilt from this session",
+                    PathToUtf8(file).c_str(),
+                    static_cast<unsigned long long>(fileHeader.blobSize),
+                    static_cast<unsigned long long>(limit),
+                    fileHeader.maxSessionPipelines);
+                return loaded;
+            }
+
+            loaded.data.assign(bytes.begin() + static_cast<std::ptrdiff_t>(sizeof(fileHeader)), bytes.end());
+            loaded.maxSessionPipelines = fileHeader.maxSessionPipelines;
+            loaded.bytesPerPipeline = fileHeader.bytesPerPipeline;
+            return loaded;
         }
     }
 
     bool VulkanDevice::CreatePipelineCache(const std::filesystem::path& file)
     {
-        std::vector<uint8_t> initialData;
+        LoadedPipelineCache loaded;
         if (!file.empty())
         {
             VkPhysicalDeviceProperties props{};
             vkGetPhysicalDeviceProperties(m_physicalDevice, &props);
-            initialData = ReadPipelineCacheFile(file, props);
+            loaded = ReadPipelineCacheFile(file, props);
         }
+        std::vector<uint8_t>& initialData = loaded.data;
 
         VkPipelineCacheCreateInfo info{ VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO };
         info.initialDataSize = initialData.size();
@@ -1285,6 +1347,11 @@ namespace engine::renderer::vulkan {
         m_pipelineCacheDirty = false;
         m_pipelineCacheFileHash = HashPipelineCacheData(initialData);
         m_pipelineCacheFileSize = initialData.size();
+        // Empty data: this session builds the file from scratch, so its size per
+        // pipeline is measured again on save.
+        m_pipelineCacheMaxSessionPipelines = initialData.empty() ? 0u : loaded.maxSessionPipelines;
+        m_pipelineCacheBytesPerPipeline = initialData.empty() ? 0u : loaded.bytesPerPipeline;
+        m_pipelineCacheSessionPipelines = 0u;
         if (!initialData.empty())
             Debug::Log("VulkanDevice: pipeline cache loaded (%zu bytes) from %s",
                 initialData.size(), PathToUtf8(file).c_str());
@@ -1317,13 +1384,28 @@ namespace engine::renderer::vulkan {
             return;
         data.resize(size);
 
-        // All pipelines came from the loaded data: the file is already up to date.
+        const uint32_t maxSessionPipelines = std::max(m_pipelineCacheMaxSessionPipelines, m_pipelineCacheSessionPipelines);
+        // Built from empty: the data holds exactly this session's pipelines.
+        const uint64_t bytesPerPipeline = m_pipelineCacheBytesPerPipeline != 0u
+            ? m_pipelineCacheBytesPerPipeline
+            : data.size() / std::max(1u, m_pipelineCacheSessionPipelines);
+
+        // All pipelines came from the loaded data and the session needed no more
+        // than before: the file is already up to date.
         const uint64_t hash = HashPipelineCacheData(data);
-        if (data.size() == m_pipelineCacheFileSize && hash == m_pipelineCacheFileHash)
+        if (data.size() == m_pipelineCacheFileSize && hash == m_pipelineCacheFileHash &&
+            maxSessionPipelines == m_pipelineCacheMaxSessionPipelines)
         {
             m_pipelineCacheDirty = false;
             return;
         }
+
+        PipelineCacheFileHeader fileHeader{};
+        std::memcpy(fileHeader.magic, kPipelineCacheMagic, sizeof(kPipelineCacheMagic));
+        fileHeader.version = kPipelineCacheFileVersion;
+        fileHeader.maxSessionPipelines = maxSessionPipelines;
+        fileHeader.bytesPerPipeline = bytesPerPipeline;
+        fileHeader.blobSize = data.size();
 
         // Write a temp file and rename it over the old one, so a crash or a full
         // disk never leaves a cut-off cache behind.
@@ -1336,6 +1418,7 @@ namespace engine::renderer::vulkan {
             std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
             if (out)
             {
+                out.write(reinterpret_cast<const char*>(&fileHeader), static_cast<std::streamsize>(sizeof(fileHeader)));
                 out.write(reinterpret_cast<const char*>(data.data()), static_cast<std::streamsize>(data.size()));
                 out.close();
                 written = !out.fail();
@@ -1356,8 +1439,12 @@ namespace engine::renderer::vulkan {
         m_pipelineCacheDirty = false;
         m_pipelineCacheFileHash = hash;
         m_pipelineCacheFileSize = data.size();
-        Debug::Log("VulkanDevice: pipeline cache saved (%zu bytes) to %s",
-            data.size(), PathToUtf8(m_pipelineCacheFile).c_str());
+        m_pipelineCacheMaxSessionPipelines = maxSessionPipelines;
+        m_pipelineCacheBytesPerPipeline = bytesPerPipeline;
+        Debug::Log("VulkanDevice: pipeline cache saved (%zu bytes, limit %llu bytes) to %s",
+            data.size(),
+            static_cast<unsigned long long>(PipelineCacheSizeLimit(maxSessionPipelines, bytesPerPipeline)),
+            PathToUtf8(m_pipelineCacheFile).c_str());
     }
 
     void VulkanDevice::DestroyPipelineCache() noexcept
@@ -2050,6 +2137,7 @@ namespace engine::renderer::vulkan {
                 return PipelineHandle::Invalid();
             }
             ++m_pipelinesCreated;
+            ++m_pipelineCacheSessionPipelines;
             m_pipelineCacheDirty = true;
 
             return m_resources.pipelines.Add(entry);
@@ -2219,6 +2307,7 @@ namespace engine::renderer::vulkan {
             return PipelineHandle::Invalid();
         }
         ++m_pipelinesCreated;
+        ++m_pipelineCacheSessionPipelines;
         m_pipelineCacheDirty = true;
 
         return m_resources.pipelines.Add(entry);
