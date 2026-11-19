@@ -17,6 +17,41 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Post-process volumes (Claude, 2026-11-19)
+
+- Step 9 of `doc/PLAN_BILDQUALITAET_2.md`, branch `feature/post-process-volumes` from `main` (017cdb5),
+  not committed yet. UI as agreed in step 8 of the plan.
+- New add-on `addons/postprocess` (no GPU code): `PostProcessVolumeComponent` (global, weight 0..1,
+  priority, box like the reflection probe: extents, boxOffset, blendDistance inward; 17 override bits:
+  exposure/correction, auto-exposure min/max EV, every field of `ColorGradingSettings`, bloom/GTAO/SSR/
+  contact shadow intensity). `BlendPostProcessVolumes`: factor 0 at the wall -> 1 at blendDistance,
+  ascending priority, equal priority larger box first, lerp by weight * factor, AgX look switches above
+  0.5, inactive entities ignored.
+- Hosts blend every frame and write only the add-on settings: editor (`KromEditorApp`, editor camera, main
+  camera during play) and krom.h runtime (new `effectiveTonemapSettings` for the forward feature;
+  `tonemapSettings` stays the base for scripts/krom.h; project intensities kept as base). Bloom via new
+  `TonemapSettings::bloomIntensity` (< 0 = feature value), read by the tonemap pass per frame.
+- Editor: hierarchy Create -> "Post-Process Volume", Add component -> "Post Process", Inspector section
+  with override ticks (greyed out when off, undo), duplicate, clipboard; viewport box with dashed inner
+  blend edge and face handles. Deviation: the probe has no viewport handles, so the collision box handles
+  (`UpdateOBBHandles`) now work on an OBB or a volume box.
+- Scenes (.json/.kscene) and prefabs (`postProcessVolume` record, instance sync): `overrides` as a name
+  list (missing name = no override), all values stored. Scripts: `IScriptContext::Set/GetPostProcessWeight`
+  (inline), krom.h `Set/GetPostProcessWeight`; no ABI bump (no by-value type changed).
+- Checked: Debug x64 targets with `-j6` (`out/claude-ppvolume-build.log`), `krom_tests` all passed incl.
+  new suite "Post-process volumes" (57 checks) and an editor test (create, override undo/redo, duplicate,
+  inspector draws). Room 2 copy with a volume (`out/claude-ppvolume-DemoProject`), `KROM_VALIDATION=1
+  KROM_CAPTURE_LIT=1 KROM_CAPTURE_PPVOLUME=1 --gtao-motion`: outside / blend band middle / inside give
+  +0.5 / 0.0 / -0.5 EV etc. as expected, no validation messages on DX11 and Vulkan, DX11 vs Vulkan
+  0.42-0.47/255 (`out/claude-ppvolume-check/vergleich.png`).
+  OpenGL editor and loading test build and start; the blended values are computed there too (grading has
+  no effect on OpenGL, frozen).
+- Not checked: manual editor use (dragging handles, ticks), play mode with the game camera, exported game,
+  a script DLL calling `SetPostProcessWeight`. Known: material/animation previews share the tonemap
+  settings and show the volume values at the camera.
+- Please review: blend order and the equal-priority rule, the base/effective split in `KromWrapper.cpp`,
+  `TonemapSettings::bloomIntensity`, and the shared OBB/volume handle code in `EditorUIViewport.cpp`.
+
 ## Colour grading and AgX looks per scene (Claude, 2026-11-19)
 
 - Step 7b of `doc/PLAN_BILDQUALITAET_2.md`, on `main`, not committed yet. UI agreed with the

@@ -230,6 +230,7 @@ void SnapEntityToSurface(EditorFrameContext& ctx);
 void DrawOBBDebugLines(EditorFrameContext& ctx);
 void DrawPhysicsColliderLines(EditorFrameContext& ctx);
 void DrawReflectionProbeLines(EditorFrameContext& ctx);
+void DrawPostProcessVolumeLines(EditorFrameContext& ctx);
 void UpdateOBBHandles(EditorFrameContext& ctx);
 void FinishViewportDragEdits(EditorFrameContext& ctx);
 void DrawLightGizmos(EditorFrameContext& ctx);

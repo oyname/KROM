@@ -397,6 +397,12 @@ void SetQualityLevel(engine::RenderQualityLevel level);
 void SetShading(const engine::renderer::addons::forward::ShadingSettings& settings);
 [[nodiscard]] engine::renderer::addons::forward::ShadingSettings GetShading();
 
+// Post-process volumes (PostProcessVolumeComponent, made in the editor): weight
+// 0..1 of the volume on entity, e.g. for a damage effect. Set returns false when
+// the entity has no volume; Get then returns 0.
+bool SetPostProcessWeight(LPENTITY entity, float weight);
+[[nodiscard]] float GetPostProcessWeight(LPENTITY entity);
+
 // Local reflection probes (add-on krom-probes). BakeReflectionProbe renders the
 // scene from the entity's position into a cube, convolves it and saves it below
 // the asset root as Baked/<sceneName>/<probe id>.kprobe; inside the probe's box

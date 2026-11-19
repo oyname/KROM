@@ -10,6 +10,7 @@
 #include "core/PathUtf8.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/probes/ProbeComponents.hpp"
+#include "addons/postprocess/PostProcessVolumeComponent.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -93,13 +94,13 @@ struct OBBFace
     float      sign;  // +1 oder -1
 };
 
-static std::array<OBBFace, 6> ComputeOBBFaces(const math::Mat4& entityWorld,
-                                               const OBBComponent& obb)
+static std::array<OBBFace, 6> ComputeBoxFaces(const math::Mat4& entityWorld, const math::Vec3& centerOffset,
+                                               const math::Quat& orientation, const math::Vec3& halfExtents)
 {
     const math::Mat4 obbMat = entityWorld *
-        math::Mat4::TRS(obb.centerOffset, obb.orientation, {1.f, 1.f, 1.f});
+        math::Mat4::TRS(centerOffset, orientation, {1.f, 1.f, 1.f});
     const math::Vec3 worldCenter = obbMat.TransformPoint({0.f, 0.f, 0.f});
-    const float h[3] = { obb.halfExtents.x, obb.halfExtents.y, obb.halfExtents.z };
+    const float h[3] = { halfExtents.x, halfExtents.y, halfExtents.z };
 
     std::array<OBBFace, 6> faces;
     for (int ax = 0; ax < 3; ++ax)
@@ -118,6 +119,42 @@ static std::array<OBBFace, 6> ComputeOBBFaces(const math::Mat4& entityWorld,
         }
     }
     return faces;
+}
+
+// Box whose faces get drag handles: the collision box (OBBComponent) or, without
+// one, the box of a post-process volume (turns with the entity, scale ignored).
+struct EditableBox
+{
+    math::Mat4  entityWorld = math::Mat4::Identity();
+    math::Quat  orientation = math::Quat::Identity();
+    math::Vec3* halfExtents = nullptr;   // edited by the handles
+    math::Vec3* centerOffset = nullptr;
+    float       minHalfExtent = 0.001f;
+    bool        postProcessVolume = false;
+};
+
+static bool FindEditableBox(EditorFrameContext& ctx, EntityID entity, EditableBox& out)
+{
+    const auto* wtc = ctx.world.Get<WorldTransformComponent>(entity);
+    if (!wtc)
+        return false;
+    if (auto* obb = ctx.world.Get<OBBComponent>(entity); obb && obb->showInEditor)
+    {
+        out = { wtc->matrix, obb->orientation, &obb->halfExtents, &obb->centerOffset, 0.001f, false };
+        return true;
+    }
+    if (auto* volume = ctx.world.Get<PostProcessVolumeComponent>(entity); volume && !volume->global)
+    {
+        out = { math::Mat4::TRS(wtc->position, wtc->rotation.Normalized(), {1.f, 1.f, 1.f}),
+                math::Quat::Identity(), &volume->extents, &volume->boxOffset, 0.05f, true };
+        return true;
+    }
+    return false;
+}
+
+static std::array<OBBFace, 6> ComputeBoxFaces(const EditableBox& box)
+{
+    return ComputeBoxFaces(box.entityWorld, *box.centerOffset, box.orientation, *box.halfExtents);
 }
 
 // Ray vs World-Space AABB (BoundsComponent). Gibt Eintrittsdistanz t zurück.
@@ -1206,20 +1243,22 @@ void DrawOBBDebugLines(EditorFrameContext& ctx)
     if (!ctx.debugDraw) return;
     const EntityID selected = ctx.state.selectedEntity;
     if (!selected.IsValid()) return;
-    const auto* obb = ctx.world.Get<OBBComponent>(selected);
-    if (!obb || !obb->showInEditor) return;
+    EditableBox box;
+    if (!FindEditableBox(ctx, selected, box)) return;
     const auto* wtc = ctx.world.Get<WorldTransformComponent>(selected);
-    if (!wtc) return;
 
     using namespace engine::addons::debug_draw;
     DebugDrawRenderer& dd = *ctx.debugDraw;
 
-    // Trigger orange, feste Kollision gruen
-    const math::Vec4 boxColor = obb->isTrigger ? math::Vec4{1.f, 0.6f, 0.f, 1.f}
-                                               : math::Vec4{0.f, 1.f, 0.2f, 1.f};
-    dd.Box(ComputeOBBCorners(wtc->matrix, *obb), boxColor);
+    // Trigger orange, feste Kollision gruen (the volume draws its own box lines)
+    if (const auto* obb = box.postProcessVolume ? nullptr : ctx.world.Get<OBBComponent>(selected))
+    {
+        const math::Vec4 boxColor = obb->isTrigger ? math::Vec4{1.f, 0.6f, 0.f, 1.f}
+                                                   : math::Vec4{0.f, 1.f, 0.2f, 1.f};
+        dd.Box(ComputeOBBCorners(wtc->matrix, *obb), boxColor);
+    }
 
-    const auto faces = ComputeOBBFaces(wtc->matrix, *obb);
+    const auto faces = ComputeBoxFaces(box);
     const auto views = ComputeOBBHandleViews(ctx, faces, wtc->position);
 
     for (int i = 0; i < 6; ++i)
@@ -1284,6 +1323,59 @@ void DrawReflectionProbeLines(EditorFrameContext& ctx)
         dd.Line(capture - axis, capture + axis, color);
 }
 
+// Box of the selected post-process volume and, dashed, the inner edge of its
+// blend band (inside it the volume has full weight). Global volumes: no box.
+// The face handles come from DrawOBBDebugLines / UpdateOBBHandles.
+void DrawPostProcessVolumeLines(EditorFrameContext& ctx)
+{
+    if (!ctx.debugDraw) return;
+    const EntityID selected = ctx.state.selectedEntity;
+    if (!selected.IsValid() || !ctx.world.IsAlive(selected)) return;
+    const auto* volume = ctx.world.Get<PostProcessVolumeComponent>(selected);
+    const auto* wtc = ctx.world.Get<WorldTransformComponent>(selected);
+    if (!volume || !wtc || volume->global) return;
+
+    const math::Quat rot = wtc->rotation.Normalized();
+    const math::Vec3 center = wtc->position + rot.Rotate(volume->boxOffset);
+    auto boxCorners = [&](const math::Vec3& e) {
+        const math::Vec3 local[8] = {
+            {-e.x,-e.y,-e.z}, { e.x,-e.y,-e.z}, { e.x, e.y,-e.z}, {-e.x, e.y,-e.z},
+            {-e.x,-e.y, e.z}, { e.x,-e.y, e.z}, { e.x, e.y, e.z}, {-e.x, e.y, e.z}
+        };
+        std::array<math::Vec3, 8> out;
+        for (int i = 0; i < 8; ++i)
+            out[i] = center + rot.Rotate(local[i]);
+        return out;
+    };
+    const math::Vec4 color{ 0.35f, 0.75f, 1.f, 1.f };
+    engine::addons::debug_draw::DebugDrawRenderer& dd = *ctx.debugDraw;
+    dd.Box(boxCorners(volume->extents), color);
+
+    const float b = volume->blendDistance;
+    const math::Vec3 inner{ volume->extents.x - b, volume->extents.y - b, volume->extents.z - b };
+    if (b > 0.f && inner.x > 0.f && inner.y > 0.f && inner.z > 0.f)
+    {
+        const auto c = boxCorners(inner);
+        static constexpr int kEdges[12][2] = { {0,1},{1,2},{2,3},{3,0},{4,5},{5,6},{6,7},{7,4},
+                                               {0,4},{1,5},{2,6},{3,7} };
+        const math::Vec4 dashColor{ 0.35f, 0.75f, 1.f, 0.6f };
+        for (const auto& e : kEdges)
+        {
+            const math::Vec3 a = c[e[0]];
+            const math::Vec3 d = c[e[1]] - a;
+            const float length = d.Length();
+            // Dashes of about 0.25 m, at least 4 per edge.
+            const int dashes = std::clamp(static_cast<int>(length / 0.25f), 4, 256);
+            for (int i = 0; i < dashes; ++i)
+            {
+                const float t0 = static_cast<float>(i) / static_cast<float>(dashes);
+                const float t1 = (static_cast<float>(i) + 0.5f) / static_cast<float>(dashes);
+                dd.Line(a + d * t0, a + d * t1, dashColor);
+            }
+        }
+    }
+}
+
 void DrawPhysicsColliderLines(EditorFrameContext& ctx)
 {
     if (!ctx.debugDraw) return;
@@ -1341,8 +1433,8 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
 
     const EntityID selected = st.selectedEntity;
     if (!selected.IsValid()) { st.obbHoveredFace = -1; return; }
-    auto* obb = ctx.world.Get<OBBComponent>(selected);
-    if (!obb || !obb->showInEditor)
+    EditableBox box;
+    if (!FindEditableBox(ctx, selected, box))
     {
         if (st.obbDragFaceIdx >= 0)
             FinishViewportDragEdits(ctx);
@@ -1350,13 +1442,12 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
         return;
     }
     const auto* wtc = ctx.world.Get<WorldTransformComponent>(selected);
-    if (!wtc) { st.obbHoveredFace = -1; return; }
 
     ImGuiIO& io = ImGui::GetIO();
     if (SceneMouseBlocked(ctx)) { st.obbHoveredFace = -1; return; }
     if (st.obbDragFaceIdx < 0 && ForeignEditorIconUnderMouse(ctx)) { st.obbHoveredFace = -1; return; }
 
-    const auto faces = ComputeOBBFaces(wtc->matrix, *obb);
+    const auto faces = ComputeBoxFaces(box);
 
     // ── Hover-Erkennung (nur wenn kein Drag läuft) ──
     st.obbHoveredFace = -1;
@@ -1393,15 +1484,18 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
     // ── Drag starten ──
     if (st.obbHoveredFace >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
     {
-        BeginPendingComponentEdit<OBBComponent>(ctx, "viewport.obb", "history.edit_box", selected);
+        if (box.postProcessVolume)
+            BeginPendingComponentEdit<PostProcessVolumeComponent>(ctx, "viewport.obb", "history.ppv_box", selected);
+        else
+            BeginPendingComponentEdit<OBBComponent>(ctx, "viewport.obb", "history.edit_box", selected);
         const OBBFace& f  = faces[st.obbHoveredFace];
         st.obbDragFaceIdx     = st.obbHoveredFace;
         // Sichttiefe (nicht Abstand): passt zur Perspektive in EditorUnitsPerPixel.
         st.obbDragDepth       = math::Vec3::Dot(f.worldCenter - st.editorCamera.position,
                                                 EditorCameraForward(st.editorCamera));
         st.obbDragStartMouse  = { io.MousePos.x, io.MousePos.y };
-        st.obbDragStartExtent = (&obb->halfExtents.x)[f.axis];
-        st.obbDragStartCenter = (&obb->centerOffset.x)[f.axis];
+        st.obbDragStartExtent = (&box.halfExtents->x)[f.axis];
+        st.obbDragStartCenter = (&box.centerOffset->x)[f.axis];
     }
 
     // ── Drag fortführen ──
@@ -1427,21 +1521,21 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
             const float dy = io.MousePos.y - st.obbDragStartMouse.y;
             const float worldDelta = (nx * dx + ny * dy) * unitsPerPixel;
 
-            float& he = (&obb->halfExtents.x)[f.axis];
-            float& co = (&obb->centerOffset.x)[f.axis];
+            float& he = (&box.halfExtents->x)[f.axis];
+            float& co = (&box.centerOffset->x)[f.axis];
 
             const bool ctrl = ImGui::IsKeyDown(ImGuiKey_LeftCtrl) ||
                               ImGui::IsKeyDown(ImGuiKey_RightCtrl);
             if (ctrl)
             {
                 // Symmetrisch: beide Flächen wachsen, Zentrum bleibt
-                he = std::max(0.001f, st.obbDragStartExtent + worldDelta);
+                he = std::max(box.minHalfExtent, st.obbDragStartExtent + worldDelta);
                 co = st.obbDragStartCenter;
             }
             else
             {
                 // Einseitig: nur die gezogene Fläche bewegt sich
-                he = std::max(0.001f, st.obbDragStartExtent + worldDelta * 0.5f);
+                he = std::max(box.minHalfExtent, st.obbDragStartExtent + worldDelta * 0.5f);
                 co = st.obbDragStartCenter + f.sign * worldDelta * 0.5f;
             }
         }

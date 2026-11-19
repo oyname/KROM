@@ -1597,6 +1597,7 @@ void DrawLightDebugLines(EditorFrameContext& ctx)
     DrawOBBDebugLines(ctx);
     DrawPhysicsColliderLines(ctx);
     DrawReflectionProbeLines(ctx);
+    DrawPostProcessVolumeLines(ctx);
     DrawTransformGizmo(ctx);
     DrawRotationGizmo(ctx);
     DrawScaleGizmo(ctx);

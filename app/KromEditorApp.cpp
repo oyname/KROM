@@ -54,6 +54,8 @@
 #include "addons/probes/ProbeData.hpp"
 #include "addons/probes/ProbeFeature.hpp"
 #include "addons/probes/ProbeSerialization.hpp"
+#include "addons/postprocess/PostProcessBlend.hpp"
+#include "addons/postprocess/PostProcessSerialization.hpp"
 #include "addons/outline/OutlineFeature.hpp"
 #include "core/Debug.hpp"
 #include "serialization/SceneSerializer.hpp"
@@ -1771,6 +1773,28 @@ std::filesystem::path ResolveLegacyEditorScenePath()
 
 #endif // KROM_EDITOR_HAS_IMGUI
 
+// Bloom strength the editor configures in the forward feature (base of the
+// post-process volumes).
+[[maybe_unused]] constexpr float kEditorBloomIntensity = 0.12f;
+
+// Position the post-process volumes are evaluated at: the main camera (else the
+// first camera) during play, the editor camera otherwise.
+[[maybe_unused]] math::Vec3 PostProcessViewPosition(const ecs::World& world, bool playActive, const math::Vec3& editorCamera)
+{
+    if (!playActive)
+        return editorCamera;
+    EntityID main = NULL_ENTITY;
+    EntityID fallback = NULL_ENTITY;
+    world.View<CameraComponent, WorldTransformComponent>(
+        [&](EntityID id, const CameraComponent& camera, const WorldTransformComponent&) {
+            if (!fallback.IsValid()) fallback = id;
+            if (camera.isMainCamera && !main.IsValid()) main = id;
+        });
+    const EntityID camera = main.IsValid() ? main : fallback;
+    const auto* xf = camera.IsValid() ? world.Get<WorldTransformComponent>(camera) : nullptr;
+    return xf ? xf->position : editorCamera;
+}
+
 } // namespace
 
 KromEditorApp::~KromEditorApp()
@@ -2281,6 +2305,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         RegisterAudioComponents(m_componentRegistry);
         RegisterParticleComponents(m_componentRegistry);
         RegisterProbeComponents(m_componentRegistry);
+        RegisterPostProcessComponents(m_componentRegistry);
 #ifdef KROM_EDITOR_HAS_IMGUI
         renderer::addons::editor::RegisterEditorComponents(m_componentRegistry);
         RegisterPrefabInstanceComponent(m_componentRegistry);
@@ -3776,7 +3801,22 @@ int KromEditorApp::Run(IAppScene& scene)
             measureAppCpu(5);
             m_editorFrameCtx->renderStats = &m_renderLoop.GetRenderSystem().GetStats();
             m_renderLoop.GetRenderSystem().SetGpuPassTimingEnabled(m_editorState.profilerGpuTiming);
-            *m_tonemapSettings = m_editorState.tonemap;
+            // Post-process volumes over the scene cards and project values. The
+            // stored values (m_editorState, project settings) stay unchanged.
+            engine::addons::postprocess::PostProcessValues ppBase;
+            ppBase.tonemap = m_editorState.tonemap;
+            ppBase.bloomIntensity = kEditorBloomIntensity;
+            ppBase.gtaoIntensity = m_editorState.gtaoSettings.intensity;
+            ppBase.ssrIntensity = m_editorState.ssrIntensity;
+            ppBase.contactShadowIntensity = m_projectSettings.rendering.contactShadowIntensity;
+            const engine::addons::postprocess::PostProcessValues pp = m_world
+                ? engine::addons::postprocess::BlendPostProcessVolumes(
+                      *m_world, PostProcessViewPosition(*m_world, m_playActive, m_editorState.editorCamera.position), ppBase)
+                : ppBase;
+            *m_tonemapSettings = pp.tonemap;
+            m_tonemapSettings->bloomIntensity = pp.bloomIntensity;
+            if (m_contactShadowResources)
+                m_contactShadowResources->settings.intensity = pp.contactShadowIntensity;
             m_msaaSettings->sampleCount = m_editorState.msaaSamples;
             m_postAASettings->mode = m_editorState.postAA;
             *m_shadingSettings = m_editorState.shading;
@@ -3784,7 +3824,7 @@ int KromEditorApp::Run(IAppScene& scene)
             {
                 renderer::addons::ssr::SsrSettings& ssr = m_ssrResources->settings;
                 ssr.enabled      = m_editorState.ssrEnabled;
-                ssr.intensity    = m_editorState.ssrIntensity;
+                ssr.intensity    = pp.ssrIntensity;
                 ssr.maxRoughness = m_editorState.ssrMaxRoughness;
                 ssr.maxDistance  = m_editorState.ssrMaxDistance;
                 ssr.thickness    = m_editorState.ssrThickness;
@@ -3796,7 +3836,7 @@ int KromEditorApp::Run(IAppScene& scene)
                 renderer::addons::gtao::GtaoSettings& gtao = m_gtaoResources->settings;
                 gtao.enabled   = m_editorState.gtaoSettings.enabled;
                 gtao.radius    = m_editorState.gtaoSettings.radius;
-                gtao.intensity = m_editorState.gtaoSettings.intensity;
+                gtao.intensity = pp.gtaoIntensity;
                 gtao.bias      = m_editorState.gtaoSettings.bias;
             }
             if (m_probeRuntime)
@@ -5694,6 +5734,7 @@ std::string KromEditorApp::SerializeEditorSceneEntities()
     engine::audio::RegisterAudioSerializationHandlers(serializer);
     engine::particles::RegisterParticleSerializationHandlers(serializer);
     engine::addons::probes::RegisterProbeSerializationHandlers(serializer);
+    engine::addons::postprocess::RegisterPostProcessSerializationHandlers(serializer);
     renderer::addons::editor::RegisterEditorSerializationHandlers(serializer);
 
     // Fix: Nur Entities der aktuellen Szene speichern.
@@ -5801,6 +5842,7 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
     engine::audio::RegisterAudioDeserializationHandlers(deserializer);
     engine::particles::RegisterParticleDeserializationHandlers(deserializer);
     engine::addons::probes::RegisterProbeDeserializationHandlers(deserializer);
+    engine::addons::postprocess::RegisterPostProcessDeserializationHandlers(deserializer);
     renderer::addons::editor::RegisterEditorDeserializationHandlers(deserializer);
 
     const serialization::DeserializeResult result = deserializer.DeserializeFromValue(*preparedRoot);
@@ -7131,6 +7173,7 @@ static std::string WorldToKsceneJson(const ecs::World& world,
     engine::audio::RegisterAudioSerializationHandlers(serializer);
     engine::particles::RegisterParticleSerializationHandlers(serializer);
     engine::addons::probes::RegisterProbeSerializationHandlers(serializer);
+    engine::addons::postprocess::RegisterPostProcessSerializationHandlers(serializer);
     // Editor-Komponenten bewusst nicht registriert — die Runtime kennt sie nicht.
 
     if (entityFilter)
@@ -7227,6 +7270,7 @@ std::optional<std::string> KromEditorApp::MakeKsceneJson(const std::string& json
     engine::audio::RegisterAudioDeserializationHandlers(deser);
     engine::particles::RegisterParticleDeserializationHandlers(deser);
     engine::addons::probes::RegisterProbeDeserializationHandlers(deser);
+    engine::addons::postprocess::RegisterPostProcessDeserializationHandlers(deser);
     // Editor-Komponenten bewusst nicht registriert — wir brauchen sie nicht
 
     const auto result = deser.DeserializeFromValue(root);

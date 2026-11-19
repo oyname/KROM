@@ -17,6 +17,7 @@
 #include "addons/probes/ProbeBake.hpp"
 #include "addons/probes/ProbeBoxFit.hpp"
 #include "addons/probes/ProbeComponents.hpp"
+#include "addons/postprocess/PostProcessVolumeComponent.hpp"
 #include <unordered_map>
 #include <bit>
 
@@ -1671,6 +1672,191 @@ static void DrawReflectionProbeSection(EditorFrameContext& ctx, EntityID entity)
 
     drawLock("###probe_bake_lock", probe->bakeLocked, "history.probe_bake_lock",
              "probe.bake_lock", "probe.bake_unlock");
+}
+
+// Post-process volume: head (global, weight, priority), box like the reflection
+// probe, then one row per overridable value with its override tick. Unticked
+// rows are greyed out and do not act. Values blend over the scene cards
+// "Exposure"/"Color grading" and the project settings (PostProcessBlend.hpp).
+static void DrawPostProcessVolumeSection(EditorFrameContext& ctx, EntityID entity)
+{
+    auto* volume = ctx.world.Get<PostProcessVolumeComponent>(entity);
+    if (!volume)
+        return;
+    using namespace renderer::addons::forward;
+    using O = PostProcessOverride;
+
+    const bool open = ComponentHeader(TranslateLabel("component.post_process", "Post Process").c_str(),
+                                      ComponentIcon::Environment, ImGuiTreeNodeFlags_DefaultOpen);
+    if (BeginComponentContextMenu("##ppv_hdr_ctx"))
+    {
+        DrawComponentClipboardMenuItems<PostProcessVolumeComponent>(ctx, entity, "component.post_process");
+        ImGui::Separator();
+        if (ImGui::MenuItem(TranslateLabel("ppv.remove", "Remove Post Process").c_str()))
+        {
+            EditComponents<PostProcessVolumeComponent>(ctx, "history.remove_component", entity,
+                [&] { ctx.world.Remove<PostProcessVolumeComponent>(entity); });
+            ImGui::EndPopup();
+            return;
+        }
+        ImGui::EndPopup();
+    }
+    if (!open)
+        return;
+
+    // Continuous edits (drag, slider, colour): one undo step per drag.
+    const auto edit = [&](const char* id, const auto& widget) {
+        const PostProcessVolumeComponent before = *volume;
+        const std::string key = MakeEditHistoryKey(entity, id);
+        if (widget())
+            BeginPendingComponentEdit<PostProcessVolumeComponent>(ctx, key, "history.ppv_edit", entity, &before);
+        if (ImGui::IsItemDeactivatedAfterEdit())
+            CommitPendingComponentEdit(ctx, key);
+    };
+
+    // ── Head ──
+    bool global = volume->global;
+    if (value_ui::Checkbox(TranslateLabel("ppv.global", "Global").c_str(), &global))
+        EditComponents<PostProcessVolumeComponent>(ctx, "history.ppv_global", entity, [&] { volume->global = global; });
+    ImGui::SetItemTooltip("%s", Translate("ppv.global_tip"));
+
+    value_ui::RowLabel(Translate("ppv.weight"));
+    edit("ppv.weight", [&] {
+        return value_ui::SliderFloat("##ppvWeight", &volume->weight, 0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+    });
+    ImGui::SetItemTooltip("%s", Translate("ppv.weight_tip"));
+
+    int priority = volume->priority;
+    if (value_ui::InputInt(TranslateLabel("ppv.priority", "Priority").c_str(), &priority))
+        EditComponents<PostProcessVolumeComponent>(ctx, "history.ppv_priority", entity, [&] { volume->priority = priority; });
+    ImGui::SetItemTooltip("%s", Translate("ppv.priority_tip"));
+
+    // ── Box (like the reflection probe) ──
+    ImGui::BeginDisabled(volume->global);
+    float size[3] = { volume->extents.x * 2.f, volume->extents.y * 2.f, volume->extents.z * 2.f };
+    edit("ppv.extents", [&] {
+        if (!value_ui::DragFloat3(TranslateLabel("probe.size", "Size").c_str(), size, 0.05f, 0.1f, 1000.f))
+            return false;
+        volume->extents = { std::max(size[0], 0.1f) * 0.5f, std::max(size[1], 0.1f) * 0.5f,
+                            std::max(size[2], 0.1f) * 0.5f };
+        return true;
+    });
+    float offset[3] = { volume->boxOffset.x, volume->boxOffset.y, volume->boxOffset.z };
+    edit("ppv.box_offset", [&] {
+        if (!value_ui::DragFloat3(TranslateLabel("probe.box_offset", "Box Offset").c_str(), offset, 0.05f))
+            return false;
+        volume->boxOffset = { offset[0], offset[1], offset[2] };
+        return true;
+    });
+    value_ui::RowLabel(Translate("ppv.blend_distance"));
+    edit("ppv.blend", [&] {
+        return value_ui::DragFloat("##ppvBlend", &volume->blendDistance, 0.01f, 0.f, 100.f, "%.2f m",
+                                   ImGuiSliderFlags_AlwaysClamp);
+    });
+    ImGui::SetItemTooltip("%s", Translate(volume->global ? "ppv.box_global_tip" : "ppv.blend_distance_tip"));
+    ImGui::EndDisabled();
+
+    // One row: override tick, label, value (greyed out while unticked).
+    const auto row = [&](O flag, const char* labelKey, const char* tipKey, const auto& widget) {
+        ImGui::PushID(static_cast<int>(PostProcessOverrideBit(flag)));
+        bool on = volume->Overrides(flag);
+        if (ImGui::Checkbox("##override", &on))
+            EditComponents<PostProcessVolumeComponent>(ctx, "history.ppv_override", entity,
+                [&] { volume->SetOverride(flag, on); });
+        ImGui::SetItemTooltip("%s", Translate("ppv.override_tip"));
+        ImGui::SameLine();
+        ImGui::BeginDisabled(!on);
+        value_ui::RowLabel(Translate(labelKey));
+        widget();
+        if (tipKey)
+            ImGui::SetItemTooltip("%s", Translate(tipKey));
+        ImGui::EndDisabled();
+        ImGui::PopID();
+    };
+    const auto slider = [&](const char* id, float* value, float min, float max, const char* format) {
+        edit(id, [&] { return value_ui::SliderFloat("##value", value, min, max, format, ImGuiSliderFlags_AlwaysClamp); });
+    };
+    const auto color = [&](const char* id, std::array<float, 3>& value) {
+        edit(id, [&] {
+            return value_ui::ColorEdit3("##value", value.data(), ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+        });
+    };
+    const auto ev = [&](const char* id, float& value, float& minOther, float& maxOther, int keepOrder) {
+        edit(id, [&] {
+            if (!value_ui::DragFloat("##value", &value, 0.05f, kMinExposureEv, kMaxExposureEv, "%+.2f EV",
+                                     ImGuiSliderFlags_AlwaysClamp))
+                return false;
+            if (keepOrder < 0) maxOther = std::max(maxOther, value);   // value is the minimum
+            if (keepOrder > 0) minOther = std::min(minOther, value);   // value is the maximum
+            return true;
+        });
+    };
+
+    // ── Exposure ──
+    ImGui::SeparatorText(Translate("tonemap.title"));
+    const bool automatic = ctx.state.tonemap.exposureMode == ExposureMode::Auto;
+    row(O::ExposureEv, automatic ? "exposure.correction" : "tonemap.exposure", "ppv.exposure_tip", [&] {
+        ev("ppv.exposure", volume->exposureEv, volume->exposureEv, volume->exposureEv, 0);
+    });
+    row(O::AutoExposureMinEv, "exposure.min_ev", "ppv.auto_limits_tip", [&] {
+        ev("ppv.ae_min", volume->autoExposureMinEv, volume->autoExposureMinEv, volume->autoExposureMaxEv, -1);
+    });
+    row(O::AutoExposureMaxEv, "exposure.max_ev", "ppv.auto_limits_tip", [&] {
+        ev("ppv.ae_max", volume->autoExposureMaxEv, volume->autoExposureMinEv, volume->autoExposureMaxEv, 1);
+    });
+
+    // ── Colour grading ──
+    ImGui::SeparatorText(Translate("grading.title"));
+    ColorGradingSettings& g = volume->grading;
+    const bool agx = ctx.state.tonemap.op == TonemapOperator::AgX;
+    row(O::GradingLook, "grading.look", agx ? "ppv.look_tip" : "grading.look_needs_agx", [&] {
+        const char* lookNames[kAgxLookCount] = {
+            Translate("grading.look_none"), Translate("grading.look_punchy"), Translate("grading.look_golden"),
+            Translate("grading.look_high_contrast"), Translate("grading.look_low_contrast") };
+        int look = static_cast<int>(g.look);
+        if (value_ui::Combo("##value", &look, lookNames, static_cast<int>(kAgxLookCount)))
+            EditComponents<PostProcessVolumeComponent>(ctx, "history.ppv_edit", entity,
+                [&] { g.look = static_cast<AgxLook>(look); });
+    });
+    row(O::GradingTemperature, "grading.temperature", "grading.temperature_tip",
+        [&] { slider("ppv.temperature", &g.temperature, -100.f, 100.f, "%.0f"); });
+    row(O::GradingTint, "grading.tint", "grading.tint_tip",
+        [&] { slider("ppv.tint", &g.tint, -100.f, 100.f, "%.0f"); });
+    row(O::GradingColorFilter, "grading.color_filter", "grading.color_filter_tip",
+        [&] { color("ppv.filter", g.colorFilter); });
+    row(O::GradingHueShift, "grading.hue_shift", "grading.hue_shift_tip",
+        [&] { slider("ppv.hue", &g.hueShift, -180.f, 180.f, "%.0f"); });
+    row(O::GradingContrast, "grading.contrast", "grading.contrast_tip",
+        [&] { slider("ppv.contrast", &g.contrast, 0.f, 2.f, "%.2f"); });
+    row(O::GradingSaturation, "grading.saturation", "grading.saturation_tip",
+        [&] { slider("ppv.saturation", &g.saturation, 0.f, 2.f, "%.2f"); });
+    const auto wheel = [&](O flag, const char* labelKey, const char* tipKey, const char* id, ColorGradingWheel& w) {
+        row(flag, labelKey, nullptr, [&] {
+            color(id, w.color);
+            ImGui::SetItemTooltip("%s", Translate(tipKey));
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(-1.f);
+            const std::string valueId = std::string(id) + ".value";
+            edit(valueId.c_str(), [&] {
+                return ImGui::SliderFloat("##wheelValue", &w.value, -1.f, 1.f, "%+.2f", ImGuiSliderFlags_AlwaysClamp);
+            });
+            ImGui::SetItemTooltip("%s", Translate(tipKey));
+        });
+    };
+    wheel(O::GradingLift, "grading.lift", "grading.lift_tip", "ppv.lift", g.lift);
+    wheel(O::GradingGamma, "grading.gamma", "grading.gamma_tip", "ppv.gamma", g.gamma);
+    wheel(O::GradingGain, "grading.gain", "grading.gain_tip", "ppv.gain", g.gain);
+
+    // ── Effects (intensity only; on/off stays in the project settings) ──
+    ImGui::SeparatorText(Translate("ppv.effects"));
+    row(O::BloomIntensity, "ppv.bloom_intensity", "ppv.bloom_intensity_tip",
+        [&] { slider("ppv.bloom", &volume->bloomIntensity, 0.f, 1.f, "%.2f"); });
+    row(O::GtaoIntensity, "ppv.gtao_intensity", "ppv.gtao_intensity_tip",
+        [&] { slider("ppv.gtao", &volume->gtaoIntensity, 0.f, 2.f, "%.2f"); });
+    row(O::SsrIntensity, "ppv.ssr_intensity", "ppv.ssr_intensity_tip",
+        [&] { slider("ppv.ssr", &volume->ssrIntensity, 0.f, 1.f, "%.2f"); });
+    row(O::ContactShadowIntensity, "ppv.contact_shadow_intensity", "ppv.contact_shadow_intensity_tip",
+        [&] { slider("ppv.contact", &volume->contactShadowIntensity, 0.f, 1.f, "%.2f"); });
 }
 
 static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
@@ -4698,14 +4884,15 @@ void DrawInspector(EditorFrameContext& ctx)
         if (isInactive) ImGui::BeginDisabled();
 
         using SectionDrawer = void (*)(EditorFrameContext&, EntityID);
-        static constexpr std::array<SectionDrawer, 17> drawers = {
+        static constexpr std::array<SectionDrawer, 18> drawers = {
             DrawTransformSection, DrawCameraSection, DrawLightSection, DrawMeshSection,
             DrawMaterialSlotsSection, DrawRigidBodySection, DrawOBBSection,
             DrawSphereColliderSection, DrawCapsuleColliderSection, DrawCharacterControllerSection,
             DrawAudioSourceSection, DrawAudioListenerSection, DrawParticleEmitterSection,
-            DrawMaterialSection, DrawScriptSection, DrawAnimatorSection, DrawReflectionProbeSection
+            DrawMaterialSection, DrawScriptSection, DrawAnimatorSection, DrawReflectionProbeSection,
+            DrawPostProcessVolumeSection
         };
-        static std::array<int, 17> order = {0, 1, 2, 16, 3, 4, 5, 13, 15, 6, 7, 8, 9, 10, 11, 12, 14};
+        static std::array<int, 18> order = {0, 1, 2, 16, 17, 3, 4, 5, 13, 15, 6, 7, 8, 9, 10, 11, 12, 14};
         // Each component as a card: subtle background, border and its type colour
         // as a stripe down the whole section. The background goes into a lower
         // draw channel because the section height is known only afterwards.
@@ -4966,6 +5153,14 @@ void DrawInspector(EditorFrameContext& ctx)
         if (hasProbe) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
             ImGui::SetTooltip("%s", Translate("probe.help"));
+        const bool hasVolume = ctx.world.Has<PostProcessVolumeComponent>(selected);
+        if (hasVolume) ImGui::BeginDisabled();
+        if (ImGui::MenuItem(TranslateLabel("component.post_process", "Post Process").c_str()))
+            EditComponents<PostProcessVolumeComponent>(ctx, "history.add_component", selected,
+                [&] { ctx.world.Add<PostProcessVolumeComponent>(selected, PostProcessVolumeComponent{}); });
+        if (hasVolume) ImGui::EndDisabled();
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", Translate("ppv.help"));
         ImGui::Separator();
 
         // Rigidbody — legt bei Bedarf gleich eine Box-Kollision aus der Mesh-AABB an.

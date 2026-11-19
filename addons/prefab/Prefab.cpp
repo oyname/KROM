@@ -14,6 +14,7 @@
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "addons/audio/AudioSerialization.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
+#include "addons/postprocess/PostProcessSerialization.hpp"
 #include "addons/physics/PhysicsSerialization.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "assets/AssetPipeline.hpp"
@@ -194,6 +195,8 @@ void ApplyRecordComponents(ecs::World& world,
         world.Add<AudioListenerComponent>(entity, *record.audioListener);
     if (record.particleEmitter)
         world.Add<ParticleEmitterComponent>(entity, *record.particleEmitter);
+    if (record.postProcessVolume)
+        world.Add<PostProcessVolumeComponent>(entity, *record.postProcessVolume);
 
     // A path without handle (model not importable right now) still creates the
     // component; ResolveMeshAssetBindings fills the handle once the model loads.
@@ -556,6 +559,12 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
         particles::WriteParticleEmitterFields(w, *record.particleEmitter);
         w.EndObject();
     }
+    if (record.postProcessVolume)
+    {
+        w.BeginObject("postProcessVolume");
+        postprocess::WritePostProcessVolumeFields(w, *record.postProcessVolume);
+        w.EndObject();
+    }
     if (!record.scripts.empty())
     {
         w.BeginArray("scripts");
@@ -695,6 +704,8 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
         audio::ReadAudioListenerFields(*v, record.audioListener.emplace());
     if (const auto* v = value.Get("particleEmitter"); v && v->IsObject())
         particles::ReadParticleEmitterFields(*v, record.particleEmitter.emplace());
+    if (const auto* v = value.Get("postProcessVolume"); v && v->IsObject())
+        record.postProcessVolume = postprocess::ReadPostProcessVolumeFields(*v);
     if (const auto* scriptsVal = value.Get("scripts"))
     {
         if (scriptsVal->IsArray())
@@ -1134,6 +1145,8 @@ PrefabAsset BuildPrefabFromWorldEntity(
             record.audioListener = *listener;
         if (const auto* emitter = world.Get<ParticleEmitterComponent>(entity))
             record.particleEmitter = *emitter;
+        if (const auto* volume = world.Get<PostProcessVolumeComponent>(entity))
+            record.postProcessVolume = *volume;
 
         if (const auto* skin = world.Get<SkinComponent>(entity))
         {

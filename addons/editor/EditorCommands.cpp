@@ -15,6 +15,7 @@
 #include "addons/audio/AudioSerialization.hpp"
 #include "addons/particles/ParticleSerialization.hpp"
 #include "addons/probes/ProbeSerialization.hpp"
+#include "addons/postprocess/PostProcessSerialization.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/audio/AudioComponents.hpp"
 #include "addons/script/ScriptList.hpp"
@@ -27,6 +28,7 @@
 #include "core/Debug.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/probes/ProbeComponents.hpp"
+#include "addons/postprocess/PostProcessVolumeComponent.hpp"
 #include "ecs/Components.hpp"
 #include "serialization/SceneSerializer.hpp"
 
@@ -254,6 +256,7 @@ static serialization::SceneSerializer MakeEditorSceneSerializer(EditorFrameConte
     engine::audio::RegisterAudioSerializationHandlers(serializer);
     engine::particles::RegisterParticleSerializationHandlers(serializer);
     engine::addons::probes::RegisterProbeSerializationHandlers(serializer);
+    engine::addons::postprocess::RegisterPostProcessSerializationHandlers(serializer);
     engine::addons::prefab::RegisterPrefabSerializationHandlers(serializer);
     RegisterEditorSerializationHandlers(serializer);
     return serializer;
@@ -271,6 +274,7 @@ static serialization::SceneDeserializer MakeEditorSceneDeserializer(EditorFrameC
     engine::audio::RegisterAudioDeserializationHandlers(deserializer);
     engine::particles::RegisterParticleDeserializationHandlers(deserializer);
     engine::addons::probes::RegisterProbeDeserializationHandlers(deserializer);
+    engine::addons::postprocess::RegisterPostProcessDeserializationHandlers(deserializer);
     engine::addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
     RegisterEditorDeserializationHandlers(deserializer);
     return deserializer;
@@ -1013,6 +1017,21 @@ static EntityID CreateLightEntityRaw(EditorFrameContext& ctx, LightType type, En
     return entity;
 }
 
+static EntityID CreatePostProcessVolumeEntityRaw(EditorFrameContext& ctx, EntityID parent)
+{
+    const EntityID entity = ctx.world.CreateEntity();
+    ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, "Post-Process Volume")});
+    ctx.world.Add<TransformComponent>(entity, MakeEditorPlacedTransform(ctx));
+    ctx.world.Add<WorldTransformComponent>(entity);
+    ctx.world.Add<ActiveComponent>(entity, ActiveComponent{true});
+    PlaceNewEntityInHierarchy(ctx, entity, parent);
+    ctx.world.Add<PostProcessVolumeComponent>(entity, PostProcessVolumeComponent{});
+
+    ClearMultiSelection(ctx);
+    ctx.state.selectedEntity = entity;
+    return entity;
+}
+
 static bool ReparentEntityRaw(EditorFrameContext& ctx, EntityID child, EntityID newParent)
 {
     if (!child.IsValid() || !ctx.world.IsAlive(child))
@@ -1128,6 +1147,7 @@ static EntityID DuplicateEntitySelfRaw(EditorFrameContext& ctx, EntityID source)
         probeCopy.autoSizeLocked = false;
         ctx.world.Add<ReflectionProbeComponent>(copy, probeCopy);
     }
+    copyIf(std::type_identity<PostProcessVolumeComponent>{});
     copyIf(std::type_identity<RigidBodyComponent>{});
     copyIf(std::type_identity<SphereColliderComponent>{});
     copyIf(std::type_identity<CapsuleColliderComponent>{});
@@ -2199,6 +2219,12 @@ EntityID CreateCameraEntity(EditorFrameContext& ctx, EntityID parent)
 EntityID CreateLightEntity(EditorFrameContext& ctx, LightType type, EntityID parent)
 {
     return CreateEntityTree(ctx, "history.create_light", [&] { return CreateLightEntityRaw(ctx, type, parent); });
+}
+
+EntityID CreatePostProcessVolumeEntity(EditorFrameContext& ctx, EntityID parent)
+{
+    return CreateEntityTree(ctx, "history.create_post_process_volume",
+                            [&] { return CreatePostProcessVolumeEntityRaw(ctx, parent); });
 }
 
 EntityID DuplicateEntity(EditorFrameContext& ctx, EntityID source)

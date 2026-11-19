@@ -71,6 +71,9 @@ struct TonemapSettings
     ColorGradingSettings grading{};
     // Editor only, never saved: keeps the current automatic exposure.
     bool            freezeAutoExposure = false;
+    // Bloom strength the tonemap pass adds; negative = the feature's configured
+    // bloomIntensity. Set by hosts that blend post-process volumes; not saved.
+    float           bloomIntensity = -1.0f;
 
     [[nodiscard]] float ExposureScale() const noexcept { return std::exp2(exposureEv); }
 };
