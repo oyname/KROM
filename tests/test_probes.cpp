@@ -194,6 +194,39 @@ void TestBakeFromCubeFaces(test::TestContext& ctx)
     CHECK(ctx, renderer::IBLBaker::BakeFromCubeFaces(nullptr, size, params).irradianceData.empty());
 }
 
+void TestDiffuseIrradianceFiltersHighFrequencyEnvironment(test::TestContext& ctx)
+{
+    // A fine black/white environment has mean radiance 0.5 in every direction.
+    // Its diffuse lighting must not reproduce the texel pattern on a smooth sphere.
+    constexpr uint32_t size = 64u;
+    std::vector<float> faces(static_cast<size_t>(6u) * size * size * 3u);
+    for (uint32_t face = 0u; face < 6u; ++face)
+        for (uint32_t y = 0u; y < size; ++y)
+            for (uint32_t x = 0u; x < size; ++x)
+            {
+                const float value = ((x + y) & 1u) ? 1.f : 0.f;
+                const size_t index = ((static_cast<size_t>(face) * size + y) * size + x) * 3u;
+                faces[index] = faces[index + 1u] = faces[index + 2u] = value;
+            }
+    renderer::IBLBakeParams params{};
+    params.irradianceSize = 16u;
+    params.irradianceSamples = 64u;
+    params.prefilterBaseSize = 4u;
+    params.prefilterMipCount = 3u;
+    params.prefilterSamples = 16u;
+    const auto baked = renderer::IBLBaker::BakeFromCubeFaces(faces.data(), size, params);
+    CHECK(ctx, baked.IsValid());
+    if (!baked.IsValid()) return;
+    float maxError = 0.f;
+    for (uint32_t face = 0u; face < 6u; ++face)
+        for (uint32_t y = 0u; y < params.irradianceSize; ++y)
+            for (uint32_t x = 0u; x < params.irradianceSize; ++x)
+                maxError = std::max(maxError, std::fabs(CubeRed(baked.irradianceData,
+                    params.irradianceSize, face, x, y) / math::PI - 0.5f));
+    std::printf("# Diffuse high-frequency environment max radiance error: %.6f\n", maxError);
+    CHECK(ctx, maxError < 0.01f);
+}
+
 void TestInputHash(test::TestContext& ctx)
 {
     auto makeWorld = [](bool reversed, float meshX, ecs::World*& out, EntityID& outProbe,
@@ -374,6 +407,7 @@ int RunProbeTests()
         .Add("Old scenes and sanitizing",      TestOldScenesAndSanitizing)
         .Add(".kprobe round trip and versions", TestProbeFileRoundTrip)
         .Add("Bake from cube faces",           TestBakeFromCubeFaces)
+        .Add("Diffuse irradiance filters high-frequency environments", TestDiffuseIrradianceFiltersHighFrequencyEnvironment)
         .Add("Input hash",                     TestInputHash)
         .Add("Fit box from scene triangles",   TestFitProbeBox)
         .Add("Probe data path",                TestProbeDataPath)

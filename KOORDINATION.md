@@ -985,6 +985,45 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ## Befunde (Codex)
 
+### Nachprüfung und Korrektur: Wellenmuster in der Materialvorschau (2026-11-19)
+
+- Die Rückmeldung „absolut keine Verbesserung“ nach `d22a1e0` wurde am echten
+  Material-Vorschaurenderer reproduziert. Die Mip-Anzahl-Korrektur behebt einen
+  separaten Fehler, aber nicht die Ursache des sichtbaren Wellenmusters.
+- **Ursache nachgewiesen:** Die diffuse Irradiance wurde mit 64 punktuellen
+  Abtastungen aus Mip 0 berechnet. Feine HDR-Strukturen werden dadurch in die
+  diffuse Beleuchtung gefaltet. Mit unverändertem `Weiss` aus dem Main-Projekt
+  (Metallic 0, Roughness 1), dessen HDR-Umgebung und isolierter Vorschaukugel
+  bleibt das Muster mit `DBG_DISABLE_IBL_SPEC` bestehen und erscheint in
+  `DBG_VIEW_IBL_DIFF`; `DBG_VIEW_IBL_SPEC` ist fast schwarz. Auch ohne lokale
+  Probes reproduzierbar. Für den Vergleich feste Belichtung verwendet.
+- **Korrektur:** `IBLBaker.cpp` verwendet auch für die diffuse Integration die
+  vorhandene Environment-Mip-Kette. Die Filterstufe folgt der Raumwinkelfläche
+  jeder Cosinus-Abtastung (`pdf = cos(theta) / pi`, analog zum vorhandenen
+  Specular-Prefilter). Die Lichtenergie-Normierung bleibt erhalten. Die
+  Bake-Version ist 7 statt 6, damit alte `.iblcache`-Daten automatisch neu
+  berechnet werden. Materialparameter und F0 unverändert.
+- **Regression:** Ein feines Schwarz/Weiß-Umgebungsraster muss gleichmäßiges
+  diffuses Licht ergeben. Neuer Test in `test_probes.cpp`: alter Baker
+  maximaler Radiance-Fehler 0,067300 (Test rot), korrigiert 0,000154 (grün),
+  Grenze 0,01. Gesamter Debug-Testlauf: 460 Tests in 19 Suiten bestanden,
+  optionale Physik-/Audiomodule aus. Log: `out/ibl-diffuse-after-tests.log`.
+- **Bildvergleich:** Neuer optionaler GPU-Test
+  `krom_editor_loading_tests[_dx11] --material-ibl <project.json> <capture-dir>`
+  liest die echte Materialvorschau für Gesamtbild, Diffuse, Specular, Normalen,
+  Roughness und deaktivierte IBL/Probes aus. DX11 und Vulkan zeigen nach der
+  Korrektur eine glatte Kugel ohne das Wellenmuster. Mittlere absolute
+  DX11/Vulkan-Abweichung des Gesamtbilds: 0,000594 von 255. Artefakte:
+  `out/ibl-preview-before-after.png`, `out/ibl-preview-before-{dx11,vulkan}/`,
+  `out/ibl-preview-after-{dx11,vulkan}/`.
+- **Separater bestehender Vulkan-Befund:** Die Materialvorschau meldet
+  `VUID-vkCmdDraw-None-09600`,
+  `VUID-vkCmdDraw-dynamicRenderingUnusedAttachments-08910` und `08914`
+  (Layout/Color-/Depth-Format). Gegenprobe mit den ursprünglichen Bake-Quellen
+  von `d22a1e0` und demselben GPU-Test reproduziert dieselben drei IDs.
+  Damit kein neuer Validierungsfehler dieser CPU-Bake-Korrektur; hier nicht
+  als behoben markiert. Logs: `out/ibl-preview-{before,after}-vulkan.log`.
+
 ### Prüfung und Korrektur: Skybox-Reflexion bei Metallic = 0 (2026-11-19)
 
 - **[P2, behoben] Globale IBL-Roughness wählte eine zu scharfe Filterstufe.**

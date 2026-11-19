@@ -20,6 +20,7 @@
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/prefab/PrefabInstanceComponent.hpp"
+#include "addons/probes/ProbeFeature.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <chrono>
@@ -98,6 +99,102 @@ struct EditorLoadingSmokeTest final : IAppScene
         return value.intValue;
     }
     bool materialUi = false;
+    // --material-ibl <project.json> <capture-dir>: isolate lighting on the real
+    // material-editor sphere, without changing the material or production view.
+    struct MaterialIblConstants final : renderer::IFrameConstantsContributor
+    {
+        uint32_t flags = 0u;
+        bool disableProbes = false;
+        std::string_view GetName() const noexcept override { return "test.material_ibl"; }
+        void Contribute(const renderer::FrameConstantsContributionContext& context,
+                        renderer::FrameConstants& constants) const override
+        {
+            if (context.view.visibilityLayerMask != renderer::LAYER_EDITOR_MATERIAL_PREVIEW)
+                return;
+            constants.debugFlags = flags;
+            if (disableProbes)
+                constants.featureParams[engine::addons::probes::kProbeFrameParameterBlock.firstSlot][0] = 0.f;
+        }
+    };
+    std::filesystem::path materialIblCaptures;
+    std::shared_ptr<MaterialIblConstants> materialIblConstants;
+    int materialIblReadyFrames = 0;
+    size_t materialIblStage = 0u;
+    std::chrono::steady_clock::time_point materialIblStart{};
+
+    bool UpdateMaterialIbl(AppSceneContext& context)
+    {
+        auto& runtime = context.renderLoop.GetRenderSystem().GetShaderRuntime();
+        if (!materialIblConstants)
+        {
+            materialIblStart = std::chrono::steady_clock::now();
+            auto& registry = context.renderLoop.GetRenderSystem().GetFeatureRegistry();
+            materialIblConstants = std::make_shared<MaterialIblConstants>();
+            Check(registry.RegisterFrameConstantsContributor(*registry.GetFeatures().front(), materialIblConstants),
+                  "register material preview lighting diagnostic");
+            renderer::addons::editor::OpenMaterialAsset(*app.m_editorFrameCtx,
+                app.GetCurrentAssetRoot() / "Materials/Weiss.mat");
+        }
+        if (std::chrono::steady_clock::now() - materialIblStart > std::chrono::minutes(3))
+        {
+            Check(false, "material preview shaders ready within three minutes");
+            context.renderLoop.GetWindow()->RequestClose();
+            return true;
+        }
+        if (frames < 20 || !app.m_editorFrameCtx->state.selectedMaterialAssetLoaded ||
+            runtime.HasPendingShaderCompiles())
+        {
+            materialIblReadyFrames = 0;
+            return true;
+        }
+        if (++materialIblReadyFrames < 8)
+            return true;
+        if (materialIblStage == 0u)
+        {
+            const auto& asset = app.m_editorFrameCtx->state.selectedMaterialAssetData;
+            Check(asset.PbrMetallic() == 0.f && asset.PbrRoughness() == 1.f,
+                  "Weiss preview uses metallic zero and roughness one");
+        }
+
+        struct Stage { const char* name; uint32_t flags; bool disableProbes; };
+        const Stage stages[] = {
+            {"full", 0u, false},
+            {"without-specular", renderer::DBG_DISABLE_IBL_SPEC, false},
+            {"diffuse", renderer::DBG_VIEW_IBL_DIFF, false},
+            {"specular", renderer::DBG_VIEW_IBL_SPEC, false},
+            {"without-ibl", renderer::DBG_DISABLE_IBL, false},
+            {"normals", renderer::DBG_VIEW_NORMALS, false},
+            {"roughness", renderer::DBG_VIEW_ROUGHNESS, false},
+            {"without-probes", 0u, true},
+        };
+        auto* device = context.renderLoop.GetRenderSystem().GetDevice();
+        const auto texture = device->GetRenderTargetColorTexture(app.m_materialPreviewRT);
+        uint32_t width = 0u, height = 0u;
+        std::vector<uint8_t> pixels;
+        const bool read = device->ReadTexturePixels(texture, pixels, width, height);
+        const bool valid = read && width > 0u && height > 0u &&
+            pixels.size() == static_cast<size_t>(width) * height * 4u;
+        Check(valid,
+              "material preview GPU readback");
+        if (valid)
+        {
+            const auto file = materialIblCaptures / (std::string(stages[materialIblStage].name) + ".ppm");
+            std::ofstream output(file, std::ios::binary);
+            output << "P6\n" << width << ' ' << height << "\n255\n";
+            for (size_t i = 0u; i < pixels.size(); i += 4u)
+                output.write(reinterpret_cast<const char*>(pixels.data() + i), 3);
+            Check(static_cast<bool>(output), stages[materialIblStage].name);
+        }
+        if (++materialIblStage == std::size(stages))
+            context.renderLoop.GetWindow()->RequestClose();
+        else
+        {
+            materialIblConstants->flags = stages[materialIblStage].flags;
+            materialIblConstants->disableProbes = stages[materialIblStage].disableProbes;
+            materialIblReadyFrames = 0;
+        }
+        return true;
+    }
     EntityID scriptedMaterialEntity{}, sharedMaterialEntity{};
     MaterialHandle sharedMaterial{}, scriptedMaterial{};
     std::chrono::steady_clock::time_point materialShaderWaitStart{};
@@ -1577,6 +1674,8 @@ struct EditorLoadingSmokeTest final : IAppScene
     bool Update(AppSceneContext& context, float) override
     {
         ++frames; // AppScene-Update ruht waehrend des Lade-Jobs.
+        if (!materialIblCaptures.empty())
+            return UpdateMaterialIbl(context);
         if (sceneClose)
             return UpdateSceneClose(context);
         if (startupProject)
@@ -2063,6 +2162,12 @@ int main(int argc, char** argv)
     test.toolbarLogo = argc > 1 && std::string_view(argv[1]) == "--toolbar-logo";
     if (argc > 2 && std::string_view(argv[1]) == "--perf")
         test.perfProject = argv[2];
+    if (argc > 3 && std::string_view(argv[1]) == "--material-ibl")
+    {
+        test.perfProject = argv[2];
+        test.materialIblCaptures = engine::PathFromUtf8(argv[3]);
+        std::filesystem::create_directories(test.materialIblCaptures);
+    }
     if (argc > 3 && std::string_view(argv[1]) == "--gtao-motion")
     {
         test.perfProject = argv[2];

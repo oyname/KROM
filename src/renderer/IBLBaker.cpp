@@ -462,9 +462,13 @@ namespace engine::renderer {
         // Cube map building — inner pixel loop extracted for reuse
         // =====================================================================
         static void ProcessIrradianceFace(FloatCubeImage& out,
-                                           const FloatCubeImage& env,
+                                           const std::vector<FloatCubeImage>& envMips,
                                            uint32_t face, uint32_t size, uint32_t samples) noexcept
         {
+            if (envMips.empty() || samples == 0u)
+                return;
+            const float resolution = static_cast<float>(envMips.front().size);
+            const float saTexel = 4.f * kPi / std::max(6.f * resolution * resolution, 1e-6f);
             for (uint32_t y = 0u; y < size; ++y)
                 for (uint32_t x = 0u; x < size; ++x)
                 {
@@ -482,7 +486,14 @@ namespace engine::renderer {
                         const float cosT = std::sqrt(1.f - xi.y);
                         const float sinT = std::sqrt(xi.y);
                         const Float3 loc{ std::cos(phi)*sinT, std::sin(phi)*sinT, cosT };
-                        accum += SanitizeFinite(SampleCubeBilinear(env, Normalize(tangent*loc.x + bitang*loc.y + N*loc.z)));
+                        // Each cosine-weighted sample represents a finite solid angle.
+                        // Sampling mip 0 aliases HDR detail into visible bands in diffuse
+                        // lighting; integrate that footprint through the existing mip chain.
+                        const float pdf = cosT / kPi;
+                        const float saSample = 1.f / (static_cast<float>(samples) * std::max(pdf, 1e-6f));
+                        const float lod = std::max(0.f, 0.5f * std::log2(saSample / saTexel));
+                        accum += SanitizeFinite(SampleCubeBilinearLod(envMips,
+                            Normalize(tangent*loc.x + bitang*loc.y + N*loc.z), lod));
                     }
                     out.pixels[CubeIndex(face, x, y, size)] = SanitizeFinite(accum * (kPi / static_cast<float>(samples)));
                 }
@@ -574,7 +585,7 @@ namespace engine::renderer {
             return cube;
         }
 
-        [[nodiscard]] static FloatCubeImage BuildIrradianceCube(const FloatCubeImage& env,
+        [[nodiscard]] static FloatCubeImage BuildIrradianceCube(const std::vector<FloatCubeImage>& envMips,
                                                                   uint32_t size, uint32_t samples,
                                                                   jobs::JobSystem* js)
         {
@@ -583,7 +594,7 @@ namespace engine::renderer {
             auto processRange = [&](size_t faceBegin, size_t faceEnd)
             {
                 for (size_t fi = faceBegin; fi < faceEnd; ++fi)
-                    ProcessIrradianceFace(cube, env, static_cast<uint32_t>(fi), size, samples);
+                    ProcessIrradianceFace(cube, envMips, static_cast<uint32_t>(fi), size, samples);
             };
 
             if (js && js->IsParallel())
@@ -683,7 +694,7 @@ namespace engine::renderer {
             data.prefilterMipCount = params.prefilterMipCount;
 
             const std::vector<FloatCubeImage> envMips = BuildCubeMipChain(envCube);
-            const FloatCubeImage irrCube = BuildIrradianceCube(envCube,
+            const FloatCubeImage irrCube = BuildIrradianceCube(envMips,
                 params.irradianceSize, params.irradianceSamples, js);
 
             data.environmentData = PackCubeRGBA16F(envCube);
