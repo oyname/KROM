@@ -133,6 +133,7 @@
   "assets.move_exists": "Could not move: destination already exists.",
   "assets.move_self": "A folder cannot be moved into itself.",
   "assets.move_failed": "Could not move: ",
+  "assets.move_outside_root": "Source and destination must be inside the asset folder.",
   "assets.kind_model": "3D model",
   "assets.kind_prefab": "Prefab",
   "assets.kind_particles": "Particle effect (prefab with emitter)",

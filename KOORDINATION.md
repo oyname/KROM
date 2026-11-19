@@ -985,6 +985,145 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ## Befunde (Codex)
 
+### Review: Qualitätsstufen (2026-11-19)
+
+Geprüft gegen `976021c`: der neueste Übergabepunkt „Render quality levels“,
+einschließlich Projektoptionen, Script-Service, krom.h und Benutzerdatei.
+Die älteren Render-Übergaben sind damit nicht als geprüft markiert.
+
+- **[P2] Reservierte Windows-Namen verhindern das Speichern.**
+  `include/core/ProjectSettings.hpp:148` (`UserGameSettingsFolderName`) ersetzt
+  verbotene Zeichen, lässt aber Gerätenamen wie `CON`, `NUL` oder `LPT1`
+  unverändert. `src/app/KromWrapper.cpp:2278` verwendet jeden nichtleeren
+  Rückgabewert direkt als Verzeichnis; der EXE-Fallback greift hier nicht.
+  Ein Spiel mit einem solchen gültigen Fenstertitel kann daher seine gewählte
+  Qualitätsstufe nicht dauerhaft speichern. Unter Windows mit den aktuellen
+  Headern in einem temporären C++-Programm reproduziert: Speichern unter
+  `CON`, `NUL`, `LPT1` jeweils false, unter `Normal Game` true; Anlegen und
+  Überschreiben einer normalen Einstellungsdatei funktionieren. Reservierte
+  Namen einschließlich Varianten mit Erweiterung behandeln und einen gültigen
+  Ersatznamen verwenden; den echten Dateischreibweg mitprüfen.
+  **Behoben und geprüft durch Codex auf Nutzerauftrag, siehe Umsetzung unten.**
+- **Ordneridentität bleibt eine Einschränkung:** Nur der bereinigte Fenstertitel
+  unterscheidet Spiele. Gleiche Titel und z. B. `Game:One` / `Game?One` teilen
+  dieselbe Datei; eine Titeländerung verliert die Zuordnung zur bisherigen
+  Einstellung. Für eine dauerhafte Zuordnung wäre eine stabile Spiel-ID neben
+  dem lesbaren Namen geeigneter. Das ist eine Designentscheidung, kein Befund
+  gegen die ausdrücklich beschriebene Verwendung des Fenstertitels.
+- Die abgeleitete Stufe passt zum geplanten Volume-Modell: Verglichen werden
+  ausschließlich MSAA, Post-AA und die drei Effekt-Schalter. Radius,
+  Intensität, Belichtung und andere Werte beeinflussen die Stufe nicht.
+  `Custom` ändert nichts. Im aktuellen Runtime-Startablauf folgt
+  `SetEditorLiveStateEnabled` auf `LoadProject` und stellt bei gespeicherten
+  Projekt-Renderoptionen die Projektwerte vor der Feature-Registrierung wieder
+  her; `SetQualityLevel` schreibt in diesem Modus keine Benutzerdatei.
+- **Tests:** Vorhandene Debug-EXE aus dem Implementierungs-Worktree am selben
+  Commit ausgeführt, kein eigener Neubau. „Render quality levels“: 55/55;
+  Serialization insgesamt 13/13, Renderer 103/103. Der Gesamtlauf ist jedoch
+  nicht grün: zwei Script-Module-Tests scheitern beim Anlegen ihrer Session
+  außerhalb dieses beschreibbaren Worktrees mit „Zugriff verweigert“.
+  Zusätzlich scheitert „Asset move, rename and delete are undoable with UTF-8
+  names and conflicts“ mit 11 Prüfungen: Dateien werden bewegt, Referenzen
+  bleiben alt. Im ersten Review noch nicht eingegrenzt; die weitere Diagnose
+  und der Lösungsvorschlag stehen unten. Nicht dem Qualitätsstufen-Commit
+  zugeordnet. Protokoll:
+  `out/quality-review/krom-tests.log` (lokales, nicht versioniertes Artefakt).
+- Nicht erneut ausgeführt: vollständiger Build, Release, Editor-Sichtprüfung,
+  OpenGL-Start und Script-Schreibtest im exportierten Spiel. Außer dieser
+  Koordinationsdatei wurde kein versionierter Inhalt geändert.
+
+#### Konkrete Lösungen (Codex, 2026-11-19)
+
+1. **Speicherordner:** In `UserGameSettingsFolderName` nach der bestehenden
+   Zeichenbereinigung den Namen vor der ersten Erweiterung ohne Beachtung der
+   Groß-/Kleinschreibung auf reservierte Windows-Gerätenamen prüfen (`CON`,
+   `PRN`, `AUX`, `NUL`, `COM1`–`COM9`, `LPT1`–`LPT9`). Solchen Namen ein `_`
+   voranstellen; auch `con.txt` muss einen gültigen Ersatz bekommen. Das erhält
+   für normale Titel den bisherigen Speicherort und benötigt keine neue
+   Projekteinstellung. Den resultierenden Pfad tatsächlich beschreiben und
+   erneut lesen, zusätzlich zu den bisherigen reinen JSON-Tests. Abschließend
+   im Runtime-/Script-Weg `low → high → Neustart` und den Schreibschutz durch
+   `--editor-live-state` mit `KROM_USER_SETTINGS_DIR` im Testordner prüfen.
+2. **Asset-Referenzen:** `ApplyRelocation` bestimmt `RelativeBelow(root, source)`
+   erst nach dem physischen Umbenennen (`EditorFileHistory.cpp:367`); auch
+   `MoveEditorAssetPath` berechnet die Komponentenzuordnung danach erneut
+   (Zeile 612). `fs::relative` verwendet `weakly_canonical`. Im MSVC-Probeprogramm
+   unter derselben Windows-Sandbox liefert der bereits entfernte Quellpfad
+   dabei Fehler 5 („Zugriff verweigert“), während Ziel und Assetwurzel auflösbar
+   sind. Die leere Zuordnung überspringt dann Datei- und Live-Referenzen.
+   **Vorschlag:** Die Asset-relative Quell-/Zielzuordnung vor dem Verschieben
+   einmal aus normalisierten absoluten Pfaden mit `lexically_relative`
+   bestimmen und auf Zugehörigkeit zur Assetwurzel prüfen. Sie an
+   `ApplyRelocation`, die Live-Komponenten und den History-Eintrag weitergeben;
+   Undo verwendet dieselbe Zuordnung in Gegenrichtung. Eine erforderliche,
+   aber nicht bestimmbare Zuordnung muss vor der Dateiänderung zum Fehler
+   führen. So hängt das Umschreiben nicht von der Existenz des alten Namens
+   ab. Die vorhandenen UTF-8-/Konflikttests unter dieser Sandbox erneut
+   ausführen und einen fehlgeschlagenen Vorbereitungsschritt prüfen: keine
+   Datei bewegt, keine Referenz verändert, kein History-Eintrag.
+3. **Script-Module-Tests:** `ScriptModuleHost::Swap` legt die Schattenkopie neben
+   dem Build-Verzeichnis der geladenen DLL an (Zeile 391). Die vorige Test-EXE
+   und ihre Fixture-DLLs lagen im anderen, hier nicht beschreibbaren Worktree.
+   Für die Validierung EXE und Fixture-DLLs gemeinsam unter einem lokalen,
+   beschreibbaren `out/.../bin` bereitstellen; dann landen auch die Session-
+   Verzeichnisse lokal. Dafür ist kein Produktcode-Fix und keine Erweiterung
+   der Zugriffsrechte nötig. **Verifiziert:** Mit dieser lokalen Testkopie
+   bestehen alle sechs Script-Module-Tests. Im Gesamtlauf verbleibt nur der
+   oben eingegrenzte Asset-Referenztest (11 fehlgeschlagene Prüfungen);
+   Qualitätsstufen weiterhin 55/55. Protokoll:
+   `out/quality-review/krom-tests-local.log`.
+4. **Optional, getrennt vom Fehlerfix:** Für eine vom Fenstertitel unabhängige
+   Speicherung eine dauerhafte Spiel-ID im Projekt vorsehen, bei Exporten
+   beibehalten und den Speicherordner daran binden. Kein Hash des Titels:
+   Der ändert sich beim Umbenennen ebenfalls. Bestehende Titelordner können
+   bei der ersten Verwendung übernommen werden. Die Qualitätsstufe selbst
+   bleibt weiterhin aus ihren fünf Optionen abgeleitet.
+
+Dies sind Umsetzungsvorschläge für Claude; Implementierungscode wurde nicht
+verändert. Die Diagnoseprogramme liegen nur in temporären Testordnern.
+
+#### Umsetzung durch Codex auf Nutzerauftrag (2026-11-19)
+
+Der Nutzer hat Codex anschließend ausdrücklich mit der Umsetzung der beiden
+Fehlerkorrekturen beauftragt; dafür gilt die allgemeine Rollenverteilung am
+Dateianfang nicht.
+
+- `UserGameSettingsFolderName` schützt reservierte Windows-Gerätenamen durch
+  ein `_`-Präfix, auch bei Erweiterungen und anderer Groß-/Kleinschreibung.
+  COM/LPT mit hochgestellten Ziffern sowie CONIN$/CONOUT$ sind berücksichtigt.
+  Gewöhnliche Titel behalten ihren bisherigen Ordnernamen.
+- Asset-Verschiebungen berechnen die normalisierte, Asset-relative Zuordnung
+  vor der Dateiänderung und speichern sie samt Gegenrichtung in der Historie.
+  Datei-Referenzen, Live-Auswahl und Komponenten verwenden dieselbe Zuordnung.
+  Ein fehlender alter Dateiname wird nicht mehr kanonisiert. Pfade außerhalb
+  der Assetwurzel werden vor Datei- und History-Änderungen zurückgewiesen,
+  mit einer deutschen/englischen Fehlermeldung.
+- Regressionstests: reservierte und gewöhnliche Namen, tatsächliches Anlegen,
+  Überschreiben und erneutes Lesen von Low/High-Dateien, Unicode-Pfade sowie
+  abgewiesene Quell-/Zielpfade ohne Nebenwirkungen. Der vorhandene Asset-Test
+  prüft weiter Referenzen in Szene/Prefab und Live-Komponenten, Undo/Redo,
+  Model-Fragmente, UTF-8-Namen und Konflikte; sein Ordnerpfad enthält nun auch
+  ein zu normalisierendes `/.`.
+- Eigener MSVC-Debug-Build unter `out/quality-fixes-build`: `krom_tests`,
+  `krom_editor_vulkan`, `krom_editor_opengl`, `editor_scene_runtime_opengl`
+  erfolgreich. Bereits vorhandene Warnungen in anderen Dateien bleiben.
+- Vollständiger Lauf der neu gebauten `krom_tests`: **alle Tests bestanden**.
+  Qualitätsstufen 76/76, Benutzerdateien 88/88, Asset-Verschieben/Undo/Redo
+  51/51, Script-Module 6/6. Der zuvor gemeldete Asset-Referenzfehler ist damit
+  unter derselben Sandbox behoben. Protokoll: `out/quality-review/tests-fixes.log`;
+  Build-Protokolle: `build-fixes.log` und `build-fixes-final.log` im selben Ordner.
+- Separates Probeprogramm gegen den neu gebauten Runtime-Wrapper: alle fünf
+  Prüfungen bestanden. Echte `Krom::SetQualityLevel`-Aufrufe schreiben Low und
+  ersetzen es durch High unter `_CON`; ein neuer Prozess lädt High über den
+  Low-Projektwert. `SetEditorLiveStateEnabled(true)` stellt den Projektwert
+  wieder her und verhindert das Überschreiben der Spielerdatei. Kein
+  Grafikstart und kein Gameplay-Script in diesem Probeprogramm.
+- OpenGL-Startprüfung: Editor blieb 10 Sekunden geöffnet, Runtime mit minimalem
+  Testprojekt und `--warmup-shaders` 25 Sekunden. Beide danach vom Test beendet;
+  der Warm-up-Abschluss und interaktives Rendering sind damit nicht bestätigt.
+- Die optionale stabile Spiel-ID ist nicht Teil dieser Fehlerkorrekturen.
+  Die titelbasierte Zuordnung behält die oben beschriebene Einschränkung.
+
 ### Undo bei Objektbewegung und Box-Kollision (2026-11-16)
 
 - **Box-Griffe im Viewport:** Ein Zug an der X-Fläche änderte die halbe

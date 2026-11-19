@@ -65,7 +65,8 @@ bool RecordEditorFileOperation(EditorFrameContext& ctx, const char* label, Edito
 
 // Moves or renames a file or folder (with a model's .clips settings) as one undo step.
 // References in scenes, prefabs, materials, controllers and in the open scene follow the
-// new path. Fails without changes if the destination exists.
+// new path. Both paths must be inside the asset root. Fails without changes if
+// either path is outside it or the destination exists.
 bool MoveEditorAssetPath(EditorFrameContext& ctx, const std::filesystem::path& source,
                          const std::filesystem::path& destination, const char* label = "history.move_asset");
 // Deletes a file or folder; undo restores it from the trash.

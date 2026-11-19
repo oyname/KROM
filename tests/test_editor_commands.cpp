@@ -1277,6 +1277,19 @@ static void TestAssetFileHistory(test::TestContext& ctx)
     audio.clipPath = tone;
     world.Add<AudioSourceComponent>(speaker, audio);
 
+    // Invalid preparation cannot move files or leave a partial history entry.
+    const fs::path outside = project / "outside.mat";
+    CHECK(ctx, !MoveEditorAssetPath(editor, at(green), assets / ".." / "outside.mat"));
+    CHECK(ctx, exists(green) && !fs::exists(outside));
+    CHECK_EQ(ctx, read("Scenes/Level.json"), scene);
+    CHECK_EQ(ctx, state.selectedMaterialAssetPath, green);
+    CHECK(ctx, !CanUndoEditorHistory(state) && !CanRedoEditorHistory(state));
+    CHECK(ctx, !editor.lastFileMessage.empty());
+    std::ofstream(outside, std::ios::binary) << "outside";
+    CHECK(ctx, !MoveEditorAssetPath(editor, outside, at("Materials/Outside.mat")));
+    CHECK(ctx, fs::exists(outside) && !exists("Materials/Outside.mat"));
+    CHECK(ctx, !CanUndoEditorHistory(state) && !CanRedoEditorHistory(state));
+
     // Rename: scene, prefab, selection and browser follow; undo restores the bytes.
     CHECK(ctx, MoveEditorAssetPath(editor, at(green), at(blue), "history.rename_asset"));
     CHECK(ctx, !exists(green) && exists(blue));
@@ -1310,7 +1323,7 @@ static void TestAssetFileHistory(test::TestContext& ctx)
     CHECK(ctx, has(read("Scenes/Level.json"), "\\\"" + sphere + "#mesh/0\\\""));
 
     // Folder move: live component paths are part of the same undo step.
-    CHECK(ctx, MoveEditorAssetPath(editor, assets / "Audio", at(sounds)));
+    CHECK(ctx, MoveEditorAssetPath(editor, assets / "Audio" / ".", at(sounds)));
     CHECK(ctx, exists(sounds + "/T\xC3\xB6n.wav") && !exists("Audio"));
     CHECK_EQ(ctx, world.Get<AudioSourceComponent>(speaker)->clipPath, sounds + "/T\xC3\xB6n.wav");
     CHECK(ctx, UndoEditorHistory(editor));

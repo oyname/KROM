@@ -98,12 +98,22 @@ fs::path EditorAssetRoot(const EditorFrameContext& ctx)
     return (ec ? root : absolute).lexically_normal();
 }
 
-// Path below root, generic and UTF-8; nullopt outside root.
+// Path below root, generic and UTF-8; nullopt outside root. Use lexical
+// paths: the old name no longer exists after a move, and the new name need
+// not exist while preparing it. Neither lookup may depend on canonicalising it.
 std::optional<std::string> RelativeBelow(const fs::path& root, const fs::path& path)
 {
     std::error_code ec;
-    const fs::path relative = fs::relative(path, root, ec);
-    if (ec || relative.empty() || relative == "." || *relative.begin() == "..")
+    const fs::path absoluteRoot = fs::absolute(root, ec).lexically_normal();
+    if (ec)
+        return std::nullopt;
+    const fs::path absolutePath = fs::absolute(path, ec).lexically_normal();
+    if (ec)
+        return std::nullopt;
+    fs::path relative = absolutePath.lexically_relative(absoluteRoot);
+    if (relative.has_relative_path() && relative.filename().empty())
+        relative = relative.parent_path();
+    if (relative.empty() || relative.is_absolute() || relative == "." || *relative.begin() == "..")
         return std::nullopt;
     return PathToGenericUtf8(relative);
 }
@@ -312,7 +322,7 @@ fs::path ClipSettingsPath(const fs::path& model)
 }
 
 bool ApplyRelocation(EditorFrameContext& ctx, const fs::path& source, const fs::path& destination,
-                     std::string& error)
+                     const fs::path& root, const AssetPathRelocation& relocation, std::string& error)
 {
     std::error_code ec;
     if (!fs::exists(source, ec))
@@ -361,12 +371,6 @@ bool ApplyRelocation(EditorFrameContext& ctx, const fs::path& source, const fs::
         }
         ++moved;
     }
-
-    const fs::path root = EditorAssetRoot(ctx);
-    AssetPathRelocation relocation;
-    if (auto from = RelativeBelow(root, source))
-        if (auto to = RelativeBelow(root, destination))
-            relocation = {std::move(*from), std::move(*to), directory};
 
     if (!relocation.from.empty() && relocation.from != relocation.to)
     {
@@ -570,11 +574,34 @@ bool MoveEditorAssetPath(EditorFrameContext& ctx, const fs::path& source, const 
 {
     if (source.empty() || destination.empty())
         return false;
-    const fs::path from = source.lexically_normal();
-    const fs::path to = destination.lexically_normal();
+    std::error_code ec;
+    const fs::path from = fs::absolute(source, ec).lexically_normal();
+    if (ec)
+    {
+        ctx.lastFileMessage = Translate("assets.move_failed") + ec.message();
+        return false;
+    }
+    const fs::path to = fs::absolute(destination, ec).lexically_normal();
+    if (ec)
+    {
+        ctx.lastFileMessage = Translate("assets.move_failed") + ec.message();
+        return false;
+    }
     if (from == to)
         return false;
-    std::error_code ec;
+
+    // Prepare the mapping once, before touching the files or the history.
+    // Reuse it for disk references, live components and both replay directions.
+    const fs::path root = EditorAssetRoot(ctx);
+    const auto fromRel = RelativeBelow(root, from);
+    const auto toRel = RelativeBelow(root, to);
+    if (!fromRel || !toRel)
+    {
+        ctx.lastFileMessage = Translate("assets.move_outside_root");
+        return false;
+    }
+    const AssetPathRelocation relocation{*fromRel, *toRel, fs::is_directory(from, ec)};
+    const AssetPathRelocation reverseRelocation{relocation.to, relocation.from, relocation.directory};
     if (fs::is_directory(from, ec) && IsInside(to, from))
     {
         ctx.lastFileMessage = Translate("assets.move_self");
@@ -583,7 +610,7 @@ bool MoveEditorAssetPath(EditorFrameContext& ctx, const fs::path& source, const 
 
     const bool ownTransaction = BeginEditorTransaction(ctx, label);
     std::string error;
-    if (!ApplyRelocation(ctx, from, to, error))
+    if (!ApplyRelocation(ctx, from, to, root, relocation, error))
     {
         if (ownTransaction)
             CommitEditorTransaction(ctx);
@@ -593,27 +620,23 @@ bool MoveEditorAssetPath(EditorFrameContext& ctx, const fs::path& source, const 
     }
 
     AddEditorTransactionOperation(ctx, EditorHistoryOperation{
-        [from, to](EditorFrameContext& context) {
+        [from, to, root, reverseRelocation](EditorFrameContext& context) {
             std::string message;
-            if (ApplyRelocation(context, to, from, message))
+            if (ApplyRelocation(context, to, from, root, reverseRelocation, message))
                 return true;
             context.lastFileMessage = message;
             return false;
         },
-        [from, to](EditorFrameContext& context) {
+        [from, to, root, relocation](EditorFrameContext& context) {
             std::string message;
-            if (ApplyRelocation(context, from, to, message))
+            if (ApplyRelocation(context, from, to, root, relocation, message))
                 return true;
             context.lastFileMessage = message;
             return false;
         }});
 
-    const fs::path root = EditorAssetRoot(ctx);
-    const auto fromRel = RelativeBelow(root, from);
-    const auto toRel = RelativeBelow(root, to);
-    if (fromRel && toRel && *fromRel != *toRel)
+    if (relocation.from != relocation.to)
     {
-        const AssetPathRelocation relocation{*fromRel, *toRel, fs::is_directory(to, ec)};
         RewriteEditorComponents(ctx, label, [&relocation](const std::string& json) {
             return RelocateJsonAssetReferences(json, relocation);
         });

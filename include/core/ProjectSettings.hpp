@@ -144,7 +144,8 @@ struct UserGameSettings
 
 // Folder name for a game's user settings: the window title (UTF-8) with
 // characters Windows does not allow in file names replaced by '_'; trailing
-// dots and spaces removed. Empty if nothing usable is left.
+// dots and spaces removed. Reserved Windows device names get an '_' prefix.
+// Empty if nothing usable is left.
 [[nodiscard]] inline std::string UserGameSettingsFolderName(const std::string& title)
 {
     std::string name;
@@ -156,7 +157,29 @@ struct UserGameSettings
     while (!name.empty() && (name.back() == '.' || name.back() == ' '))
         name.pop_back();
     const size_t first = name.find_first_not_of(' ');
-    return first == std::string::npos ? std::string{} : name.substr(first);
+    if (first == std::string::npos)
+        return {};
+    name.erase(0, first);
+
+    // Device names stay reserved with an extension (e.g. con.txt). Windows
+    // also recognises superscript 1, 2 and 3 in COM/LPT device names.
+    std::string base = name.substr(0, name.find('.'));
+    while (!base.empty() && base.back() == ' ')
+        base.pop_back();
+    for (char& c : base)
+        if (c >= 'a' && c <= 'z')
+            c = static_cast<char>(c - 'a' + 'A');
+    bool reserved = base == "CON" || base == "PRN" || base == "AUX" || base == "NUL" ||
+                    base == "CONIN$" || base == "CONOUT$";
+    if (base.starts_with("COM") || base.starts_with("LPT"))
+    {
+        const std::string_view number = std::string_view(base).substr(3);
+        reserved = (number.size() == 1 && number[0] >= '1' && number[0] <= '9') ||
+                   number == "\xC2\xB9" || number == "\xC2\xB2" || number == "\xC2\xB3";
+    }
+    if (reserved)
+        name.insert(name.begin(), '_');
+    return name;
 }
 
 inline void ReadRenderSettingKeys(const serialization::JsonValue& object, ProjectRenderSettings& out)

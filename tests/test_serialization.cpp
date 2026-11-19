@@ -10,6 +10,7 @@
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererSerialization.hpp"
 #include "core/Debug.hpp"
+#include "core/AtomicTextFile.hpp"
 #include "core/PathUtf8.hpp"
 #include "core/ProjectSettings.hpp"
 #include "addons/script/IRenderSettingsService.hpp"
@@ -17,6 +18,8 @@
 #include "ecs/Components.hpp"
 #include "serialization/SceneSerializer.hpp"
 #include <cmath>
+#include <chrono>
+#include <fstream>
 
 using namespace engine;
 using namespace engine::serialization;
@@ -599,6 +602,41 @@ static void TestRenderQualityLevels(test::TestContext& ctx)
     CHECK_EQ(ctx, UserGameSettingsFolderName("  A:B/C\\D?*. "), std::string("A_B_C_D__"));
     CHECK_EQ(ctx, UserGameSettingsFolderName(" .. "), std::string());
     CHECK_EQ(ctx, UserGameSettingsFolderName(""), std::string());
+    for (const std::string name : {"CON", "con.txt", "PRN", "aux", "NUL", "CONIN$", "conout$.txt",
+                                  "COM1", "com9.txt", "LPT1", "lpt9", "COM\xC2\xB9", "LPT\xC2\xB2.txt",
+                                  "COM\xC2\xB3"})
+        CHECK_EQ(ctx, UserGameSettingsFolderName(name), "_" + name);
+    for (const std::string name : {"COM0", "COM10", "LPT0", "LPT10", "Console", "_CON"})
+        CHECK_EQ(ctx, UserGameSettingsFolderName(name), name);
+    CHECK_EQ(ctx, UserGameSettingsFolderName(" con .txt "), std::string("_con .txt"));
+}
+
+static void TestUserGameSettingsFiles(test::TestContext& ctx)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / ("krom-user-settings-" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    for (const std::string title : {"CON", "con.txt", "NUL", "PRN", "AUX", "LPT1", "COM9",
+                                   "COM\xC2\xB9", "LPT\xC2\xB2.txt", "Normal Game", "Spiel Gr\xC3\xBCn"})
+    {
+        const fs::path path = root / PathFromUtf8(UserGameSettingsFolderName(title)) / "user-settings.json";
+        // Exercise creation, replacement and a fresh read, including device
+        // names and UTF-8 paths on the actual filesystem.
+        for (const auto level : {RenderQualityLevel::Low, RenderQualityLevel::High})
+        {
+            UserGameSettings settings;
+            settings.qualityLevel = level;
+            CHECK(ctx, WriteTextFileAtomically(path, WriteUserGameSettings(settings)));
+            std::ifstream file(path, std::ios::binary);
+            CHECK(ctx, file.is_open());
+            const std::string json(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>{});
+            std::string error;
+            const auto read = ReadUserGameSettings(JsonParser::Parse(json, error));
+            CHECK(ctx, error.empty());
+            CHECK(ctx, read.qualityLevel == level);
+        }
+    }
+    fs::remove_all(root);
 }
 
 static void TestPortableAssetPathRule(test::TestContext& ctx)
@@ -707,6 +745,7 @@ int RunSerializationTests()
         .Add("Deserializer invalid JSON",     TestDeserializerInvalidJson)
         .Add("Project settings and legacy defaults", TestProjectSettingsRoundTrip)
         .Add("Render quality levels",         TestRenderQualityLevels)
+        .Add("User game settings files",      TestUserGameSettingsFiles)
         .Add("Portable asset path rule",      TestPortableAssetPathRule)
         .Add("Scene drops non-portable material paths", TestSceneDropsNonPortableMaterialPaths);
 
