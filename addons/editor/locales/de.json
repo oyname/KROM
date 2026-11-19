@@ -1029,6 +1029,7 @@
   "history.create_camera": "Kamera erstellt",
   "history.create_light": "Licht erstellt",
   "history.duplicate_entity": "Objekt dupliziert",
+  "history.duplicate_entities": "Objekte dupliziert",
   "history.hierarchy": "Hierarchie geändert",
   "history.create_collider_child": "Kollisions-Kind erstellt",
   "history.delete_entity": "Objekt gelöscht",

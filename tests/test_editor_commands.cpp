@@ -339,6 +339,169 @@ static EntityID FindByName(World& world, const char* name)
 
 
 
+static void TestDuplicateSelectionHierarchies(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    CHECK(ctx, !DuplicateSelectedEntityHierarchies(editor));
+    CHECK(ctx, !CanUndoEditorHistory(state));
+
+    const auto folder = CreateFolderEntity(editor, "Folder");
+    const auto parent = CreateEmptyEntity(editor, "Parent", folder);
+    const auto child = CreateEmptyEntity(editor, "Child", parent);
+    const auto grandchild = CreateEmptyEntity(editor, "Grandchild", child);
+    const auto other = CreateEmptyEntity(editor, "Other", folder);
+    const auto untouched = CreateEmptyEntity(editor, "Untouched");
+    world.Get<TransformComponent>(other)->localPosition = {3.f, 4.f, 5.f};
+    world.Get<WorldTransformComponent>(parent)->position = {1.f, 0.f, 0.f};
+    world.Get<WorldTransformComponent>(child)->position = {2.f, 0.f, 0.f};
+    world.Get<WorldTransformComponent>(other)->position = {3.f, 0.f, 0.f};
+    // The active descendant precedes its selected ancestor; copy the tree only once.
+    state.selectedEntity = child;
+    AddToMultiSelection(editor, other);
+    AddToMultiSelection(editor, parent);
+    ClearEditorHistory(state);
+
+    CHECK(ctx, DuplicateSelectedEntityHierarchies(editor));
+    const auto parentCopy = FindByName(world, "Parent Kopie");
+    const auto childCopy = FindByName(world, "Child Kopie");
+    const auto grandchildCopy = FindByName(world, "Grandchild Kopie");
+    const auto otherCopy = FindByName(world, "Other Kopie");
+    CHECK(ctx, parentCopy.IsValid() && childCopy.IsValid() && grandchildCopy.IsValid() && otherCopy.IsValid());
+    CHECK_EQ(ctx, GetEntityParent(editor, parentCopy), folder);
+    CHECK_EQ(ctx, GetEntityParent(editor, childCopy), parentCopy);
+    CHECK_EQ(ctx, GetEntityParent(editor, grandchildCopy), childCopy);
+    CHECK_EQ(ctx, GetEntityParent(editor, otherCopy), folder);
+    CHECK_EQ(ctx, state.selectedEntity, childCopy);
+    CHECK_EQ(ctx, GetSelectedEntities(editor), (std::vector<EntityID>{childCopy, otherCopy, parentCopy}));
+    CHECK_EQ(ctx, state.multiSelectionPivot.x, 2.f);
+    CHECK_EQ(ctx, world.Get<TransformComponent>(otherCopy)->localPosition.y, 4.f);
+    size_t count = 0;
+    world.ForEachAlive([&](EntityID) { ++count; });
+    CHECK_EQ(ctx, count, 10u);
+
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, !CanUndoEditorHistory(state));
+    CHECK(ctx, !world.IsAlive(parentCopy) && !world.IsAlive(childCopy) && !world.IsAlive(otherCopy));
+    CHECK(ctx, !world.IsAlive(grandchildCopy));
+    CHECK(ctx, world.IsAlive(untouched) && world.IsAlive(grandchild));
+    CHECK_EQ(ctx, GetSelectedEntities(editor), (std::vector<EntityID>{child, other, parent}));
+    CHECK_EQ(ctx, state.selectedEntity, child);
+
+    CHECK(ctx, RedoEditorHistory(editor));
+    const auto restoredParent = FindByName(world, "Parent Kopie");
+    const auto restoredChild = FindByName(world, "Child Kopie");
+    const auto restoredOther = FindByName(world, "Other Kopie");
+    CHECK_EQ(ctx, GetEntityParent(editor, restoredChild), restoredParent);
+    CHECK_EQ(ctx, GetEntityParent(editor, FindByName(world, "Grandchild Kopie")), restoredChild);
+    CHECK_EQ(ctx, GetEntityParent(editor, restoredOther), folder);
+    CHECK_EQ(ctx, GetSelectedEntities(editor), (std::vector<EntityID>{restoredChild, restoredOther, restoredParent}));
+    CHECK_EQ(ctx, state.multiSelectionPivot.x, 2.f);
+    count = 0;
+    world.ForEachAlive([&](EntityID) { ++count; });
+    CHECK_EQ(ctx, count, 10u);
+
+    // A single selection still follows the existing duplicate path.
+    ClearMultiSelection(editor);
+    state.selectedEntity = untouched;
+    ClearEditorHistory(state);
+    CHECK(ctx, DuplicateSelectedEntityHierarchies(editor));
+    CHECK_EQ(ctx, state.selectedEntity, FindByName(world, "Untouched Kopie"));
+    CHECK(ctx, state.multiSelection.empty());
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK_EQ(ctx, state.selectedEntity, untouched);
+}
+
+static void TestDuplicateSelectionContextMenus(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    const auto first = CreateEmptyEntity(editor, "First");
+    const auto second = CreateEmptyEntity(editor, "Second");
+    const auto third = CreateEmptyEntity(editor, "Third");
+    state.selectedEntity = first;
+    AddToMultiSelection(editor, second);
+    ClearEditorHistory(state);
+
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {1280.f, 900.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels = nullptr;
+    int width = 0, height = 0;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const auto title = TranslateLabel("menu.hierarchy", "Hierarchie##editor");
+    EntityID openRow = NULL_ENTITY;
+    bool openBackground = false;
+    auto frame = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize({400.f, 700.f});
+        ImGui::Begin(title.c_str());
+        if (openRow.IsValid())
+        {
+            const auto id = ImGui::GetID(reinterpret_cast<void*>(static_cast<uintptr_t>(GetStableEditorEntityId(editor, openRow))));
+            ImGui::OpenPopupEx(id);
+            openRow = NULL_ENTITY;
+        }
+        if (openBackground)
+        {
+            ImGui::OpenPopup("SceneCreateContext##editor");
+            openBackground = false;
+        }
+        ImGui::End();
+        engine::renderer::addons::editor::detail::DrawEntityList(editor);
+        ImGui::Render();
+    };
+    auto duplicate = [&] {
+        auto* popup = gui->OpenPopupStack.empty() ? nullptr : gui->OpenPopupStack.back().Window;
+        CHECK(ctx, popup && popup->Active);
+        if (popup && popup->Active)
+        {
+            ImGui::ActivateItemByID(popup->GetID(TranslateLabel("common.duplicate", "Duplizieren").c_str()));
+            frame();
+        }
+    };
+    frame();
+    frame();
+    openRow = second;
+    frame();
+    CHECK_EQ(ctx, GetSelectedEntities(editor), (std::vector<EntityID>{first, second}));
+    frame(); // Keeping the context menu open must preserve the selection too.
+    duplicate();
+    CHECK_EQ(ctx, GetSelectedEntities(editor).size(), 2u);
+    CHECK(ctx, FindByName(world, "First Kopie").IsValid() && FindByName(world, "Second Kopie").IsValid());
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, !CanUndoEditorHistory(state));
+
+    frame();
+    openBackground = true;
+    frame();
+    duplicate();
+    CHECK(ctx, FindByName(world, "First Kopie").IsValid() && FindByName(world, "Second Kopie").IsValid());
+    CHECK(ctx, UndoEditorHistory(editor));
+
+    frame();
+    openRow = third;
+    frame();
+    CHECK_EQ(ctx, GetSelectedEntities(editor), (std::vector<EntityID>{third}));
+    duplicate();
+    CHECK_EQ(ctx, state.selectedEntity, FindByName(world, "Third Kopie"));
+    CHECK(ctx, !FindByName(world, "First Kopie").IsValid() && !FindByName(world, "Second Kopie").IsValid());
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
 static void RecordNameChange(test::TestContext& ctx, EditorFrameContext& editor, EntityID entity,
                              const std::string& after)
 {
@@ -5740,6 +5903,8 @@ int RunEditorCommandTests()
     suite.Add("Inspector displays current Play and Pause script values", TestLiveScriptInspectorValues);
 
     suite.Add("DuplicateEntity copies hierarchy", TestDuplicateEntityCopiesHierarchy);
+    suite.Add("Duplicate selection copies hierarchies once and restores selection in one undo step", TestDuplicateSelectionHierarchies);
+    suite.Add("Hierarchy context menus duplicate the whole selection", TestDuplicateSelectionContextMenus);
     suite.Add("Hierarchy drop reorders and unparents", TestMoveEntityInHierarchy);
     suite.Add("Hierarchy folder without transform, undo and scene round trip", TestCreateFolderEntity);
     suite.Add("Hierarchy create under selected parent, else at root end", TestCreateEntityUnderParent);

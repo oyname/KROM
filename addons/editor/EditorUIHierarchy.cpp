@@ -510,16 +510,16 @@ void DrawEntityList(EditorFrameContext& ctx)
         if (visibleSelf && ImGui::BeginPopupContextItem())
         {
             highlighted = NULL_ENTITY;
-            ClearMultiSelection(ctx);
-            ctx.state.selectedEntity  = id;
+            if (ImGui::IsWindowAppearing() && ctx.state.selectedEntity != id &&
+                !IsEntityInMultiSelection(ctx.state, id))
+            {
+                ClearMultiSelection(ctx);
+                ctx.state.selectedEntity = id;
+            }
             ctx.state.selectionSource = SelectionSource::Outliner;
 
             if (ImGui::MenuItem(TranslateLabel("common.duplicate", "Duplizieren").c_str()))
-            {
-                const EntityID dup = DuplicateEntity(ctx, id);
-                if (dup.IsValid())
-                    ctx.state.selectedEntity = dup;
-            }
+                DuplicateSelectedEntityHierarchies(ctx);
             if (ImGui::MenuItem(TranslateLabel("common.move_up", "Nach oben").c_str()))
             {
                 MoveEntityInSiblingOrder(ctx, id, -1);
@@ -732,11 +732,7 @@ void DrawEntityList(EditorFrameContext& ctx)
             ctx.world.IsAlive(ctx.state.selectedEntity))
         {
             if (ImGui::MenuItem(TranslateLabel("common.duplicate", "Duplizieren").c_str()))
-            {
-                const EntityID dup = DuplicateEntity(ctx, ctx.state.selectedEntity);
-                if (dup.IsValid())
-                    ctx.state.selectedEntity = dup;
-            }
+                DuplicateSelectedEntityHierarchies(ctx);
             if (ImGui::MenuItem(TranslateLabel("common.move_up", "Nach oben").c_str()))
             {
                 MoveEntityInSiblingOrder(ctx, ctx.state.selectedEntity, -1);

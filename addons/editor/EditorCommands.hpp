@@ -127,6 +127,8 @@ EntityID CreateFolderEntity(EditorFrameContext& ctx, const char* name = "Folder"
 EntityID CreateCameraEntity(EditorFrameContext& ctx, EntityID parent = NULL_ENTITY);
 EntityID CreateLightEntity(EditorFrameContext& ctx, LightType type, EntityID parent = NULL_ENTITY);
 EntityID DuplicateEntity(EditorFrameContext& ctx, EntityID source);
+// Copies selected hierarchies once, selects the corresponding copies and records one undo step.
+bool DuplicateSelectedEntityHierarchies(EditorFrameContext& ctx);
 bool ReparentEntity(EditorFrameContext& ctx, EntityID child, EntityID newParent);
 // Moves entity under newParent (NULL_ENTITY = scene root) and places it directly
 // before or after the sibling anchor. An invalid anchor appends at the end.

@@ -2217,6 +2217,63 @@ EntityID DuplicateEntity(EditorFrameContext& ctx, EntityID source)
     });
 }
 
+bool DuplicateSelectedEntityHierarchies(EditorFrameContext& ctx)
+{
+    const auto selection = GetSelectedEntities(ctx);
+    if (selection.empty())
+        return false;
+    if (selection.size() == 1)
+        return DuplicateEntity(ctx, selection.front()).IsValid();
+
+    const std::unordered_set<EntityID> selected(selection.begin(), selection.end());
+    std::vector<EntityID> roots;
+    for (const EntityID entity : selection)
+    {
+        // A selected descendant is already copied with its selected ancestor.
+        std::unordered_set<EntityID> visited;
+        EntityID parent = GetEntityParent(ctx, entity);
+        while (ctx.world.IsAlive(parent) && !selected.contains(parent) && visited.insert(parent).second)
+            parent = GetEntityParent(ctx, parent);
+        if (!selected.contains(parent) && std::find(roots.begin(), roots.end(), entity) == roots.end())
+            roots.push_back(entity);
+    }
+
+    return CreateEntityTree(ctx, "history.duplicate_entities", [&](std::vector<EntityID>& entities) {
+        std::vector<std::pair<EntityID, EntityID>> copies;
+        EntityID firstRoot = NULL_ENTITY;
+        for (const EntityID root : roots)
+        {
+            const EntityID copy = DuplicateEntityHierarchyRaw(ctx, root, NULL_ENTITY, copies);
+            if (!firstRoot.IsValid())
+                firstRoot = copy;
+        }
+        if (!firstRoot.IsValid())
+            return NULL_ENTITY;
+
+        engine::addons::prefab::RebindDuplicatedPrefabEntities(ctx.world, copies);
+        if (ctx.scriptRegistry) engine::script::ResolveScriptEntityReferences(ctx.world, *ctx.scriptRegistry);
+        std::unordered_map<EntityID, EntityID> copiedEntities;
+        for (const auto& [source, copy] : copies)
+        {
+            entities.push_back(copy);
+            copiedEntities.emplace(source, copy);
+        }
+        ClearMultiSelection(ctx);
+        ctx.state.selectedEntity = NULL_ENTITY;
+        for (const EntityID source : selection)
+        {
+            const auto it = copiedEntities.find(source);
+            if (it == copiedEntities.end())
+                continue;
+            if (!ctx.state.selectedEntity.IsValid())
+                ctx.state.selectedEntity = it->second;
+            else if (!IsEntityInMultiSelection(ctx.state, it->second))
+                AddToMultiSelection(ctx, it->second);
+        }
+        return firstRoot;
+    }).IsValid();
+}
+
 bool ReparentEntity(EditorFrameContext& ctx, EntityID child, EntityID newParent)
 {
     return EditHierarchy(ctx, "history.hierarchy", {child}, [&] {

@@ -1029,6 +1029,7 @@
   "history.create_camera": "Created camera",
   "history.create_light": "Created light",
   "history.duplicate_entity": "Duplicated entity",
+  "history.duplicate_entities": "Duplicated entities",
   "history.hierarchy": "Changed hierarchy",
   "history.create_collider_child": "Created collider child",
   "history.delete_entity": "Deleted entity",
