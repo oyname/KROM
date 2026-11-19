@@ -24,8 +24,26 @@ using QualityLevel = engine::RenderQualityLevel;
 // Same ids as renderer::addons::forward::PostAAMode.
 using PostAAMode = engine::RenderPostAA;
 
-// The project settings give the start values, except exposureEv and
-// autoExposure, which come from the scene and are set again by every scene load.
+// Colour grading of the scene; same fields and ranges as
+// renderer::addons::forward::ColorGradingSettings (all defaults neutral).
+// agxLook: 0 none, 1 punchy, 2 golden, 3 high contrast, 4 low contrast; only
+// with the AgX operator. lift/gamma/gain: r, g, b tint (white = none), value -1..1.
+struct ColorGrading
+{
+    uint8_t agxLook = 0u;
+    float temperature = 0.f;      // -100 .. 100
+    float tint = 0.f;             // -100 .. 100
+    float colorFilter[3]{1.f, 1.f, 1.f};
+    float hueShift = 0.f;         // degrees, -180 .. 180
+    float contrast = 1.f;         // 0 .. 2
+    float saturation = 1.f;       // 0 .. 2
+    float lift[4]{1.f, 1.f, 1.f, 0.f};
+    float gamma[4]{1.f, 1.f, 1.f, 0.f};
+    float gain[4]{1.f, 1.f, 1.f, 0.f};
+};
+
+// The project settings give the start values, except exposureEv, autoExposure
+// and grading, which come from the scene and are set again by every scene load.
 struct RenderSettings
 {
     TonemapMode tonemap = TonemapMode::AgX;
@@ -43,6 +61,7 @@ struct RenderSettings
     bool        ssrEnabled = true;           // SSR add-on; no effect under OpenGL
     bool        contactShadowsEnabled = true; // contact shadow add-on; no effect under OpenGL
     PostAAMode  postAA = PostAAMode::Off;    // after tonemapping; no effect under OpenGL
+    ColorGrading grading{};                  // per scene, see ColorGrading
 };
 
 [[nodiscard]] inline engine::RenderQualityOptions QualityOptionsOf(const RenderSettings& settings) noexcept

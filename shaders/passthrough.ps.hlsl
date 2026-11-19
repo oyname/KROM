@@ -1,6 +1,9 @@
 // =============================================================================
 // KROM Engine — shaders/passthrough.ps.hlsl
-// Tonemap pass: HDR + bloom, exposure, then a selectable tonemap operator.
+// Tonemap pass: HDR + bloom, exposure, colour grading, then a selectable tonemap
+// operator. Grading (addons/forward/ForwardColorGrading.hpp): contrast and a
+// colour matrix on HDR, the AgX look inside AgX, lift/gamma/gain afterwards.
+// Without grading flags the result is unchanged.
 // Output is LINEAR: the sRGB render target / backbuffer applies the sRGB curve.
 // The operators below therefore end in linear values; none adds its own gamma.
 // =============================================================================
@@ -20,7 +23,27 @@ cbuffer PerPass : register(b3)
 {
     float4 bloomParams;    // x=threshold, y=intensity, z=blurRadius
     float4 tonemapParams;  // x=exposure scale (2^EV), y=operator, z=1: automatic exposure, w=correction EV
+    // Colour grading (ColorGradingConstants).
+    float4 gradeRow0;      // colour matrix rows (xyz)
+    float4 gradeRow1;
+    float4 gradeRow2;
+    float4 gradeParams;    // x=contrast, y=flags, z=AgX look saturation
+    float4 gradeLift;      // xyz, display-encoded
+    float4 gradeInvGamma;  // xyz = 1 / gamma
+    float4 gradeGain;      // xyz
+    float4 gradeLookSlopePower; // xyz AgX look slope, w power
 };
+
+// Flags in gradeParams.y (ForwardColorGrading.hpp, kGradingFlag*).
+static const uint KROM_GRADE_MATRIX   = 1u;
+static const uint KROM_GRADE_CONTRAST = 2u;
+static const uint KROM_GRADE_LGG      = 4u;
+static const uint KROM_GRADE_AGX_LOOK = 8u;
+
+uint GradeFlags()
+{
+    return (uint)(gradeParams.y + 0.5f);
+}
 
 // Operator ids (addons/forward/ForwardTonemap.hpp, TonemapOperator).
 static const int KROM_TONEMAP_REINHARD     = 0;
@@ -91,6 +114,13 @@ float3 TonemapAgx(float3 color)
     color = clamp(log2(max(color, 1e-10f)), minEv, maxEv);
     color = (color - minEv) / (maxEv - minEv);
     color = AgxContrastApprox(color);
+    // Look (ASC CDL) on the display-encoded values, as in the AgX minimal fit.
+    if ((GradeFlags() & KROM_GRADE_AGX_LOOK) != 0u)
+    {
+        color = pow(max(color * gradeLookSlopePower.xyz, 0.0f), gradeLookSlopePower.w);
+        const float lookLuma = dot(color, float3(0.2126f, 0.7152f, 0.0722f));
+        color = lookLuma + gradeParams.z * (color - lookLuma);
+    }
     color = mul(agxOutset, color);
     // Display encoding (gamma 2.2) -> linear for the sRGB target.
     return pow(saturate(color), 2.2f);
@@ -129,6 +159,12 @@ float4 main(PSInput IN) : SV_TARGET
 #endif
     v *= exposure;
 
+    const uint gradeFlags = GradeFlags();
+    if ((gradeFlags & KROM_GRADE_CONTRAST) != 0u)
+        v = 0.18f * pow(max(v, 0.0f) / 0.18f, gradeParams.x);   // slope in log space around mid grey
+    if ((gradeFlags & KROM_GRADE_MATRIX) != 0u)
+        v = max(float3(dot(gradeRow0.xyz, v), dot(gradeRow1.xyz, v), dot(gradeRow2.xyz, v)), 0.0f);
+
     const int op = (int)(tonemapParams.y + 0.5f);
     if (op == KROM_TONEMAP_ACES_FITTED)
         v = TonemapAcesFitted(v);
@@ -138,5 +174,14 @@ float4 main(PSInput IN) : SV_TARGET
         v = TonemapPbrNeutral(v);
     else
         v = TonemapReinhard(v);
+
+    // Lift / gamma / gain on gamma-2.2 encoded values (perceptual shadows/mids/highlights).
+    if ((gradeFlags & KROM_GRADE_LGG) != 0u)
+    {
+        float3 e = pow(saturate(v), 1.0f / 2.2f);
+        e = e * (gradeGain.xyz - gradeLift.xyz) + gradeLift.xyz;
+        e = pow(max(e, 0.0f), gradeInvGamma.xyz);
+        v = pow(saturate(e), 2.2f);
+    }
     return float4(v, 1.0f);
 }

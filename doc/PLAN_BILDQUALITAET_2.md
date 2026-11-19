@@ -45,11 +45,12 @@ Qualitätsstufen und Post-Process-Volumes. Zeitliche Verfahren (TAA) kommen zule
 | 5 | Post-AA: SMAA 1x, FXAA | erledigt (2026-11-19: FXAA, SMAA 1x), Review offen |
 | 6 | Auto-Exposure | erledigt (2026-11-19), Review offen |
 | 7 | Qualitätsstufen | erledigt (2026-11-19), Review offen |
+| 7b | Color Grading und AgX-Looks (pro Szene) | erledigt (2026-11-19), Review offen |
 | 8 | Post-Process-Volume: Bedienablauf abstimmen | offen |
 | 9 | Post-Process-Volume: Umsetzung | offen |
 | 10 | Motion Vectors (optional, später entscheiden) | offen |
 | 11 | TAA und zeitliche Akkumulation für GTAO/SSR (optional) | offen |
-| 12 | Weiteres: Color Grading, Shading-Models, Flächenlichter (optional) | offen |
+| 12 | Weiteres: 3D-LUT, HDR-Display-Ausgabe, Shading-Models, Flächenlichter (optional) | offen |
 
 Reihenfolge: 1 → 2 → 3 → 4, dann 5 und 6 (unabhängig voneinander), dann 7 → 8 → 9.
 Phase 4 (10–12) erst, wenn der Rest sitzt. Der Kontaktschatten-Plan läuft nach Schritt 1
@@ -125,6 +126,18 @@ unabhängig weiter.
   per Script gewählte Stufe merkt sich das exportierte Spiel pro Rechner (wie Unreal
   `GameUserSettings.ini`). Script-API: Stufe setzen/lesen, dazu Post-AA und Kontaktschatten.
 
+### 7b. Color Grading und AgX-Looks
+
+- Eingeschoben am 2026-11-19 (Nutzerwunsch), vor den Volumes, damit Schritt 9 die
+  Grading-Werte gleich mit überschreiben kann.
+- Im Tonemap-Pass (`shaders/passthrough.ps.hlsl`), pro Szene wie die Belichtung
+  (Inspector der Szene, eigene Karte), Script-API und krom.h.
+- Parametrisch: Weißabgleich (Temperatur, Tönung), Farbfilter, Kontrast, Sättigung,
+  Lift/Gamma/Gain; AgX-Looks als Voreinstellungen im AgX-Pfad. Fehlende Schlüssel =
+  neutral, alte Szenen sehen gleich aus.
+- Nicht in diesem Schritt: 3D-LUT-Import, HDR-Display-Ausgabe (beide Schritt 12).
+- Bedienablauf vor dem Bauen mit dem Nutzer abstimmen.
+
 ## Phase 3: Volumes
 
 ### 8. Bedienablauf abstimmen
@@ -159,8 +172,9 @@ unabhängig weiter.
 
 ### 12. Weiteres
 
-- Color Grading (LUT, Weißabgleich), Shading-Models (Clearcoat, Sheen), Flächenlichter
-  (LTC), offene 1/π-Frage der Probes.
+- 3D-LUT für das Color Grading, HDR-Display-Ausgabe (PQ/scRGB; auf 2026-11-19 vom Nutzer
+  zurückgestellt), Shading-Models (Clearcoat, Sheen), Flächenlichter (LTC), offene
+  1/π-Frage der Probes.
 
 ## Bewusst nicht geplant
 
@@ -418,3 +432,26 @@ GTX 1660, Viewport 1181×709, MSAA wie Projekt, ohne Validierung), ms:
   1,87 → 2,18 ms (+ Resolve 0,08). Frame-Zeit im Debug-Build CPU-gebunden (DX11 ≈ 32 ms in allen Stufen).
 - Nicht geprüft: Schreiben von `user-settings.json` über ein echtes Script im exportierten Spiel (nur
   Lesen per Lauf, Schreiben per Test der Textfunktion), Sichtprüfung der neuen Auswahl im Editor, Release.
+
+### 2026-11-19 – Schritt 7b (Claude, auf `main`, nicht committet)
+
+- Bedienablauf mit dem Nutzer abgestimmt: Karte „Farbkorrektur“ im Inspector der Szene unter
+  „Belichtung“; Look (nur bei AgX), Temperatur, Tönung, Farbfilter, Farbton, Kontrast,
+  Sättigung, aufklappbar Lift/Gamma/Gain (Farbe + Wert), Zurücksetzen. Vergleich mit
+  Unity/Unreal: Kurven, Channel Mixer, Split Toning bewusst weggelassen.
+- `addons/forward/ForwardColorGrading.hpp` (Einstellungen, AgX-Looks, Umrechnung in
+  Shader-Konstanten), Teil von `TonemapSettings`; Shader `shaders/passthrough.ps.hlsl`:
+  Kontrast (log um 0,18) + eine 3×3-Matrix (Sättigung · Farbton · Filter · Weißabgleich LMS)
+  vor dem Operator, AgX-Look (ASC CDL) im AgX-Pfad, Lift/Gamma/Gain danach (Gamma 2,2).
+  Neutral = keine Flags = Bild unverändert.
+- Szene: Objekt `colorGrading` im `environment`-Block (Editor-.json und .kscene), nur
+  geschrieben, wenn nicht neutral; fehlt es, bleibt alles neutral. krom.h-Runtime liest es.
+- Script-API `RenderSettings::grading` (eigene Struktur `script::ColorGrading`,
+  Umwandlung in `addons/script/ScriptColorGrading.hpp`), krom.h `SetColorGrading`/
+  `GetColorGrading`. Script-ABI 4 → 5 (Größe von `RenderSettings` geändert).
+- Geprüft: `krom_tests` grün (2 neue Tests, 30 Prüfungen), Tonemap-Shader für DX11/Vulkan
+  übersetzt; Room 2 Lit-Bild neutral/mit Grading auf DX11 und Vulkan mit
+  `KROM_VALIDATION=1` ohne Meldung, DX11 ≈ Vulkan (0,45/255). Bild:
+  `out/claude-grading-check/vergleich.png`.
+- Nicht geprüft: Bedienung der Inspector-Karte von Hand; OpenGL (eingefroren, ohne Grading,
+  nur gebaut).

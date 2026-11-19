@@ -3903,6 +3903,78 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
     }
     card::End(tonemapCard);
 
+    // Colour grading of the scene (tonemap pass, ForwardColorGrading.hpp). Saved
+    // with the scene like the exposure; neutral values are not written.
+    card::Card gradingCard;
+    if (card::Begin(gradingCard, "##scene_color_grading", Translate("grading.title"),
+                    ICON_LC_PALETTE, ComponentColor(ComponentIcon::Environment)))
+    {
+        using namespace renderer::addons::forward;
+        ColorGradingSettings& g = ctx.state.tonemap.grading;
+        value_ui::InlineLabelScope rows;
+
+        // AgX looks belong to the AgX operator (Project Settings > Rendering).
+        const bool agx = ctx.state.tonemap.op == TonemapOperator::AgX;
+        const char* lookNames[kAgxLookCount] = {
+            Translate("grading.look_none"), Translate("grading.look_punchy"), Translate("grading.look_golden"),
+            Translate("grading.look_high_contrast"), Translate("grading.look_low_contrast") };
+        int look = static_cast<int>(g.look);
+        value_ui::RowLabel(Translate("grading.look"));
+        if (!agx) ImGui::BeginDisabled();
+        if (value_ui::Combo("##gradingLook", &look, lookNames, static_cast<int>(kAgxLookCount)))
+            g.look = static_cast<AgxLook>(look);
+        if (!agx) ImGui::EndDisabled();
+        ImGui::SetItemTooltip("%s", Translate(agx ? "grading.look_tip" : "grading.look_needs_agx"));
+
+        value_ui::RowLabel(Translate("grading.temperature"));
+        value_ui::SliderFloat("##gradingTemperature", &g.temperature, -100.f, 100.f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("%s", Translate("grading.temperature_tip"));
+        value_ui::RowLabel(Translate("grading.tint"));
+        value_ui::SliderFloat("##gradingTint", &g.tint, -100.f, 100.f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("%s", Translate("grading.tint_tip"));
+        value_ui::RowLabel(Translate("grading.color_filter"));
+        value_ui::ColorEdit3("##gradingFilter", g.colorFilter.data(),
+                             ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+        ImGui::SetItemTooltip("%s", Translate("grading.color_filter_tip"));
+        value_ui::RowLabel(Translate("grading.hue_shift"));
+        value_ui::SliderFloat("##gradingHue", &g.hueShift, -180.f, 180.f, "%.0f", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("%s", Translate("grading.hue_shift_tip"));
+        value_ui::RowLabel(Translate("grading.contrast"));
+        value_ui::SliderFloat("##gradingContrast", &g.contrast, 0.f, 2.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("%s", Translate("grading.contrast_tip"));
+        value_ui::RowLabel(Translate("grading.saturation"));
+        value_ui::SliderFloat("##gradingSaturation", &g.saturation, 0.f, 2.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("%s", Translate("grading.saturation_tip"));
+
+        if (ImGui::TreeNodeEx(Translate("grading.advanced"), ImGuiTreeNodeFlags_SpanAvailWidth))
+        {
+            const auto wheelRow = [](const char* label, const char* tip, const char* id, ColorGradingWheel& wheel)
+            {
+                ImGui::PushID(id);
+                value_ui::RowLabel(label);
+                value_ui::ColorEdit3("##color", wheel.color.data(),
+                                     ImGuiColorEditFlags_NoInputs | ImGuiColorEditFlags_NoLabel);
+                ImGui::SetItemTooltip("%s", tip);
+                ImGui::SameLine();
+                ImGui::SetNextItemWidth(-1.f);
+                ImGui::SliderFloat("##value", &wheel.value, -1.f, 1.f, "%+.2f", ImGuiSliderFlags_AlwaysClamp);
+                ImGui::SetItemTooltip("%s", tip);
+                ImGui::PopID();
+            };
+            wheelRow(Translate("grading.lift"), Translate("grading.lift_tip"), "lift", g.lift);
+            wheelRow(Translate("grading.gamma"), Translate("grading.gamma_tip"), "gamma", g.gamma);
+            wheelRow(Translate("grading.gain"), Translate("grading.gain_tip"), "gain", g.gain);
+            ImGui::TreePop();
+        }
+
+        const bool neutral = g.IsNeutral();
+        if (neutral) ImGui::BeginDisabled();
+        if (EditorActionButton(Translate("grading.reset"), ImVec2(-1.f, 0.f), EditorButtonTone::Neutral))
+            g = ColorGradingSettings{};
+        if (neutral) ImGui::EndDisabled();
+    }
+    card::End(gradingCard);
+
     // Reflection probes add-on: bake passes (saved with the scene) and baking.
     card::Card probeCard;
     if (card::Begin(probeCard, "##scene_reflection_probes", Translate("probe.scene_title"),

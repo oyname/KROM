@@ -350,6 +350,11 @@ void SetActiveEnvironment(engine::renderer::EnvironmentHandle environment);
 // pipeline.
 void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float exposureEv = 0.0f);
 [[nodiscard]] engine::renderer::addons::forward::TonemapSettings GetTonemapping();
+// Colour grading of the tonemap pass (white balance, filter, hue, contrast,
+// saturation, lift/gamma/gain, AgX look). Belongs to the scene like the
+// exposure: every scene load sets it again. Default = neutral.
+void SetColorGrading(const engine::renderer::addons::forward::ColorGradingSettings& grading);
+[[nodiscard]] engine::renderer::addons::forward::ColorGradingSettings GetColorGrading();
 
 // MSAA for the scene: 1 = off, 2 or 4 samples (rounded down to these). Takes
 // effect on the next frame. No effect under OpenGL.

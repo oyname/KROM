@@ -4,7 +4,8 @@
 #include "addons/script/ScriptRegistry.hpp"
 
 namespace engine::script {
-inline constexpr uint32_t ScriptModuleAbiVersion = 4;
+// 5: script::RenderSettings gained ColorGrading (size change of a by-value API type).
+inline constexpr uint32_t ScriptModuleAbiVersion = 5;
 
 struct ScriptModuleAbi
 {

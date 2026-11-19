@@ -17,6 +17,36 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Colour grading and AgX looks per scene (Claude, 2026-11-19)
+
+- Step 7b of `doc/PLAN_BILDQUALITAET_2.md`, on `main`, not committed yet. UI agreed with the
+  user: card "Color grading" in the scene Inspector below "Exposure".
+- `addons/forward/ForwardColorGrading.hpp`: `ColorGradingSettings` (AgX look, temperature,
+  tint, color filter, hue shift, contrast, saturation, lift/gamma/gain as tint + value),
+  `BuildColorGradingConstants` (one 3x3 matrix = saturation * hue * filter * LMS white
+  balance, contrast in log space, LGG, AgX look CDL; neutral = no flags). Part of
+  `TonemapSettings::grading`, so editor and krom.h runtime hand it over with the exposure.
+- `shaders/passthrough.ps.hlsl`: PerPass grows to 160 bytes (static_assert in
+  `ForwardFeature.cpp`); contrast + matrix before the operator, look inside `TonemapAgx`
+  before the outset, LGG on gamma-2.2 encoded output. OpenGL GLSL unchanged (frozen; the
+  generated GLSL experiment was already stale).
+- Scene key `colorGrading` (object in `environment`) in editor .json and .kscene, written only
+  when not neutral; `ReadSceneColorGradingJson` / `WriteSceneColorGradingJson` in
+  `ForwardTonemapJson.hpp`.
+- Scripts: `RenderSettings::grading` (`script::ColorGrading`, converters in
+  `addons/script/ScriptColorGrading.hpp`); krom.h `SetColorGrading`/`GetColorGrading`.
+  `ScriptModuleAbiVersion` 4 -> 5 because `RenderSettings` changed size (earlier additions
+  to it did not bump the ABI; stale script DLLs would have read past the struct).
+- Checked: Debug x64 targets built with `-j6` (`out/claude-grading-build.log`), `krom_tests`
+  all passed incl. "Colour grading constants" and "Colour grading scene keys and script
+  view". Room 2 Lit capture neutral vs. graded (golden, +20 temperature, contrast 1.1,
+  saturation 1.2, gain +0.1) on DX11 and Vulkan with `KROM_VALIDATION=1`: no errors, no
+  VUIDs, DX11 vs. Vulkan 0.45/255 mean difference (`out/claude-grading-check/vergleich.png`).
+- Not checked: the Inspector card by hand; a stale script DLL being rejected and rebuilt
+  after the ABI bump.
+- Please review: order of operations in the shader, the white balance constants, and
+  whether the ABI bump fits the script rebuild workflow.
+
 ## Normal Blend im Materialgraphen (Codex, 2026-11-19)
 
 - Auf ausdrücklichen Nutzerauftrag direkt von Codex implementiert: zwei Normal-Maps im

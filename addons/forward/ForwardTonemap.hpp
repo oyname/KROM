@@ -6,6 +6,7 @@
 // =============================================================================
 #include <algorithm>
 #include <atomic>
+#include "addons/forward/ForwardColorGrading.hpp"
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -66,6 +67,8 @@ struct TonemapSettings
     float           exposureEv = 0.0f;   // Fixed: exposure in EV stops (HDR colour *= 2^EV); Auto: correction
     ExposureMode    exposureMode = ExposureMode::Fixed;
     AutoExposureSettings autoExposure{};
+    // Colour grading of the scene (ForwardColorGrading.hpp); default = neutral.
+    ColorGradingSettings grading{};
     // Editor only, never saved: keeps the current automatic exposure.
     bool            freezeAutoExposure = false;
 
