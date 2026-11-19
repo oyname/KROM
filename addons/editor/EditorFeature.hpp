@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <functional>
 #include <future>
+#include <map>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -108,6 +109,8 @@ struct EditorState
     EntityID               hierarchyRevealEntity       = NULL_ENTITY;
     bool                   hierarchyRevealFocus        = false;
     EntityID               hierarchyHighlightedEntity  = NULL_ENTITY;
+    // Project editor settings: scene name -> persistent entity GUID -> foldout state.
+    std::map<std::string, std::map<std::string, bool>> hierarchyOpenStates;
     // Stable identities for history and UI, bound to the currently live entities.
     std::unordered_map<uint32_t, EditorEntityId> stableEntityIds;
     std::unordered_map<EditorEntityId, EntityID> entitiesByStableId;

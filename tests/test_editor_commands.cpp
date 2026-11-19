@@ -6,6 +6,7 @@
 #include "addons/editor/EditorCommands.hpp"
 #include "addons/editor/EditorFileHistory.hpp"
 #include "addons/editor/EditorPreferences.hpp"
+#include "addons/editor/EditorSerialization.hpp"
 #include "addons/editor/EditorAssetBrowser.hpp"
 #include "addons/editor/EditorAnimationControllers.hpp"
 #include "addons/editor/EditorUI.hpp"
@@ -4360,6 +4361,127 @@ static void TestHierarchyFoldoutsSurvivePlay(test::TestContext& ctx)
     ImGui::SetCurrentContext(previous);
 }
 
+static void TestHierarchyFoldoutsSurviveRestart(test::TestContext& ctx)
+{
+    std::string savedScene, savedHierarchy;
+    auto session = [&](int run) {
+        const bool reopening = run > 0;
+        auto meta = CreateEditorCommandsRegistry();
+        World world(meta);
+        MaterialSystem materials;
+        assets::AssetRegistry assets;
+        EditorState state;
+        auto editor = CreateEditorContext(world, materials, assets, state);
+        editor.currentEditorSceneName = "Main";
+        EntityID root, branch;
+        if (reopening)
+        {
+            // A fresh world allocates different EntityIDs; only GUIDs are persistent.
+            CHECK(ctx, world.CreateEntity().IsValid());
+            state.nextStableEntityId = 100;
+            serialization::SceneDeserializer loader(world);
+            loader.RegisterDefaultHandlers();
+            CHECK(ctx, loader.DeserializeFromJson(savedScene).success);
+            world.View<GuidComponent>([&](EntityID id, const GuidComponent& guid) {
+                if (guid.guid == "root") root = id;
+                if (guid.guid == "branch") branch = id;
+            });
+            std::string error;
+            const auto settings = serialization::JsonParser::Parse(savedHierarchy, error);
+            CHECK(ctx, error.empty());
+            DeserializeEditorHierarchyState(settings, state);
+        }
+        else
+        {
+            root = world.CreateEntity();
+            branch = world.CreateEntity();
+            const EntityID leaf = world.CreateEntity();
+            world.Add<GuidComponent>(root, GuidComponent{"root"});
+            world.Add<GuidComponent>(branch, GuidComponent{"branch"});
+            world.Add<ParentComponent>(branch, ParentComponent{root});
+            world.Add<ParentComponent>(leaf, ParentComponent{branch});
+            serialization::SceneSerializer writer(world);
+            writer.RegisterDefaultHandlers();
+            savedScene = writer.SerializeToJson();
+            // Same GUID in another scene must keep its own state.
+            state.hierarchyOpenStates["Other"]["branch"] = true;
+        }
+        int saves = 0;
+        editor.saveEditorSettings = [&] {
+            ++saves;
+            savedHierarchy = SerializeEditorHierarchyState(state);
+            return true;
+        };
+
+        auto* previous = ImGui::GetCurrentContext();
+        auto* gui = ImGui::CreateContext();
+        auto& io = ImGui::GetIO();
+        io.IniFilename = nullptr;
+        io.DisplaySize = {1280.f, 900.f};
+        io.DeltaTime = 1.f / 60.f;
+        unsigned char* pixels;
+        int width, height;
+        io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+        auto frame = [&] {
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({0.f, 0.f});
+            ImGui::SetNextWindowSize({380.f, 300.f});
+            engine::renderer::addons::editor::detail::DrawEntityList(editor);
+            ImGui::Render();
+        };
+        const auto rootKey = static_cast<uintptr_t>(GetStableEditorEntityId(editor, root));
+        const auto branchKey = static_cast<uintptr_t>(GetStableEditorEntityId(editor, branch));
+        frame();
+        auto* hierarchy = ImGui::FindWindowByName("Hierarchie##editor");
+        const ImGuiID rootId = ImHashData(&rootKey, sizeof(rootKey), hierarchy->ID);
+        const ImGuiID branchId = ImHashData(&branchKey, sizeof(branchKey), rootId);
+        auto toggle = [&](ImGuiID id, int open) {
+            ImGui::ActivateItemByID(id);
+            frame();
+            CHECK_EQ(ctx, hierarchy->StateStorage.GetInt(id, -1), open);
+        };
+        CHECK_EQ(ctx, saves, 0);
+        if (run == 2)
+        {
+            CHECK_EQ(ctx, hierarchy->StateStorage.GetInt(rootId, -1), 1);
+            CHECK_EQ(ctx, hierarchy->StateStorage.GetInt(branchId, -1), 1);
+        }
+        else if (reopening)
+        {
+            CHECK_EQ(ctx, hierarchy->StateStorage.GetInt(rootId, -1), 0);
+            toggle(rootId, 1);
+            // The branch was hidden on startup but must still restore as closed.
+            CHECK_EQ(ctx, hierarchy->StateStorage.GetInt(branchId, -1), 0);
+            toggle(branchId, 1);
+        }
+        else
+        {
+            toggle(branchId, 0);
+            toggle(rootId, 0);
+        }
+        CHECK_EQ(ctx, saves, run == 2 ? 0 : 2);
+        frame();
+        CHECK_EQ(ctx, saves, run == 2 ? 0 : 2); // No disk writes on unchanged frames.
+        CHECK(ctx, state.hierarchyOpenStates["Other"]["branch"]);
+        ImGui::DestroyContext(gui);
+        ImGui::SetCurrentContext(previous);
+    };
+    session(0);
+    session(1);
+    session(2); // Explicitly opened nodes also survive another restart.
+
+    EditorState state;
+    state.hierarchyOpenStates["Previous project"]["root"] = false;
+    std::string error;
+    DeserializeEditorHierarchyState(serialization::JsonParser::Parse(
+        R"({"Main":{"closed":false,"open":true,"invalid":0,"":true},"invalid":[],"":{}})", error), state);
+    CHECK(ctx, error.empty());
+    CHECK_EQ(ctx, state.hierarchyOpenStates.size(), size_t{1});
+    CHECK_EQ(ctx, state.hierarchyOpenStates["Main"].size(), size_t{2});
+    CHECK(ctx, !state.hierarchyOpenStates["Main"]["closed"]);
+    CHECK(ctx, state.hierarchyOpenStates["Main"]["open"]);
+}
+
 static void TestInspectorComponentStaysOpenAcrossPlayAndPrefabEdit(test::TestContext& ctx)
 {
     auto meta = CreateEditorCommandsRegistry();
@@ -5610,6 +5732,7 @@ int RunEditorCommandTests()
     suite.Add("Transform Inspector is consistent across selection sources", TestTransformInspectorSelectionSource);
     suite.Add("Particle atlas dragging converts grid and supports undo", TestParticleAtlasDragAndUndo);
     suite.Add("Hierarchy foldouts survive Play and Stop", TestHierarchyFoldoutsSurvivePlay);
+    suite.Add("Hierarchy foldouts survive editor restart", TestHierarchyFoldoutsSurviveRestart);
     suite.Add("Hierarchy marks persistent objects from unloaded scenes", TestHierarchyMarksCarriedPersistentObjects);
     suite.Add("Inspector component foldout survives Play and reopening a prefab", TestInspectorComponentStaysOpenAcrossPlayAndPrefabEdit);
     suite.Add("Prefab mode blocked during Play", TestPrefabModeBlockedDuringPlay);

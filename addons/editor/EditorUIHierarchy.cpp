@@ -378,6 +378,7 @@ void DrawEntityList(EditorFrameContext& ctx)
     // Set when the mouse is over a row; the panel-wide root drop then stays off,
     // so releasing a drag on its own row does not move the entity to the root.
     bool mouseOverRow = false;
+    bool hierarchyStateChanged = false;
 
     auto drawEntity = [&](auto&& self, EntityID id, uint32_t depth) -> void {
         if (depth > 32u)
@@ -417,6 +418,26 @@ void DrawEntityList(EditorFrameContext& ctx)
         if (dimmed)
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 
+        // ImGui's tree storage lasts only for this process. Restore scene foldouts
+        // by GUID so renamed/reparented entities and remapped runtime IDs still match.
+        // Prefab preview entities belong to a separate, temporary world view.
+        const auto* guid = !prefabMode ? ctx.world.Get<GuidComponent>(id) : nullptr;
+        const std::string& scene = origin && !origin->sceneName.empty()
+            ? origin->sceneName : ctx.currentEditorSceneName;
+        const bool persistentFoldout = visibleDescendant && guid && !guid->guid.empty() && !scene.empty();
+        const bool* storedOpen = nullptr;
+        if (persistentFoldout)
+        {
+            const auto sceneIt = ctx.state.hierarchyOpenStates.find(scene);
+            if (sceneIt != ctx.state.hierarchyOpenStates.end())
+            {
+                const auto entityIt = sceneIt->second.find(guid->guid);
+                if (entityIt != sceneIt->second.end())
+                    storedOpen = &entityIt->second;
+            }
+            if (storedOpen)
+                ImGui::SetNextItemOpen(*storedOpen);
+        }
         if (id != reveal && revealAncestors.count(id.value) > 0)
             ImGui::SetNextItemOpen(true);
         const bool open = ImGui::TreeNodeEx(
@@ -424,6 +445,11 @@ void DrawEntityList(EditorFrameContext& ctx)
             flags,
             "%s",
             label);
+        if (persistentFoldout && (storedOpen ? *storedOpen != open : !open || ImGui::IsItemToggledOpen()))
+        {
+            ctx.state.hierarchyOpenStates[scene][guid->guid] = open;
+            hierarchyStateChanged = true;
+        }
         const ImVec2 rowMin = ImGui::GetItemRectMin();
         const ImVec2 rowMax = ImGui::GetItemRectMax();
         const ImGuiID rowId = ImGui::GetItemID();
@@ -789,6 +815,8 @@ void DrawEntityList(EditorFrameContext& ctx)
 
     ctx.hierarchyPanelWidth = ImGui::GetWindowWidth();
     ImGui::End();
+    if (hierarchyStateChanged && ctx.saveEditorSettings)
+        ctx.saveEditorSettings();
 }
 
 } // namespace detail

@@ -1213,6 +1213,7 @@ std::string EditorSettingsJson(const renderer::addons::editor::EditorState& stat
     std::ostringstream f;
     f << "{\n"
       << "  \"lastScene\":\"" << EscapeJsonString(lastScene) << "\",\n"
+      << "  \"hierarchy\":" << renderer::addons::editor::SerializeEditorHierarchyState(state) << ",\n"
       << "  \"camera\":{\n"
       << "    \"fovDeg\":"    << FloatJson(cam.fovDeg)    << ",\n"
       << "    \"nearPlane\":" << FloatJson(cam.nearPlane) << ",\n"
@@ -1285,6 +1286,7 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
                         renderer::addons::editor::EditorState& state)
 {
     ResetEditorLayerNames(state);
+    state.hierarchyOpenStates.clear();
 
     if (projectRoot.empty())
         return;
@@ -1301,6 +1303,8 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
     std::string parseError;
     const serialization::JsonValue root = serialization::JsonParser::Parse(json, parseError);
     if (!parseError.empty() || !root.IsObject()) return;
+    if (const auto* hierarchy = root.Get("hierarchy"))
+        renderer::addons::editor::DeserializeEditorHierarchyState(*hierarchy, state);
     const serialization::JsonValue* c = root.Get("camera");
     if (c && c->IsObject())
     {
@@ -4411,6 +4415,7 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
         renderer::addons::editor::ClearEditorHistory(m_editorFrameCtx->state);
         m_editorFrameCtx->state.selectedEntity = NULL_ENTITY;
         ResetEditorLayerNames(m_editorFrameCtx->state);
+        m_editorFrameCtx->state.hierarchyOpenStates.clear();
 
         // Material-Editor-State zurücksetzen (identisch zu LoadProjectFile).
         auto& s = m_editorFrameCtx->state;
