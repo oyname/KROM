@@ -1,3 +1,4 @@
+#include "ecs/HierarchyState.hpp"
 #include "addons/audio/AudioSystem.hpp"
 #include "core/PathUtf8.hpp"
 #include "addons/audio/AudioComponents.hpp"
@@ -179,7 +180,7 @@ void AudioSystem::Update(ecs::World& world)
 
     std::unordered_set<uint32_t> seen;
     world.View<AudioSourceComponent>([&](EntityID id, const AudioSourceComponent& source) {
-        if (const auto* active = world.Get<ActiveComponent>(id); active && !active->active)
+        if (!IsEntityActiveInHierarchy(world, id))
             return;
         if (source.clipPath.empty())
             return;

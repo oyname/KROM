@@ -1,3 +1,4 @@
+#include "ecs/HierarchyState.hpp"
 // =============================================================================
 // KROM Engine - addons/editor/EditorUI.cpp
 // Einstieg (DrawEditorPanels/DrawLightDebugLines), Layout, Transform-Mathe,
@@ -665,7 +666,7 @@ static bool PickMeshlessColliders(EditorFrameContext& ctx, const collision::Ray&
     auto eligible = [&](EntityID id) -> const WorldTransformComponent* {
         if (ctx.world.Has<MeshComponent>(id) || !IsScenePickEntity(ctx.world, id))
             return nullptr;
-        if (const auto* active = ctx.world.Get<ActiveComponent>(id); active && !active->active)
+        if (!IsEntityActiveInHierarchy(ctx.world, id) || !IsEntityVisibleInHierarchy(ctx.world, id))
             return nullptr;
         return ctx.world.Get<WorldTransformComponent>(id);
     };

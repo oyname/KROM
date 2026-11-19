@@ -107,6 +107,7 @@ void ApplyRecordComponents(ecs::World& world,
                            script::ScriptRegistry* scriptRegistry)
 {
     world.Add<ActiveComponent>(entity, ActiveComponent{ active && record.active });
+    world.Add<VisibilityComponent>(entity, VisibilityComponent{record.visible});
 
     auto& transform = world.Add<TransformComponent>(entity);
     transform.localPosition = record.localPosition;
@@ -493,6 +494,7 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
     if (!record.animationControllerPath.empty())
         w.WriteString("animationControllerPath", record.animationControllerPath);
     w.WriteBool("active", record.active);
+    w.WriteBool("visible", record.visible);
     w.WriteBool("addBounds", record.addBounds);
     if (record.addBounds)
     {
@@ -666,6 +668,7 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
         record.animation = findAnimation();
     }
 
+    if (const auto* v = OptionalObjectField(value, "visible")) record.visible = v->AsBool();
     if (const auto* v = OptionalObjectField(value, "active")) record.active = v->AsBool();
     if (const auto* v = OptionalObjectField(value, "addBounds")) record.addBounds = v->AsBool();
     if (const auto* v = OptionalObjectField(value, "boundsCenterLocal")) record.boundsCenterLocal = v->AsVec3();
@@ -999,6 +1002,8 @@ PrefabAsset BuildPrefabFromWorldEntity(
         if (record.name.empty())
             record.name = currentIndex == 0 ? prefab.name : ("Entity_" + std::to_string(currentIndex));
 
+        if (const auto* visibility = world.Get<VisibilityComponent>(entity))
+            record.visible = visibility->visible;
         if (const auto* active = world.Get<ActiveComponent>(entity))
             record.active = active->active;
 
@@ -1325,6 +1330,7 @@ void ResetPrefabInstance(
             continue;
 
         const PrefabEntityRecord& record = prefab.records[i];
+        world.SetComponent(entity, VisibilityComponent{record.visible});
 
         if (auto* active = world.Get<ActiveComponent>(entity))
             active->active = options.active && record.active;

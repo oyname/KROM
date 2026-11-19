@@ -4241,25 +4241,33 @@ void DrawInspector(EditorFrameContext& ctx)
             ImGui::SameLine();
 
             // Visible (nur wenn erste Entity ein Mesh hat)
-            const bool firstHasMesh = first.IsValid() && ctx.world.IsAlive(first)
-                                   && ctx.world.Get<MeshComponent>(first) != nullptr;
+            const bool firstAlive = first.IsValid() && ctx.world.IsAlive(first);
             bool visibleVal = true;
             if (first.IsValid() && ctx.world.IsAlive(first))
                 if (const auto* mc = ctx.world.Get<MeshComponent>(first))
                     visibleVal = mc->visible;
-            if (!firstHasMesh) ImGui::BeginDisabled();
+            if (const auto* visibility = ctx.world.Get<VisibilityComponent>(first))
+                visibleVal = visibleVal && visibility->visible;
+            if (!firstAlive) ImGui::BeginDisabled();
             if (value_ui::Checkbox(TranslateLabel("field.visible", "Visible").c_str(), &visibleVal))
             {
-                BeginPendingSelectionComponentEdit<MeshComponent>(ctx, "multisel.visible", "history.visible");
+                std::vector<EditorComponentTarget> targets;
                 for (EntityID e : ctx.state.multiSelection)
-                {
-                    if (!e.IsValid() || !ctx.world.IsAlive(e)) continue;
-                    if (auto* mc = ctx.world.Get<MeshComponent>(e))
-                        mc->visible = visibleVal;
-                }
-                CommitPendingComponentEdit(ctx, "multisel.visible");
+                    if (ctx.world.IsAlive(e))
+                    {
+                        targets.push_back({e, ComponentTypeID<MeshComponent>::Get()});
+                        targets.push_back({e, ComponentTypeID<VisibilityComponent>::Get()});
+                    }
+                EditComponents(ctx, "history.visible", targets, [&] {
+                    for (EntityID e : ctx.state.multiSelection)
+                    {
+                        if (!ctx.world.IsAlive(e)) continue;
+                        ctx.world.SetComponent(e, VisibilityComponent{visibleVal});
+                        if (auto* mesh = ctx.world.Get<MeshComponent>(e)) mesh->visible = visibleVal;
+                    }
+                });
             }
-            if (!firstHasMesh) ImGui::EndDisabled();
+            if (!firstAlive) ImGui::EndDisabled();
 
             // Persistent
             bool persistVal = false;
@@ -4400,7 +4408,20 @@ void DrawInspector(EditorFrameContext& ctx)
     }
     ImGui::PopStyleVar();
 
-    // A hierarchy folder only has a name and the active flag: no transform,
+    if (!headIsCamera && !ctx.world.Has<MeshComponent>(selected))
+    {
+        const auto* visibility = ctx.world.Get<VisibilityComponent>(selected);
+        bool visible = !visibility || visibility->visible;
+        if (value_ui::Checkbox(TranslateLabel("field.visible", "Visible").c_str(), &visible))
+        {
+            const std::string key = MakeEditHistoryKey(selected, "visibility");
+            BeginPendingComponentEdit<VisibilityComponent>(ctx, key, "history.visible", selected);
+            ctx.world.SetComponent(selected, VisibilityComponent{visible});
+            CommitPendingComponentEdit(ctx, key);
+        }
+    }
+
+    // A hierarchy folder only has a name and state flags: no transform,
     // no components.
     if (ctx.world.Has<FolderComponent>(selected))
     {
@@ -4556,15 +4577,20 @@ void DrawInspector(EditorFrameContext& ctx)
         if (!isCamera)
         {
             auto* meshComp = ctx.world.Get<MeshComponent>(selected);
-            bool isVisible = (meshComp == nullptr) || meshComp->visible;
+            const auto* visibility = ctx.world.Get<VisibilityComponent>(selected);
+            bool isVisible = (!meshComp || meshComp->visible) && (!visibility || visibility->visible);
             const bool hasNoMesh = (meshComp == nullptr);
             if (hasNoMesh) ImGui::BeginDisabled();
             if (value_ui::Checkbox(TranslateLabel("field.visible", "Visible").c_str(), &isVisible))
             {
-                BeginPendingComponentEdit<MeshComponent>(ctx, MakeEditHistoryKey(selected, "visible"), "history.visible", selected);
-                if (meshComp)
-                    meshComp->visible = isVisible;
-                CommitPendingComponentEdit(ctx, MakeEditHistoryKey(selected, "visible"));
+                const EditorComponentTarget targets[] = {
+                    {selected, ComponentTypeID<MeshComponent>::Get()},
+                    {selected, ComponentTypeID<VisibilityComponent>::Get()}
+                };
+                EditComponents(ctx, "history.visible", targets, [&] {
+                    ctx.world.SetComponent(selected, VisibilityComponent{isVisible});
+                    if (auto* mesh = ctx.world.Get<MeshComponent>(selected)) mesh->visible = isVisible;
+                });
             }
             if (hasNoMesh) ImGui::EndDisabled();
             if (ImGui::IsItemHovered())

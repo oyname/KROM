@@ -268,6 +268,10 @@ void SceneSerializer::RegisterDefaultHandlers()
         w.BeginObject(); w.WriteString("type","ActiveComponent");
         w.WriteBool("active",c.active); w.EndObject();
     });
+    RegisterSerializer<VisibilityComponent>([](JsonWriter& w,const VisibilityComponent& c){
+        w.BeginObject(); w.WriteString("type","VisibilityComponent");
+        w.WriteBool("visible",c.visible); w.EndObject();
+    });
     RegisterSerializer<FolderComponent>([](JsonWriter& w,const FolderComponent&){
         w.BeginObject(); w.WriteString("type","FolderComponent"); w.EndObject();
     });
@@ -373,6 +377,11 @@ void SceneDeserializer::RegisterDefaultHandlers()
         ActiveComponent ac{};
         if (const auto* a=v.Get("active")) ac.active=a->AsBool();
         w.SetComponent<ActiveComponent>(id,ac);
+    });
+    RegisterHandler<VisibilityComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
+        VisibilityComponent visibility{};
+        if (const auto* value = v.Get("visible")) visibility.visible = value->AsBool();
+        w.SetComponent(id, visibility);
     });
     RegisterHandler<FolderComponent>([](const JsonValue&,ecs::World& w,EntityID id){
         w.SetComponent(id, FolderComponent{});

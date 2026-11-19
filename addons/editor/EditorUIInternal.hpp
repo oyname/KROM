@@ -182,6 +182,7 @@ void SetWorldScale(EditorFrameContext& ctx, EntityID entity, TransformComponent&
 
 // ── EditorUIHierarchy.cpp ─────────────────────────────────────────────────
 void DrawEntityList(EditorFrameContext& ctx);
+void FrameHierarchyEntity(EditorFrameContext& ctx, EntityID entity);
 
 // ── EditorUIInspector.cpp ─────────────────────────────────────────────────
 EntityID FindRigidBodyAncestor(const ecs::World& world, EntityID entity);

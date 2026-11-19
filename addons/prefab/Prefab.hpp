@@ -77,6 +77,7 @@ struct PrefabEntityRecord
     std::string animationControllerPath;   // "*.animctrl"; empty: single clip
 
     bool active = true;
+    bool visible = true;
     bool addBounds = false;
     math::Vec3 boundsCenterLocal{0.f, 0.f, 0.f};
     math::Vec3 boundsExtentsLocal{1.f, 1.f, 1.f};

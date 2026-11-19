@@ -1117,6 +1117,7 @@ static EntityID DuplicateEntitySelfRaw(EditorFrameContext& ctx, EntityID source)
     };
     copyIf(std::type_identity<OBBComponent>{});
     copyIf(std::type_identity<FolderComponent>{});
+    copyIf(std::type_identity<VisibilityComponent>{});
     if (const auto* probe = ctx.world.Get<ReflectionProbeComponent>(source))
     {
         // The copy bakes to its own file.

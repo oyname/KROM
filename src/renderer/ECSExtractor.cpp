@@ -1,3 +1,4 @@
+#include "ecs/HierarchyState.hpp"
 // =============================================================================
 // KROM Engine - src/renderer/ECSExtractor.cpp
 // =============================================================================
@@ -9,8 +10,7 @@ namespace engine::renderer {
 
 bool ECSExtractor::IsEntityActive(const ecs::World& world, EntityID entity)
 {
-    const auto* active = world.Get<ActiveComponent>(entity);
-    return active == nullptr || active->active;
+    return IsEntityActiveInHierarchy(world, entity);
 }
 
 } // namespace engine::renderer

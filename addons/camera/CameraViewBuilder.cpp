@@ -1,3 +1,4 @@
+#include "ecs/HierarchyState.hpp"
 #include "addons/camera/CameraViewBuilder.hpp"
 
 #include <algorithm>
@@ -8,8 +9,7 @@ namespace {
 
 [[nodiscard]] bool IsEntityActive(const ecs::World& world, EntityID entity) noexcept
 {
-    const auto* active = world.Get<ActiveComponent>(entity);
-    return active == nullptr || active->active;
+    return IsEntityActiveInHierarchy(world, entity);
 }
 
 [[nodiscard]] float ResolveAspectRatio(const CameraComponent& camera,

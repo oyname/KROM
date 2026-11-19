@@ -2229,6 +2229,7 @@ void main()
                 FrameRecipe preContributorRecipe{};
                 FrameRecipe afterDepthRecipe{};
                 FrameRecipe postContributorRecipe{};
+                FrameRecipe overlayContributorRecipe{};
                 size_t beforeTransparentCount = 0u;
                 if (!context.passContributors.empty())
                 {
@@ -2262,7 +2263,12 @@ void main()
                         context.enableScreenSpaceReflections,
                         msaaSamples,
                         mrtSupported,
-                        context.enableDepthPrepass
+                        context.enableDepthPrepass,
+                        params.HasSceneOutput(),
+                        context.defaultTonemapMaterial.IsValid() && context.tonemapMaterialSystem &&
+                            MaterialRuntimeBridge::GetRuntimeDesc(*context.tonemapMaterialSystem, context.defaultTonemapMaterial)
+                            ? MaterialRuntimeBridge::GetRuntimeDesc(*context.tonemapMaterialSystem, context.defaultTonemapMaterial)->colorFormat
+                            : Format::RGBA8_UNORM_SRGB
                     };
                     const auto buildPhase = [&](PassPhase phase, FrameRecipe& recipe)
                     {
@@ -2276,6 +2282,7 @@ void main()
                     buildPhase(PassPhase::BeforeTransparent, postContributorRecipe);
                     beforeTransparentCount = postContributorRecipe.passes.size();
                     buildPhase(PassPhase::AfterOpaque, postContributorRecipe);
+                    buildPhase(PassPhase::AfterPostProcess, overlayContributorRecipe);
                 }
 
                 const auto hasResource = [](const FrameRecipe& recipe, std::string_view name)
@@ -2309,7 +2316,7 @@ void main()
 
                 const StandardFrameBuildResult builtResources =
                     StandardFrameRecipeBuilder::Build(context.renderGraph, params, callbacks,
-                        &preContributorRecipe, &postContributorRecipe, &afterDepthRecipe, beforeTransparentCount);
+                        &preContributorRecipe, &postContributorRecipe, &afterDepthRecipe, beforeTransparentCount, &overlayContributorRecipe);
                 result.backbuffer = builtResources.backbuffer;
                 pipelineState->resources = builtResources;
                 pipelineState->ready = true;

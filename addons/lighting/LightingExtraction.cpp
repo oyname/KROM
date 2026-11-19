@@ -2,6 +2,7 @@
 
 #include "addons/lighting/LightingComponents.hpp"
 #include "ecs/Components.hpp"
+#include "ecs/HierarchyState.hpp"
 #include "renderer/RenderFrameTypes.hpp"
 #include <algorithm>
 #include <cmath>
@@ -12,8 +13,7 @@ namespace {
 
 [[nodiscard]] bool IsEntityActive(const ecs::World& world, EntityID entity) noexcept
 {
-    const auto* active = world.Get<ActiveComponent>(entity);
-    return active == nullptr || active->active;
+    return IsEntityActiveInHierarchy(world, entity) && IsEntityVisibleInHierarchy(world, entity);
 }
 
 [[nodiscard]] uint32_t GetLightTypePriority(ExtractedLightType type) noexcept

@@ -1,4 +1,5 @@
 #include "addons/particles/ParticleSystem.hpp"
+#include "ecs/HierarchyState.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -691,6 +692,9 @@ void ParticleSystem::Update(const ecs::World& world, float dt,
         state.entity = id;
         RefreshLook(state);
         state.seen = true;
+        const bool active = IsEntityActiveInHierarchy(world, id);
+        state.renderVisible = active && IsEntityVisibleInHierarchy(world, id);
+        if (!active) return;
         state.floorY = FloorHeight(emitter, transform.position);
 
         // Bestehende Partikel altern lassen und bewegen.
@@ -747,6 +751,7 @@ void ParticleSystem::CollectBillboards(const math::Vec3& cameraPosition,
 
     const auto collect = [&](const EmitterState& state)
     {
+        if (!state.renderVisible) return;
         const ParticleEmitterComponent& p = state.params;
         const math::Vec3 startLinear{SrgbToLinear(p.startColor.x), SrgbToLinear(p.startColor.y), SrgbToLinear(p.startColor.z)};
         const math::Vec3 endLinear{SrgbToLinear(p.endColor.x), SrgbToLinear(p.endColor.y), SrgbToLinear(p.endColor.z)};

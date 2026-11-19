@@ -3567,6 +3567,7 @@ bool SetVisible(LPENTITY entity, bool visible, bool recursive)
         if (!state.world->IsAlive(current))
             return;
 
+        state.world->SetComponent(current, engine::VisibilityComponent{visible});
         if (auto* mesh = state.world->Get<engine::MeshComponent>(current))
             mesh->visible = visible;
 
@@ -3574,7 +3575,9 @@ bool SetVisible(LPENTITY entity, bool visible, bool recursive)
             return;
         if (const auto* children = state.world->Get<engine::ChildrenComponent>(current))
         {
-            for (const LPENTITY child : children->children)
+            // Adding state to a descendant can migrate an ancestor's archetype slot.
+            const auto descendants = children->children;
+            for (const LPENTITY child : descendants)
                 apply(child);
         }
     };
@@ -3604,7 +3607,9 @@ bool SetActive(LPENTITY entity, bool active, bool recursive)
             return;
         if (const auto* children = state.world->Get<engine::ChildrenComponent>(current))
         {
-            for (const LPENTITY child : children->children)
+            // Adding state to a descendant can migrate an ancestor's archetype slot.
+            const auto descendants = children->children;
+            for (const LPENTITY child : descendants)
                 apply(child);
         }
     };

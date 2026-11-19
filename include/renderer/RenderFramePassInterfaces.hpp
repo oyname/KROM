@@ -22,6 +22,7 @@ enum class PassPhase : uint8_t
     AfterOpaque  = 1,
     AfterDepthPrepass,
     BeforeTransparent,
+    AfterPostProcess,
 };
 
 struct PassBuildContext;
@@ -58,6 +59,8 @@ struct PassBuildContext
         // View allows a depth prepass. Contributors that list
         // FrameRecipe::opaqueInputs only do so when this is set.
         bool enableDepthPrepass = false;
+        bool hasSceneOutput = false;
+        Format outputColorFormat = Format::RGBA8_UNORM_SRGB;
 
         [[nodiscard]] uint32_t ActiveShadowResolution() const noexcept
         {

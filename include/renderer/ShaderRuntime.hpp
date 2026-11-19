@@ -189,6 +189,8 @@ public:
     // multisampled target sets it around those draws and restores 1 afterwards.
     // The shadow pass always uses 1.
     [[nodiscard]] TextureHandle GetWhiteFallbackTexture() const noexcept { return m_fallbackTextures.white; }
+    void SetEditorGizmoColorFormat(Format format) noexcept { m_editorGizmoColorFormat = format; }
+    [[nodiscard]] Format GetEditorGizmoColorFormat() const noexcept { return m_editorGizmoColorFormat; }
     void SetTargetSampleCount(uint32_t sampleCount) noexcept { m_targetSampleCount = sampleCount > 1u ? sampleCount : 1u; }
     [[nodiscard]] uint32_t GetTargetSampleCount() const noexcept { return m_targetSampleCount; }
     // Extra colour targets (MRT) of the pass the next material draws go to.
@@ -255,6 +257,7 @@ private:
     RuntimeSamplerSet m_samplers{};
     RuntimeFallbackTextures m_fallbackTextures{};
     EnvironmentRuntimeState m_environment{};
+    Format m_editorGizmoColorFormat = Format::Unknown;
     uint32_t m_targetSampleCount = 1u;
     std::array<Format, kMaxExtraColorTargets> m_targetExtraColorFormats{};
     uint32_t m_targetExtraColorCount = 0u;

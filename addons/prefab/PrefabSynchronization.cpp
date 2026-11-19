@@ -422,6 +422,7 @@ void ApplyChanges(ecs::World& world, EntityID entity, const JsonValue& before,
     }
     copy.template operator()<NameComponent>({"name"});
     copy.template operator()<ActiveComponent>({"active"});
+    copy.template operator()<VisibilityComponent>({"visible"});
     copy.template operator()<MeshComponent>({"meshAssetPath", "meshVisible", "castShadows", "receiveShadows", "layerMask"});
     copy.template operator()<MaterialComponent>({"materialAssetPath", "materialOverrideSource", "baseColorTexturePath", "slotOverrides", "materialSubmeshIndex", "meshAssetPath"});
     copy.template operator()<BoundsComponent>({"addBounds", "boundsCenterLocal", "boundsExtentsLocal"});

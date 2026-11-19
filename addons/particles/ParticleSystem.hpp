@@ -147,6 +147,7 @@ private:
         float time            = 0.f;     // seit Start, fuer duration
         bool  burstDone       = false;
         float floorY          = 0.f;     // Welt-Hoehe der Bodenebene (collideWithFloor)
+        bool  renderVisible   = true;
         bool  seen            = false;   // in diesem Update noch vorhanden
         EntityID entity = NULL_ENTITY;
         std::shared_ptr<const ParticleLook> look;

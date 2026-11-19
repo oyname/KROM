@@ -7,6 +7,7 @@
 #include "animation/SkeletonPoseEvaluator.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "ecs/Components.hpp"
+#include "ecs/HierarchyState.hpp"
 #include "ecs/World.hpp"
 
 #include <algorithm>
@@ -442,6 +443,7 @@ void AnimationSystem::Update(ecs::World& world, float dt)
     m_fired.clear();
     bool anyController = false;
     world.View<AnimationPlayerComponent>([&](EntityID entity, AnimationPlayerComponent& player) {
+        if (!IsEntityActiveInHierarchy(world, entity)) return;
         if (!player.HasController())
             return;
         anyController = true;
@@ -452,6 +454,7 @@ void AnimationSystem::Update(ecs::World& world, float dt)
     world.View<AnimationPlayerComponent>(
         [&](EntityID entity, AnimationPlayerComponent& player)
         {
+            if (!IsEntityActiveInHierarchy(world, entity)) return;
             if (player.HasController() || !player.playing || !player.clip.IsValid())
                 return;
             if (anyController && IsBelowController(world, entity))

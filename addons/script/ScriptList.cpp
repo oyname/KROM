@@ -2,6 +2,7 @@
 #include "core/Logger.hpp"
 #include "ecs/World.hpp"
 #include "ecs/Components.hpp"
+#include "ecs/HierarchyState.hpp"
 #include <cstdio>
 
 namespace engine::script {
@@ -138,6 +139,8 @@ void ReattachScriptObjects(ecs::World& world, const ScriptRegistry& registry)
 
 void ScriptList::Update(float deltaTime, EntityID entity, const ScriptServices& services)
 {
+    if (services.world && !IsEntityActiveInHierarchy(*services.world, entity))
+        return;
     ScriptFrameContext ctx{ deltaTime, entity, services };
     for (auto& inst : m_instances)
     {
@@ -153,6 +156,8 @@ void ScriptList::Update(float deltaTime, EntityID entity, const ScriptServices& 
 
 void ScriptList::FixedUpdate(float fixedDeltaTime, EntityID entity, const ScriptServices& services)
 {
+    if (services.world && !IsEntityActiveInHierarchy(*services.world, entity))
+        return;
     ScriptFrameContext ctx{ fixedDeltaTime, entity, services, true };
     for (auto& inst : m_instances)
     {

@@ -1,3 +1,4 @@
+#include "ecs/HierarchyState.hpp"
 #include "addons/shadow/ShadowExtraction.hpp"
 
 #include "addons/camera/CameraViewBuilder.hpp"
@@ -40,8 +41,7 @@ namespace {
 
 [[nodiscard]] bool IsEntityActive(const ecs::World& world, EntityID entity) noexcept
 {
-    const auto* active = world.Get<ActiveComponent>(entity);
-    return active == nullptr || active->active;
+    return IsEntityActiveInHierarchy(world, entity) && IsEntityVisibleInHierarchy(world, entity);
 }
 
 void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& maxPoint) noexcept

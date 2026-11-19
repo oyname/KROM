@@ -7,6 +7,7 @@
 #include "renderer/RenderPipelineRecipe.hpp"
 #include "renderer/RenderRuntimeFrameBindings.hpp"
 #include "rendergraph/RenderGraph.hpp"
+#include "renderer/ShaderRuntime.hpp"
 #include <algorithm>
 #include <string>
 
@@ -20,17 +21,18 @@ class EditorGizmoOverlayPass final : public IFramePass
 {
 public:
     uint32_t  GetContributorId() const noexcept override { return 0xED170001u; }
-    PassPhase GetPhase()         const noexcept override { return PassPhase::AfterOpaque; }
+    PassPhase GetPhase()         const noexcept override { return PassPhase::AfterPostProcess; }
 
     void BuildPass(const PassBuildContext& ctx) const override
     {
         const uint32_t w = ctx.frame.viewportWidth;
         const uint32_t h = ctx.frame.viewportHeight;
-        const bool hasGtao = std::any_of(ctx.recipe.resources.begin(), ctx.recipe.resources.end(),
-            [](const FrameRecipeResourceDesc& r) { return r.name == "GTAOComposite"; });
-        const std::string sceneColorTarget = hasGtao
-            ? "GTAOComposite"
-            : "HDRSceneColor";
+        // Display overlay: never feed gizmos through exposure, bloom or tonemapping.
+        const std::string sceneColorTarget = ctx.frame.hasSceneOutput ? "EditorSceneView" : "Backbuffer";
+        FrameRecipeResourceDesc depth{};
+        depth.name = "EditorGizmoSceneDepth";
+        depth.depthAttachmentOf = "HDRSceneColor";
+        ctx.recipe.resources.push_back(std::move(depth));
 
         // Pass 1: Depth-getestete Gizmos (z.B. Kamera-Modell) — kein Depth-Clear,
         //         werden von normaler Szenengeometrie verdeckt.
@@ -39,6 +41,8 @@ public:
             pass.name         = "EditorGizmoDepthPass";
             pass.executorName = kEditorGizmoDepthExecutor;
             pass.accesses.push_back({ sceneColorTarget, FrameRecipeAccessKind::WriteRenderTarget });
+            pass.accesses.push_back({ "EditorGizmoSceneDepth", FrameRecipeAccessKind::WriteDepthStencil });
+            pass.renderPass.depthTargetResourceName = "HDRSceneColor";
             pass.renderPass.enabled            = true;
             pass.renderPass.targetResourceName = sceneColorTarget;
             pass.renderPass.viewportWidth      = w;
@@ -55,6 +59,8 @@ public:
             pass.name         = "EditorGizmoOverlayPass";
             pass.executorName = kEditorGizmoOverlayExecutor;
             pass.accesses.push_back({ sceneColorTarget, FrameRecipeAccessKind::WriteRenderTarget });
+            pass.accesses.push_back({ "EditorGizmoSceneDepth", FrameRecipeAccessKind::WriteDepthStencil });
+            pass.renderPass.depthTargetResourceName = "HDRSceneColor";
             pass.renderPass.enabled            = true;
             pass.renderPass.targetResourceName = sceneColorTarget;
             pass.renderPass.viewportWidth      = w;
@@ -67,7 +73,14 @@ public:
         // Der Graph wird ueber Frames hinweg gecacht. Keine Snapshot-Zeiger
         // vom Build-Frame behalten (Lade- und Vorschau-Frames nutzen andere Stacks).
         auto bindings = ctx.frame.runtimeBindings;
-        auto drawObjects = ctx.drawObjects;
+        decltype(ctx.drawObjects) drawObjects = [draw = ctx.drawObjects, bindings, format = ctx.frame.outputColorFormat]
+            (const DrawList& list, const rendergraph::RGExecContext& exec) {
+                ShaderRuntime* runtime = bindings ? bindings->material.shaderRuntime : nullptr;
+                const Format previous = runtime ? runtime->GetEditorGizmoColorFormat() : Format::Unknown;
+                if (runtime) runtime->SetEditorGizmoColorFormat(format);
+                if (draw) draw(list, exec);
+                if (runtime) runtime->SetEditorGizmoColorFormat(previous);
+            };
 
         ctx.callbacks.Register(kEditorGizmoDepthExecutor,
             [bindings, drawObjects](const rendergraph::RGExecContext& exec)

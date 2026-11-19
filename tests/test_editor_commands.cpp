@@ -59,6 +59,7 @@
 #include "assets/AssetPipeline.hpp"
 
 #include "ecs/Components.hpp"
+#include "ecs/HierarchyState.hpp"
 
 #include "ecs/World.hpp"
 #include "serialization/SceneSerializer.hpp"
@@ -5219,6 +5220,70 @@ static void TestCreateEntityUnderParent(test::TestContext& ctx)
     CHECK(ctx, cameras == 0u);
 }
 
+
+static void TestHierarchyStateAndFolderFocus(test::TestContext& ctx)
+{
+    ComponentMetaRegistry registry = CreateEditorCommandsRegistry();
+    RegisterMeshRendererComponents(registry);
+    World world(registry);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    EditorFrameContext editor = CreateEditorContext(world, materials, assets, state);
+    const EntityID folder = CreateFolderEntity(editor, "Folder");
+    const EntityID child = CreateEmptyEntity(editor, "Child", folder);
+    const EntityID grandchild = CreateEmptyEntity(editor, "Grandchild", child);
+    state.editorCamera.position = {7.f, 8.f, 9.f};
+    state.editorCamera.yawDeg = 27.f;
+    state.editorCamera.pitchDeg = -12.f;
+    engine::renderer::addons::editor::detail::FrameHierarchyEntity(editor, folder);
+    CHECK(ctx, state.editorCamera.position.x == 7.f && state.editorCamera.position.y == 8.f && state.editorCamera.position.z == 9.f);
+    CHECK(ctx, state.editorCamera.yawDeg == 27.f && state.editorCamera.pitchDeg == -12.f);
+    // Even with bounds on a descendant, a folder is only an organizational row.
+    world.Add<MeshComponent>(child, MeshHandle::Make(1u, 1u));
+    world.Add<BoundsComponent>(child);
+    engine::renderer::addons::editor::detail::FrameHierarchyEntity(editor, folder);
+    CHECK(ctx, state.editorCamera.position.x == 7.f && state.editorCamera.yawDeg == 27.f);
+    engine::renderer::addons::editor::detail::FrameHierarchyEntity(editor, child);
+    CHECK(ctx, state.editorCamera.position.x != 7.f);
+
+    world.Get<ActiveComponent>(folder)->active = false;
+    CHECK(ctx, !IsEntityActiveInHierarchy(world, grandchild));
+    CHECK(ctx, world.Get<ActiveComponent>(child)->active);
+    world.Get<ActiveComponent>(grandchild)->active = false;
+    world.Get<ActiveComponent>(folder)->active = true;
+    CHECK(ctx, IsEntityActiveInHierarchy(world, child));
+    CHECK(ctx, !IsEntityActiveInHierarchy(world, grandchild));
+    world.SetComponent(folder, VisibilityComponent{false});
+    CHECK(ctx, !IsEntityVisibleInHierarchy(world, grandchild));
+    world.SetComponent(grandchild, VisibilityComponent{false});
+    world.Get<VisibilityComponent>(folder)->visible = true;
+    CHECK(ctx, IsEntityVisibleInHierarchy(world, child));
+    CHECK(ctx, !IsEntityVisibleInHierarchy(world, grandchild));
+
+    BeginPendingComponentEdit<VisibilityComponent>(editor, "visibility-test", "history.visible", folder);
+    world.Get<VisibilityComponent>(folder)->visible = false;
+    CHECK(ctx, CommitPendingComponentEdit(editor, "visibility-test"));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, IsEntityVisibleInHierarchy(world, child));
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK(ctx, !IsEntityVisibleInHierarchy(world, child));
+
+    serialization::SceneSerializer serializer(world);
+    serializer.RegisterDefaultHandlers();
+    const std::string json = serializer.SerializeToJson("Visibility");
+    World loaded(registry);
+    serialization::SceneDeserializer deserializer(loaded);
+    deserializer.RegisterDefaultHandlers();
+    CHECK(ctx, deserializer.DeserializeFromJson(json).success);
+    EntityID loadedChild{};
+    loaded.ForEachAlive([&](EntityID id) {
+        if (const auto* name = loaded.Get<NameComponent>(id); name && name->name == "Child") loadedChild = id;
+    });
+    CHECK(ctx, loadedChild.IsValid() && !IsEntityVisibleInHierarchy(loaded, loadedChild));
+    CHECK(ctx, world.Get<ActiveComponent>(child)->active);
+}
+
 static void TestCreateFolderEntity(test::TestContext& ctx)
 {
     ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
@@ -5535,6 +5600,7 @@ int RunEditorCommandTests()
 
 
     test::TestSuite suite("EditorCommands");
+    suite.Add("Hierarchy state and folder focus", TestHierarchyStateAndFolderFocus);
     suite.Add("Inspector reveals script asset in browser", TestInspectorRevealsScriptAsset);
     suite.Add("Inspector entity reference reveals target and preserves dropdown assignment", TestInspectorRevealsEntityReference);
     suite.Add("Camera deletion requires confirmation", TestInspectorCameraDeleteConfirmation);

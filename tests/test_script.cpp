@@ -139,6 +139,32 @@ public:
 
 // ─── Tests ───────────────────────────────────────────────────────────────────
 
+
+void TestScriptsRespectInactiveParents(test::TestContext& ctx)
+{
+    ecs::ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
+    ecs::World world(registry);
+    const EntityID parent = world.CreateEntity(), child = world.CreateEntity();
+    world.Add<ActiveComponent>(parent, ActiveComponent{false});
+    world.Add<ActiveComponent>(child, ActiveComponent{true});
+    world.Add<ParentComponent>(child, ParentComponent{parent});
+    CallLog log;
+    ScriptList list;
+    list.Add("A", std::make_unique<LoggingScript>(log, "A"), child);
+    ScriptServices services;
+    services.world = &world;
+    list.Update(0.016f, child, services);
+    CHECK(ctx, log.events.empty());
+    CHECK(ctx, world.Get<ActiveComponent>(child)->active);
+    world.Get<ActiveComponent>(parent)->active = true;
+    list.Update(0.016f, child, services);
+    CHECK_EQ(ctx, log.events.size(), size_t{2});
+    world.Get<ActiveComponent>(child)->active = false;
+    list.Update(0.016f, child, services);
+    CHECK_EQ(ctx, log.events.size(), size_t{2});
+}
+
 void TestOnStartCalledOnce(test::TestContext& ctx)
 {
     CallLog log;
@@ -1587,6 +1613,7 @@ int RunScriptTests()
     suite
         .Add("Detach/Clear/Reattach preserves fields and lifecycle", TestDetachReattach)
         .Add("OnStart called once",              TestOnStartCalledOnce)
+        .Add("Scripts respect inactive parents", TestScriptsRespectInactiveParents)
         .Add("OnUpdate called every frame",      TestUpdateCalledEveryFrame)
         .Add("OnDestroy called once",            TestDestroyCalledOnce)
         .Add("OnDestroy not called if unstarted",TestDestroyNotCalledIfNotStarted)

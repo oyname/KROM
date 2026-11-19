@@ -295,13 +295,14 @@ namespace engine::renderer {
             const FrameRecipe* prePasses = nullptr,
             const FrameRecipe* postPasses = nullptr,
             const FrameRecipe* afterDepthPasses = nullptr,
-            size_t beforeTransparentCount = 0u)
+            size_t beforeTransparentCount = 0u,
+            const FrameRecipe* overlayPasses = nullptr)
         {
             FrameRecipe recipe{};
             AppendCoreResources(recipe, p);
             AppendOptionalResources(recipe, p);
 
-            for (const FrameRecipe* contributor : {prePasses, afterDepthPasses, postPasses})
+            for (const FrameRecipe* contributor : {prePasses, afterDepthPasses, postPasses, overlayPasses})
             {
                 if (contributor)
                     recipe.resources.insert(recipe.resources.end(),
@@ -335,7 +336,7 @@ namespace engine::renderer {
                     std::min(beforeTransparentCount, postPasses->passes.size());
                 recipe.passes.insert(recipe.passes.end(), begin, postPasses->passes.end());
             }
-            AppendPostProcessStage(recipe, p);
+            AppendPostProcessStage(recipe, p, overlayPasses);
             return recipe;
         }
 
@@ -345,10 +346,11 @@ namespace engine::renderer {
             const FrameRecipe* prePasses = nullptr,
             const FrameRecipe* postPasses = nullptr,
             const FrameRecipe* afterDepthPasses = nullptr,
-            size_t beforeTransparentCount = 0u)
+            size_t beforeTransparentCount = 0u,
+            const FrameRecipe* overlayPasses = nullptr)
         {
             const FrameRecipe recipe = BuildRecipe(p, prePasses, postPasses, afterDepthPasses,
-                                                   beforeTransparentCount);
+                                                   beforeTransparentCount, overlayPasses);
             const FrameRecipeCompileParams params{ p.backbufferRT, p.backbufferTex };
             const auto materialized = FrameRecipeCompiler::Build(rg, params, recipe, executors);
             StandardFrameBuildResult result = AssembleResources(materialized);
@@ -690,7 +692,8 @@ namespace engine::renderer {
         // Post-Process-Stufe: Bloom → Tonemap → UI → Present
         // Muss immer NACH der Opaque-Stufe und NACH AfterOpaque-Contributors stehen,
         // damit der RenderGraph keine Zyklen erzeugt (kein "future writer"-Problem).
-        static void AppendPostProcessStage(FrameRecipe& recipe, const BuildParams& p)
+        static void AppendPostProcessStage(FrameRecipe& recipe, const BuildParams& p,
+                                           const FrameRecipe* overlayPasses)
         {
             if (p.bloomEnabled)
             {
@@ -783,6 +786,9 @@ namespace engine::renderer {
                 writeSceneOutput(tonemap);
                 recipe.passes.push_back(std::move(tonemap));
             }
+
+            if (overlayPasses)
+                recipe.passes.insert(recipe.passes.end(), overlayPasses->passes.begin(), overlayPasses->passes.end());
 
             if (p.uiEnabled)
             {

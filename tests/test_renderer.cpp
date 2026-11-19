@@ -6039,6 +6039,53 @@ static void TestFailedShaderDoesNotAbortFrame(test::TestContext& ctx)
     CHECK(ctx, status != nullptr && status->failed && status->sourceHash != firstHash);
 }
 
+
+static void TestInheritedMeshState(test::TestContext& ctx)
+{
+    auto registry = CreateRendererTestRegistry();
+    ecs::World world(registry);
+    const EntityID folder = world.CreateEntity();
+    const EntityID parent = world.CreateEntity();
+    const EntityID child = world.CreateEntity();
+    const EntityID hidden = world.CreateEntity();
+    world.Add<ParentComponent>(parent, ParentComponent{folder});
+    for (const EntityID id : {child, hidden})
+    {
+        world.Add<ParentComponent>(id, ParentComponent{parent});
+        world.Add<WorldTransformComponent>(id);
+        world.Add<MeshComponent>(id, MeshHandle::Make(id.Index() + 1u, 1u));
+    }
+    world.Get<MeshComponent>(hidden)->visible = false;
+    auto count = [&](jobs::JobSystem* jobs = nullptr) {
+        RenderWorld renderWorld;
+        engine::addons::mesh_renderer::ExtractRenderables(world, renderWorld.GetExtractionView(), jobs);
+        return renderWorld.TotalProxyCount();
+    };
+    CHECK_EQ(ctx, count(), 1u);
+    world.Add<ActiveComponent>(folder, ActiveComponent{false});
+    CHECK_EQ(ctx, count(), 0u);
+    world.Get<ActiveComponent>(folder)->active = true;
+    CHECK_EQ(ctx, count(), 1u);
+    world.Add<VisibilityComponent>(folder, VisibilityComponent{false});
+    CHECK_EQ(ctx, count(), 0u);
+    world.Get<VisibilityComponent>(folder)->visible = true;
+    world.Add<MeshComponent>(parent, MeshComponent{});
+    world.Get<MeshComponent>(parent)->visible = false;
+    CHECK_EQ(ctx, count(), 0u);
+    world.Get<MeshComponent>(parent)->visible = true;
+    CHECK_EQ(ctx, count(), 1u);
+    jobs::JobSystem jobs;
+    jobs.Initialize(2u);
+    CHECK_EQ(ctx, count(&jobs), 1u);
+    world.Get<VisibilityComponent>(folder)->visible = false;
+    CHECK_EQ(ctx, count(&jobs), 0u);
+    jobs.Shutdown();
+    // Reparenting immediately releases inherited visibility without changing local flags.
+    world.Get<ParentComponent>(child)->parent = NULL_ENTITY;
+    CHECK_EQ(ctx, count(), 1u);
+    CHECK(ctx, !world.Get<MeshComponent>(hidden)->visible);
+}
+
 static void TestCachedEditorPassUsesCurrentQueue(test::TestContext& ctx)
 {
     FeatureRegistry registry;
@@ -6062,7 +6109,28 @@ static void TestCachedEditorPassUsesCurrentQueue(test::TestContext& ctx)
         }};
     for (const auto* contributor : registry.GetPassContributors())
         if (contributor->GetContributorId() == 0xED170001u)
+        {
+            CHECK(ctx, contributor->GetPhase() == PassPhase::AfterPostProcess);
             contributor->BuildPass(context);
+        }
+    StandardFrameRecipeBuilder::BuildParams params{};
+    params.viewportWidth = params.viewportHeight = 64u;
+    params.uiEnabled = true;
+    params.postAAEnabled = true;
+    const FrameRecipe pipeline = StandardFrameRecipeBuilder::BuildRecipe(params, nullptr, nullptr, nullptr, 0u, &recipe);
+    size_t aaIndex = 0u, gizmoIndex = 0u, uiIndex = 0u;
+    for (size_t i = 0u; i < pipeline.passes.size(); ++i)
+    {
+        if (pipeline.passes[i].name == "PostAAPass") aaIndex = i;
+        if (pipeline.passes[i].name == "EditorGizmoOverlayPass")
+        {
+            gizmoIndex = i;
+            CHECK_EQ(ctx, pipeline.passes[i].renderPass.targetResourceName, std::string("Backbuffer"));
+            CHECK_EQ(ctx, pipeline.passes[i].renderPass.depthTargetResourceName, std::string("HDRSceneColor"));
+        }
+        if (pipeline.passes[i].name == "UIPass") uiIndex = i;
+    }
+    CHECK(ctx, aaIndex < gizmoIndex && gizmoIndex < uiIndex);
     const auto* depth = callbacks.Find("editor.gizmo_depth");
     const auto* overlay = callbacks.Find("editor.gizmo_overlay");
     CHECK(ctx, depth && overlay);
@@ -6414,6 +6482,7 @@ int RunRendererTests()
     engine::Debug::MinLevel = engine::LogLevel::Fatal;
 
     test::TestSuite suite("Renderer");
+    suite.Add("Inherited mesh activation and visibility", TestInheritedMeshState);
     suite
         .Add("Skinning uploads only changed palettes", TestSkinningUploadsOnlyChangedPalettes)
         .Add("Selection outline respects view and graph cache", TestSelectionOutlinePerViewAndCache)

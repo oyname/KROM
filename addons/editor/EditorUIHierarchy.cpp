@@ -4,6 +4,7 @@
 // =============================================================================
 #include "addons/editor/EditorUIInternal.hpp"
 #include "core/PathUtf8.hpp"
+#include "ecs/HierarchyState.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/probes/ProbeComponents.hpp"
 
@@ -26,8 +27,14 @@ std::filesystem::path PrefabPayloadPath(const EditorFrameContext& ctx, const cha
     return path;
 }
 
+} // namespace
+
+namespace detail {
+
 void FrameHierarchyEntity(EditorFrameContext& ctx, EntityID entity)
 {
+    if (ctx.world.Has<FolderComponent>(entity))
+        return;
     math::Vec3 target = WorldPosition(ctx, entity);
     math::Vec3 lower, upper;
     bool hasMeshBounds = false;
@@ -402,7 +409,12 @@ void DrawEntityList(EditorFrameContext& ctx)
         if (!visibleDescendant)
             flags |= ImGuiTreeNodeFlags_Leaf | ImGuiTreeNodeFlags_NoTreePushOnOpen;
 
-        if (!visibleSelf)
+        const bool dimmed = !visibleSelf || !IsEntityActiveInHierarchy(ctx.world, id) ||
+            !IsEntityVisibleInHierarchy(ctx.world, id) || !AllHierarchyAncestors(ctx.world, id, [&](EntityID ancestor) {
+                const auto* mesh = ctx.world.Get<MeshComponent>(ancestor);
+                return !mesh || mesh->visible;
+            });
+        if (dimmed)
             ImGui::PushStyleColor(ImGuiCol_Text, ImGui::GetStyleColorVec4(ImGuiCol_TextDisabled));
 
         if (id != reveal && revealAncestors.count(id.value) > 0)
@@ -465,7 +477,7 @@ void DrawEntityList(EditorFrameContext& ctx)
                 ImVec2(iconMin.x + size.x, iconMin.y + size.y),
                 ImVec2(0.f, 0.f),
                 ImVec2(1.f, 1.f),
-                visibleSelf ? IM_COL32_WHITE : IM_COL32(255, 255, 255, 110));
+                !dimmed ? IM_COL32_WHITE : IM_COL32(255, 255, 255, 110));
         }
 
         // Rechtsklick-Kontextmenü pro Entity
@@ -625,7 +637,7 @@ void DrawEntityList(EditorFrameContext& ctx)
             ImGui::EndDragDropTarget();
         }
 
-        if (!visibleSelf)
+        if (dimmed)
             ImGui::PopStyleColor();
 
         if (visibleDescendant && open)

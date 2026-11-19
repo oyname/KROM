@@ -102,6 +102,8 @@ struct EditorLoadingSmokeTest final : IAppScene
     // --auto-exposure <project.json> <capture-dir>: a uniform HDR surface changes
     // from bright to dark, first alone and then with the material preview open.
     std::filesystem::path autoExposureCaptures;
+    bool gizmoColorProbe = false;
+    std::array<std::array<float, 3>, 3> gizmoReferenceColors{};
     MaterialHandle exposureProbeMaterial{};
     size_t exposureProbeStage = 0u;
     std::chrono::steady_clock::time_point exposureProbeStarted{};
@@ -149,7 +151,18 @@ struct EditorLoadingSmokeTest final : IAppScene
             ui.state.tonemap.freezeAutoExposure = false;
             ui.state.tonemap.autoExposure.toBrightSpeed = ui.state.tonemap.autoExposure.toDarkSpeed = 20.f;
             app.m_autoExposureStatus->RequestReset();
+            if (gizmoColorProbe)
+            {
+                ui.state.editorCamera.position = {4.f, 3.f, 6.f};
+                ui.state.editorCamera.yawDeg = 33.690068f;
+                ui.state.editorCamera.pitchDeg = -22.588538f;
+                ui.state.gizmoMode = ed::GizmoMode::Position;
+                ui.state.selectedEntity = entity;
+                ui.state.selectionSource = ed::SelectionSource::Outliner;
+            }
         }
+        if (gizmoColorProbe)
+            return UpdateGizmoColors(context);
         const bool bright = exposureProbeStage == 0u || exposureProbeStage == 2u;
         const float value = bright ? 1.8f : 0.018f;
         context.materialSystem.SetVec4(exposureProbeMaterial, "baseColorFactor", {value,value,value,1.f});
@@ -208,6 +221,70 @@ struct EditorLoadingSmokeTest final : IAppScene
                   "material preview preserves rendered dark scene brightness");
             context.renderLoop.GetWindow()->RequestClose();
         }
+        return true;
+    }
+
+    bool UpdateGizmoColors(AppSceneContext& context)
+    {
+        using namespace renderer::addons::forward;
+        auto& ui = *app.m_editorFrameCtx;
+        const bool automatic = exposureProbeStage >= 12u;
+        const size_t aa = exposureProbeStage % 3u;
+        ui.state.msaaSamples = aa == 0u ? 1u : aa == 1u ? 2u : 4u;
+        ui.state.postAA = static_cast<PostAAMode>(aa);
+        ui.state.tonemap.op = automatic ? TonemapOperator::AgX : static_cast<TonemapOperator>(exposureProbeStage / 3u);
+        ui.state.tonemap.exposureMode = automatic ? ExposureMode::Auto : ExposureMode::Fixed;
+        ui.state.tonemap.exposureEv = automatic ? 0.f : (static_cast<float>(exposureProbeStage % 3u) - 1.f) * 8.f;
+        const float value = !automatic ? 1.f : exposureProbeStage == 12u ? 100.f : 0.001f;
+        context.materialSystem.SetVec4(exposureProbeMaterial, "baseColorFactor", {value, value, value, 1.f});
+        const auto now = std::chrono::steady_clock::now();
+        auto& runtime = context.renderLoop.GetRenderSystem().GetShaderRuntime();
+        if (runtime.HasPendingShaderCompiles() || frames < 30)
+        {
+            exposureProbeStarted = now;
+            return true;
+        }
+        if (exposureProbeStarted == std::chrono::steady_clock::time_point{}) exposureProbeStarted = now;
+        if (now - exposureProbeStarted < std::chrono::milliseconds(500)) return true;
+        auto* device = context.renderLoop.GetRenderSystem().GetDevice();
+        std::vector<uint8_t> pixels;
+        uint32_t width = 0u, height = 0u;
+        const bool read = device->ReadTexturePixels(device->GetRenderTargetColorTexture(app.m_sceneView.rt), pixels, width, height);
+        Check(read && pixels.size() == size_t(width) * height * 4u, "gizmo display target readback");
+        if (read)
+        {
+            std::array<size_t, 3> counts{};
+            std::array<std::array<double, 3>, 3> sums{};
+            for (size_t i = 0; i + 3u < pixels.size(); i += 4u)
+            {
+                const int r = pixels[i], g = pixels[i+1], b = pixels[i+2];
+                const int axis = r > 220 && g < 10 && b < 10 ? 0 :
+                    r < 10 && g > 220 && b > 50 && b < 180 ? 1 :
+                    r < 10 && b > 220 && g > 120 && g < 220 ? 2 : -1;
+                if (axis < 0) continue;
+                ++counts[axis];
+                for (size_t c = 0; c < 3u; ++c) sums[axis][c] += pixels[i+c];
+            }
+            for (size_t axis = 0; axis < 3u; ++axis)
+            {
+                Check(counts[axis] > 20u, "saturated gizmo axis remains distinguishable");
+                std::printf("GIZMO stage=%zu axis=%zu pixels=%zu", exposureProbeStage, axis, counts[axis]);
+                for (size_t c = 0; c < 3u; ++c)
+                {
+                    const float mean = counts[axis] ? static_cast<float>(sums[axis][c] / counts[axis]) : -100.f;
+                    std::printf(" %.3f", mean);
+                    if (exposureProbeStage == 0u) gizmoReferenceColors[axis][c] = mean;
+                    else Check(std::fabs(mean - gizmoReferenceColors[axis][c]) < 1.f, "axis color independent of exposure and tonemapping");
+                }
+                std::printf("\n");
+            }
+            std::ofstream out(autoExposureCaptures / ("gizmo-" + std::to_string(exposureProbeStage) + ".ppm"), std::ios::binary);
+            out << "P6\n" << width << ' ' << height << "\n255\n";
+            for (size_t i = 0; i < pixels.size(); i += 4u) out.write(reinterpret_cast<const char*>(pixels.data()+i), 3);
+        }
+        ++exposureProbeStage;
+        exposureProbeStarted = now;
+        if (exposureProbeStage == 14u) context.renderLoop.GetWindow()->RequestClose();
         return true;
     }
     // --material-ibl <project.json> <capture-dir>: isolate lighting on the real
@@ -2381,9 +2458,10 @@ int main(int argc, char** argv)
     test.toolbarLogo = argc > 1 && std::string_view(argv[1]) == "--toolbar-logo";
     if (argc > 2 && std::string_view(argv[1]) == "--perf")
         test.perfProject = argv[2];
-    if (argc > 3 && std::string_view(argv[1]) == "--auto-exposure")
+    if (argc > 3 && (std::string_view(argv[1]) == "--auto-exposure" || std::string_view(argv[1]) == "--gizmo-colors"))
     {
         test.perfProject = argv[2];
+        test.gizmoColorProbe = std::string_view(argv[1]) == "--gizmo-colors";
         test.autoExposureCaptures = engine::PathFromUtf8(argv[3]);
         std::filesystem::create_directories(test.autoExposureCaptures);
     }

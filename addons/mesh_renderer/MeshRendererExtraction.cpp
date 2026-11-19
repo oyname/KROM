@@ -4,6 +4,7 @@
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "ecs/Components.hpp"
+#include "ecs/HierarchyState.hpp"
 #include "core/Debug.hpp"
 #include "jobs/JobSystem.hpp"
 
@@ -14,8 +15,15 @@ namespace {
 
 [[nodiscard]] bool IsEntityActive(const ecs::World& world, EntityID entity) noexcept
 {
-    const auto* active = world.Get<ActiveComponent>(entity);
-    return active == nullptr || active->active;
+    return IsEntityActiveInHierarchy(world, entity);
+}
+
+[[nodiscard]] bool IsMeshVisibleInHierarchy(const ecs::World& world, EntityID entity) noexcept
+{
+    return IsEntityVisibleInHierarchy(world, entity) && AllHierarchyAncestors(world, entity, [&](EntityID id) {
+        const auto* mesh = world.Get<MeshComponent>(id);
+        return !mesh || mesh->visible;
+    });
 }
 
 // Füllt gemeinsame Proxy-Felder aus Transform, MeshComponent und optionaler Skin.
@@ -102,7 +110,7 @@ CollectProxies(const ecs::World& world, const assets::AssetRegistry* assetReg)
         {
             if (!IsEntityActive(world, id)) return;
             if (!mesh.mesh.IsValid())       return;
-            if (!mesh.visible)              return;
+            if (!IsMeshVisibleInHierarchy(world, id)) return;
 
             const auto* mat = world.Get<MaterialComponent>(id);
             // Wenn AssetRegistry verfügbar: pro Submesh einen Proxy mit dem
@@ -158,6 +166,7 @@ void ExtractToContextParallel(const renderer::SceneExtractionContext& context,
         {
             if (!IsEntityActive(world, id)) return;
             if (!mesh.mesh.IsValid())       return;
+            if (!IsMeshVisibleInHierarchy(world, id)) return;
             entities.push_back(id);
         });
 

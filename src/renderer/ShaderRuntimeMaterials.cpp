@@ -499,7 +499,8 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource
     const bool prepass = depthMode == SceneDepthMode::Prepass;
     const uint32_t extraColorCount = shadowPassKey || prepass ? 0u : m_targetExtraColorCount;
     const uint32_t passKey = static_cast<uint32_t>(pass.value) | (sampleCount << 16u) |
-        (extraColorCount << 24u) | (static_cast<uint32_t>(depthMode) << 28u);
+        (extraColorCount << 24u) | (static_cast<uint32_t>(depthMode) << 28u) |
+        (pass == StandardRenderPasses::EditorGizmo() ? static_cast<uint32_t>(m_editorGizmoColorFormat) << 8u : 0u);
     const auto cachedIt = state.resolvedPipelines.find(passKey);
     if (cachedIt != state.resolvedPipelines.end())
         return cachedIt->second;
@@ -592,6 +593,8 @@ PipelineHandle ShaderRuntime::ResolvePipelineForPass(const IShaderMaterialSource
 
     PipelineDesc pd = BuildPipelineDescForPass(materials, material, vs, ps, pass);
     pd.sampleCount = sampleCount;
+    if (pass == StandardRenderPasses::EditorGizmo() && m_editorGizmoColorFormat != Format::Unknown)
+        pd.colorFormat = m_editorGizmoColorFormat;
     if (depthMode != SceneDepthMode::Material)
     {
         pd.depthStencil.depthEnable = true;

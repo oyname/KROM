@@ -985,6 +985,60 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ## Befunde (Codex)
 
+### Korrektur: Hierarchie-Ordner, Elternzustand und Gizmo-Farben (2026-11-19)
+
+Auf ausdrücklichen Nutzerauftrag durch Codex implementiert; Ausgangspunkt
+`8d76bfd`. Die vorher hier dokumentierten drei Befunde sind behoben.
+
+- **Ordner-Fokus:** `FrameHierarchyEntity` ignoriert FolderComponent. Ein
+  Doppelklick auf einen leeren oder gefüllten Ordner bewegt die Kamera nicht;
+  normale Eltern-Entities können weiterhin über ihre Mesh-Bounds fokussiert werden.
+- **Aktivierung:** gemeinsamer Helfer `ecs/HierarchyState.hpp` berücksichtigt
+  die gesamte Elternkette. Meshes, Lichter, Schatten, Kameras, Probes (über
+  ECSExtractor), Audio, Scripts, Animationen und Partikel berücksichtigen nun
+  deaktivierte Vorfahren. Die lokalen Kindwerte bleiben erhalten. Fehlerhafte
+  zyklische Elternketten können den gemeinsamen Helfer nicht endlos blockieren.
+- **Sichtbarkeit:** Mesh-Extraktion berücksichtigt eigene und geerbte
+  MeshComponent.visible-Werte sowie den neuen VisibilityComponent für Gruppen
+  ohne Mesh und Ordner, auch im parallelen Extraktionspfad. Der Inspector bietet
+  diesen Gruppen einen Sichtbarkeitsschalter; Hierarchietext und Icons werden
+  bei geerbter Deaktivierung/Ausblendung gedimmt. Partikel und Editor-Icons
+  berücksichtigen die Gruppen-Sichtbarkeit ebenfalls. SetVisible in krom.h
+  unterstützt damit auch reine Gruppen. Sichtbarkeit deaktiviert keine Scripts
+  und keine Physik. Szenen-/Prefab-Speicherung, Duplizieren und Undo/Redo
+  unterstützen den neuen Zustand; fehlende Daten bedeuten sichtbar.
+- **Gizmo-Farben:** neuer Contributor-Zeitpunkt AfterPostProcess, nach Tonemap
+  und FXAA/SMAA, vor ImGui. Gizmos zeichnen direkt ins sRGB-Ausgabeziel und
+  gelangen nicht mehr in Bloom oder die Auto-Exposure-Messung. Tiefengeprüfte
+  Gizmos verwenden weiterhin die aufgelöste Szenentiefe; der immer sichtbare
+  Pass bleibt getrennt. Materialpipelines und ihr Cache berücksichtigen das
+  Ausgabeformat je Ansicht statt des bisherigen HDR-Materialformats.
+- **Regressionen:** Ordner-Fokus mit/ohne Mesh-Nachkommen; mehrstufige
+  Aktivierung/Sichtbarkeit mit erhaltenen lokalen Kindwerten; Reparenting;
+  serieller/paralleler Mesh-Pfad; Script-Pause bei deaktiviertem Vorfahren;
+  Gruppen-Sichtbarkeit mit Undo/Redo und Szenen-Rundweg; produktiver
+  Editor-Contributor nach Post-AA und vor UI.
+- **Validierung:** eigener MSVC-Debug-Build ohne optionale Physik-/Audiomodule:
+  krom_tests, Editor und editor_scene_runtime für DX11, Vulkan, OpenGL
+  erfolgreich gebaut.
+  Alle 463 regulären Tests bestanden. Neue GPU-Regression
+  `krom_editor_loading_tests[_dx11] --gizmo-colors <project.json> <capture-dir>`:
+  jeweils 14 Aufnahmen auf DX11 und Vulkan, vier Tonemap-Operatoren mit
+  -8/0/+8 EV, MSAA aus/2x/4x, Post-AA aus/FXAA/SMAA, zusätzlich helle/dunkle
+  Auto-Exposure-Szenen. Alle drei Achsen bleiben unterscheidbar und ihre
+  Farbmittelwerte konstant (< 1/255 Toleranz); keine Validierungsfehler.
+  Kontrollbild bei +8 EV zeigt klar getrennte rote/grüne/blaue Pfeile vor
+  weißem Hintergrund. OpenGL-Editor und -Testprogramm ebenfalls gebaut und
+  gestartet; 14 Aufnahmen mit stabilen Achsenfarben im eingefrorenen
+  Funktionsumfang, keine Testfehler (`out/gizmo-opengl*`). Gruppen- und
+  Mesh-Sichtbarkeit sind auch bei Mehrfachauswahl gemeinsam undo-fähig;
+  Sichtbarkeit von Licht- und Schattenextraktion berücksichtigt Gruppen.
+  Logs und Bilder unter `out/gizmo-{dx11,vulkan}-aa*`,
+  Testlauf `out/hierarchy-tests-complete.log`, Build `out/hierarchy-build.log`.
+- **Grenzen:** kein Release-Build und keine echte Physik-/Audio-Simulation
+  in dieser Konfiguration; kein neuer Nachweis für verdeckte Kamera-Gizmos
+  oder alle Manipulatorformen in der Animationsvorschau.
+
 ### Korrektur: Materialvorschaukugel verschwindet nach Prefab-Auswahl (2026-11-19)
 
 - **[P2, behoben]** Ein Klick auf ein Prefab im Asset-Browser leerte

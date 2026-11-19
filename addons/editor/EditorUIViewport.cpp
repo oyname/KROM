@@ -1,3 +1,4 @@
+#include "ecs/HierarchyState.hpp"
 // =============================================================================
 // KROM Engine - addons/editor/EditorUIViewport.cpp
 // Viewport-Werkzeuge: Gizmos (Verschieben/Drehen/Skalieren, Dpad),
@@ -2581,7 +2582,7 @@ static std::vector<EditorIcon> CollectEditorIcons(EditorFrameContext& ctx)
 
         if (!IsScenePickEntity(ctx.world, id))
             return;
-        if (const auto* active = ctx.world.Get<ActiveComponent>(id); active && !active->active)
+        if (!IsEntityActiveInHierarchy(ctx.world, id) || !IsEntityVisibleInHierarchy(ctx.world, id))
             return;
         if (!WorldToScreenPx(wt.position, vp, GetSceneScreenRect(ctx), icon.screen))
             return;

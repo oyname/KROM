@@ -141,6 +141,12 @@ struct ActiveComponent
     bool active = true;
 };
 
+// Local rendering state. Ancestors can hide an entity without changing this value.
+struct VisibilityComponent
+{
+    bool visible = true;
+};
+
 // =============================================================================
 // Tag — frei waehlbares String-Label fuer Script- und Spiellogik
 // =============================================================================
@@ -172,6 +178,7 @@ inline void RegisterCoreComponents(ecs::ComponentMetaRegistry& registry)
     RegisterComponent<BoundsComponent>(registry, "BoundsComponent");
     RegisterComponent<OBBComponent>(registry, "OBBComponent");
     RegisterComponent<ActiveComponent>(registry, "ActiveComponent");
+    RegisterComponent<VisibilityComponent>(registry, "VisibilityComponent");
     RegisterComponent<TagComponent>(registry, "TagComponent");
     RegisterComponent<FolderComponent>(registry, "FolderComponent");
 }
