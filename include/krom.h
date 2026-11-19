@@ -3,6 +3,7 @@
 #include <cstdint>
 
 #include "core/Math.hpp"
+#include "core/RenderQuality.hpp"
 #include "core/Types.hpp"
 #include "platform/IInput.hpp"
 #include "platform/IWindow.hpp"
@@ -365,6 +366,26 @@ void SetGtaoEnabled(bool enabled);
 // No effect under OpenGL; GetSsrEnabled then returns false.
 void SetSsrEnabled(bool enabled);
 [[nodiscard]] bool GetSsrEnabled();
+
+// Screen-space contact shadows of the main directional light, switchable at
+// runtime; the project setting contactShadowsEnabled gives the start value.
+// No effect under OpenGL; GetContactShadowsEnabled then returns false.
+void SetContactShadowsEnabled(bool enabled);
+[[nodiscard]] bool GetContactShadowsEnabled();
+// Post-process anti-aliasing after tonemapping (off, FXAA, SMAA), in addition
+// to MSAA; the project setting postAA gives the start value. No effect under OpenGL.
+void SetPostAA(engine::RenderPostAA mode);
+[[nodiscard]] engine::RenderPostAA GetPostAA();
+
+// Quality level for a player's options menu: sets MSAA, post-AA, GTAO, SSR and
+// contact shadows of Low / Medium / High at once (engine::RenderQualityPreset);
+// Custom changes nothing. The level is remembered on this computer
+// (user-settings.json below %LOCALAPPDATA%\KROM\Games\<window title>) and
+// replaces the project's options at the next start. Runs started from the
+// editor neither read nor write it. GetQualityLevel returns the level the
+// current options match, or Custom.
+void SetQualityLevel(engine::RenderQualityLevel level);
+[[nodiscard]] engine::RenderQualityLevel GetQualityLevel();
 
 // BRDF options of the PBR shaders (height-correlated visibility, diffuse Fresnel
 // per light, multi-scatter compensation). All off = the former shading.

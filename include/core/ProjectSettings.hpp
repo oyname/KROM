@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/RenderQuality.hpp"
 #include "platform/IInput.hpp"
 #include "platform/IWindow.hpp"
 #include "serialization/SceneSerializer.hpp"
@@ -7,7 +8,9 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace engine {
@@ -76,6 +79,85 @@ struct ProjectSettings
     // ReadLegacySceneRenderSettings). The block is always written.
     bool renderingStored = false;
 };
+
+// The options of ProjectRenderSettings a quality level sets (the project
+// stores the post-AA mode by name; unknown names count as off).
+[[nodiscard]] inline RenderQualityOptions GetRenderQualityOptions(const ProjectRenderSettings& settings)
+{
+    RenderQualityOptions options{};
+    options.msaaSamples = settings.msaaSamples >= 4u ? 4u : (settings.msaaSamples >= 2u ? 2u : 1u);
+    options.postAA = settings.postAA == "smaa" ? RenderPostAA::Smaa
+                   : settings.postAA == "fxaa" ? RenderPostAA::Fxaa : RenderPostAA::Off;
+    options.gtaoEnabled = settings.gtaoEnabled;
+    options.ssrEnabled = settings.ssrEnabled;
+    options.contactShadowsEnabled = settings.contactShadowsEnabled;
+    return options;
+}
+
+inline void SetRenderQualityOptions(ProjectRenderSettings& settings, const RenderQualityOptions& options)
+{
+    settings.msaaSamples = options.msaaSamples;
+    settings.postAA = options.postAA == RenderPostAA::Smaa ? "smaa"
+                    : options.postAA == RenderPostAA::Fxaa ? "fxaa" : "off";
+    settings.gtaoEnabled = options.gtaoEnabled;
+    settings.ssrEnabled = options.ssrEnabled;
+    settings.contactShadowsEnabled = options.contactShadowsEnabled;
+}
+
+// Sets the options of a level; Custom keeps the current options.
+inline void ApplyRenderQualityLevel(ProjectRenderSettings& settings, RenderQualityLevel level)
+{
+    if (level != RenderQualityLevel::Custom)
+        SetRenderQualityOptions(settings, RenderQualityPreset(level));
+}
+
+[[nodiscard]] inline RenderQualityLevel GetRenderQualityLevel(const ProjectRenderSettings& settings)
+{
+    return DetectRenderQualityLevel(GetRenderQualityOptions(settings));
+}
+
+// Per-computer settings of an exported game (user-settings.json, see
+// UserGameSettingsFolderName): what a player picked, which overrides the project.
+struct UserGameSettings
+{
+    std::optional<RenderQualityLevel> qualityLevel;   // never Custom
+};
+
+[[nodiscard]] inline UserGameSettings ReadUserGameSettings(const serialization::JsonValue& root)
+{
+    UserGameSettings result;
+    RenderQualityLevel level = RenderQualityLevel::Custom;
+    if (const auto* v = root.Get("qualityLevel"); v && v->IsString() &&
+        ParseRenderQualityLevel(v->AsString().c_str(), level) && level != RenderQualityLevel::Custom)
+        result.qualityLevel = level;
+    return result;
+}
+
+[[nodiscard]] inline std::string WriteUserGameSettings(const UserGameSettings& settings)
+{
+    std::string text = "{\n";
+    if (settings.qualityLevel && *settings.qualityLevel != RenderQualityLevel::Custom)
+        text += std::string("  \"qualityLevel\": \"") + RenderQualityLevelName(*settings.qualityLevel) + "\"\n";
+    text += "}\n";
+    return text;
+}
+
+// Folder name for a game's user settings: the window title (UTF-8) with
+// characters Windows does not allow in file names replaced by '_'; trailing
+// dots and spaces removed. Empty if nothing usable is left.
+[[nodiscard]] inline std::string UserGameSettingsFolderName(const std::string& title)
+{
+    std::string name;
+    for (char c : title)
+    {
+        const unsigned char u = static_cast<unsigned char>(c);
+        name += (u < 32u || std::string_view("<>:\"/\\|?*").find(c) != std::string_view::npos) ? '_' : c;
+    }
+    while (!name.empty() && (name.back() == '.' || name.back() == ' '))
+        name.pop_back();
+    const size_t first = name.find_first_not_of(' ');
+    return first == std::string::npos ? std::string{} : name.substr(first);
+}
 
 inline void ReadRenderSettingKeys(const serialization::JsonValue& object, ProjectRenderSettings& out)
 {

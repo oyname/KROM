@@ -44,7 +44,7 @@ Qualitätsstufen und Post-Process-Volumes. Zeitliche Verfahren (TAA) kommen zule
 | 4 | Script-API: GTAO und SSR an/aus | erledigt (2026-11-18), GTAO mit Projekt-Häkchen |
 | 5 | Post-AA: SMAA 1x, FXAA | erledigt (2026-11-19: FXAA, SMAA 1x), Review offen |
 | 6 | Auto-Exposure | erledigt (2026-11-19), Review offen |
-| 7 | Qualitätsstufen | offen |
+| 7 | Qualitätsstufen | erledigt (2026-11-19), Review offen |
 | 8 | Post-Process-Volume: Bedienablauf abstimmen | offen |
 | 9 | Post-Process-Volume: Umsetzung | offen |
 | 10 | Motion Vectors (optional, später entscheiden) | offen |
@@ -118,6 +118,12 @@ unabhängig weiter.
 - Projekteinstellungen: Niedrig / Mittel / Hoch / Eigene, jeweils MSAA, Post-AA, GTAO,
   SSR, Kontaktschatten (sobald vorhanden).
 - Script-API: Stufe setzen und lesen.
+- Abgestimmt (Nutzer, 2026-11-19): Der Spieler wählt nur die Stufe. Niedrig = FXAA, sonst alles
+  aus; Mittel = SMAA, GTAO, Kontaktschatten; Hoch = MSAA 2×, SMAA, alles an. Stufen setzen nur
+  Techniken, keine Regler. Die Stufe wird aus den Optionen abgeleitet (eine Option einzeln
+  geändert → „Eigene“), kein eigener Projektschlüssel. Das Projekt liefert den Startwert; eine
+  per Script gewählte Stufe merkt sich das exportierte Spiel pro Rechner (wie Unreal
+  `GameUserSettings.ini`). Script-API: Stufe setzen/lesen, dazu Post-AA und Kontaktschatten.
 
 ## Phase 3: Volumes
 
@@ -362,3 +368,53 @@ GTX 1660, Viewport 1181×709, MSAA wie Projekt, ohne Validierung), ms:
 - Sichtprüfung im Editor durch den Nutzer nach dem lokalen Merge in `main` (55d4172): „wirkt sehr gut“
   (2026-11-19).
 - Offen: Release-Messung, Review durch Codex; Mittengewichtung bewusst weggelassen.
+
+### 2026-11-19 – Schritt 7, Qualitätsstufen (Claude, Zweig `claude/admiring-cannon-fdd311`)
+
+- Zweig vorher per Fast-Forward auf `main` (909900d, mit Auto-Exposure) gebracht.
+- Nutzerentscheidung (vorher abgestimmt, nach Vergleich mit Unreal/Unity): Der Spieler wählt nur die Stufe.
+  Niedrig = MSAA aus, FXAA, GTAO/SSR/Kontaktschatten aus; Mittel = MSAA aus, SMAA, GTAO und Kontaktschatten an,
+  SSR aus; Hoch = MSAA 2×, SMAA, alles an. Stufen setzen nur diese fünf Techniken, keine Regler (Radius,
+  Intensität, Schritte bleiben). Das passt zu Schritt 8: Volumes ändern nur Werte.
+- `include/core/RenderQuality.hpp` (neu): `RenderQualityLevel` Low/Medium/High/Custom, `RenderPostAA` (Ids wie
+  `PostAAMode`, `static_assert` in `KromWrapper.cpp`), `RenderQualityOptions`, `RenderQualityPreset`,
+  `DetectRenderQualityLevel`, Namen `low`/`medium`/`high`/`custom`.
+- Kein eigener Projektschlüssel: Die Stufe wird aus den Optionen abgeleitet (`GetRenderQualityLevel`); passt
+  keine, ist es „Eigene“. Auswahl einer Stufe setzt die fünf Optionen (`ApplyRenderQualityLevel`), „Eigene“
+  ändert nichts. Alte Projekte zeigen, was zu ihren Optionen passt (DemoProject: „Eigene“, Post-AA aus).
+- Editor: Projekteinstellungen > Rendering, ganz oben Abschnitt „Qualitätsstufe“ mit Auswahl „Stufe“, Tooltip
+  (Inhalte der Stufen) und Hinweis (Startwert; Spielerwahl merkt sich das exportierte Spiel), de/en.
+- Pro Rechner (nur krom.h-Runtime): `Krom::SetQualityLevel` bzw. `IRenderSettingsService::SetQualityLevel`
+  schreibt `user-settings.json` (`{"qualityLevel": "low"}`) nach `%LOCALAPPDATA%\KROM\Games\<Fenstertitel>\`
+  (Fenstertitel ohne in Dateinamen verbotene Zeichen, sonst EXE-Name; sonst XDG/`~/.config/krom/games`),
+  `KROM_USER_SETTINGS_DIR` ersetzt den Ordner (Tests). `LoadProject` liest sie; die gespeicherte Stufe ersetzt
+  in `ApplyProjectRenderSettings` die fünf Projektoptionen (auch bei Szenen alter Projekte). Aus dem Editor
+  gestartete Läufe (`--editor-live-state`) lesen und schreiben sie nicht. Der Editor selbst nutzt immer das
+  Projekt; im Editor-Play wirkt `SetQualityLevel` nur bis Play-Ende.
+- Script-API (`IRenderSettingsService`): `GetQualityLevel`/`SetQualityLevel` (Standard über Get/Set,
+  Runtime überschreibt zum Speichern), neue Felder `postAA` (Aus/FXAA/SMAA, aus Schritt 5 nachgeholt) und
+  `contactShadowsEnabled`. krom.h: `SetQualityLevel`/`GetQualityLevel`, `SetPostAA`/`GetPostAA`,
+  `SetContactShadowsEnabled`/`GetContactShadowsEnabled`. Diagnosezeile nach dem Registrieren der Features:
+  „render quality 'low' (MSAA 1, post-AA 1, …), player's level“.
+- Geprüft: Debug x64 (`-j 4`, nur benötigte Ziele), `krom_tests` grün, neuer Test „Render quality levels“
+  (55 Prüfungen: Inhalte, Erkennen/Namen, Projektoptionen inkl. unbekanntem Post-AA und MSAA 3 → 2, Regler
+  bleiben, Script-Standardfunktionen, `user-settings.json` Rundweg/ungültig/custom, Ordnernamen). Room 2
+  (Kopien `out/q-low|medium|high`) mit `KROM_VALIDATION=1 KROM_CAPTURE_LIT=1 --gtao-motion` ohne Meldung:
+  DX11 und Vulkan je Niedrig/Mittel/Hoch, OpenGL Hoch (startet, Optionen ohne Wirkung). DX11/Vulkan mittlere
+  Abweichung 0,51 / 0,52 / 0,52 von 255; Hoch gegenüber Niedrig 1,43/255, gegenüber Mittel 1,01/255 (Room 2 hat
+  wenig Spiegelung und kleinen GTAO-Radius). Runtime (`editor_scene_runtime_*`, Projekt Hoch,
+  `user-settings.json` = low): DX11 und Vulkan starten mit „low … player's level“; mit `--editor-live-state`
+  „high“; ohne Datei „high“; OpenGL startet („custom“, weil GTAO/SSR/Kontaktschatten dort fehlen).
+- GPU-Zeit (`--perf`, `KROM_PERF_GPU_PASSES=1`, Debug, GTX 1660, Fenster 1920×1040, Room 2), ms:
+
+| Stufe | Pässe | DX11 GPU gesamt | Vulkan GPU gesamt | Frame DX11 / Vulkan |
+|---|---:|---:|---:|---:|
+| Niedrig | 16 | 2,53 | 2,36 | 32,4 / 14,4 |
+| Mittel | 25 | 3,94 | 3,96 | 32,4 / 15,5 |
+| Hoch | 29 | 5,98 | 5,52 | 31,3 / 15,9 |
+
+  Größte Posten: Hoch SSR (Trace + Resolve + Composite) DX11 1,59, Vulkan 1,44 ms; GTAO-Kette Mittel/Hoch
+  ≈ 1,0 ms; Kontaktschatten ≈ 0,4 ms; FXAA 0,16 ms, SMAA ≈ 0,23–0,29 ms; MSAA 2× hebt MainOpaquePass DX11
+  1,87 → 2,18 ms (+ Resolve 0,08). Frame-Zeit im Debug-Build CPU-gebunden (DX11 ≈ 32 ms in allen Stufen).
+- Nicht geprüft: Schreiben von `user-settings.json` über ein echtes Script im exportierten Spiel (nur
+  Lesen per Lauf, Schreiben per Test der Textfunktion), Sichtprüfung der neuen Auswahl im Editor, Release.

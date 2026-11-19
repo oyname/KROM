@@ -1511,6 +1511,19 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
 {
     ProjectRenderSettings& rendering = ctx.projectSettings.rendering;
 
+    // Quality level: derived from the options below (no own key); picking a
+    // level sets them, picking "Custom" keeps them.
+    ImGui::SeparatorText(Translate("quality.title"));
+    const char* qualityLevels[] = { Translate("quality.low"), Translate("quality.medium"),
+                                    Translate("quality.high"), Translate("quality.custom") };
+    int quality = static_cast<int>(GetRenderQualityLevel(rendering));
+    if (ImGui::Combo(TranslateLabel("quality.level", "Level").c_str(), &quality, qualityLevels, IM_ARRAYSIZE(qualityLevels)))
+        ApplyRenderQualityLevel(rendering, static_cast<RenderQualityLevel>(std::clamp(quality, 0, 3)));
+    ImGui::SetItemTooltip("%s", Translate("quality.level_tip"));
+    ImGui::PushTextWrapPos(0.f);
+    ImGui::TextDisabled("%s", Translate("quality.hint"));
+    ImGui::PopTextWrapPos();
+
     ImGui::SeparatorText(Translate("tonemap.title"));
     // Order of the list = TonemapOperator ids; the file stores the names.
     const char* operatorNames[] = { "reinhard", "aces", "agx", "pbrNeutral" };

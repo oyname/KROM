@@ -12,6 +12,7 @@
 #include "core/Debug.hpp"
 #include "core/PathUtf8.hpp"
 #include "core/ProjectSettings.hpp"
+#include "addons/script/IRenderSettingsService.hpp"
 #include "ecs/World.hpp"
 #include "ecs/Components.hpp"
 #include "serialization/SceneSerializer.hpp"
@@ -490,6 +491,116 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     }
 }
 
+namespace {
+// Plain IRenderSettingsService: checks the default SetQualityLevel/GetQualityLevel.
+class FakeRenderSettingsService final : public script::IRenderSettingsService
+{
+public:
+    script::RenderSettings values{};
+    int setCalls = 0;
+    script::RenderSettings Get() const override { return values; }
+    void Set(const script::RenderSettings& in) override { values = in; ++setCalls; }
+};
+} // namespace
+
+static void TestRenderQualityLevels(test::TestContext& ctx)
+{
+    // Every level detects as itself; the levels differ.
+    for (RenderQualityLevel level : {RenderQualityLevel::Low, RenderQualityLevel::Medium, RenderQualityLevel::High})
+    {
+        CHECK_EQ(ctx, DetectRenderQualityLevel(RenderQualityPreset(level)), level);
+        RenderQualityLevel parsed = RenderQualityLevel::Custom;
+        CHECK(ctx, ParseRenderQualityLevel(RenderQualityLevelName(level), parsed));
+        CHECK_EQ(ctx, parsed, level);
+    }
+    RenderQualityLevel parsed = RenderQualityLevel::Low;
+    CHECK(ctx, !ParseRenderQualityLevel("ultra", parsed));
+    CHECK(ctx, !ParseRenderQualityLevel(nullptr, parsed));
+    CHECK_EQ(ctx, parsed, RenderQualityLevel::Low);
+
+    // Contents as agreed with the user (2026-11-19).
+    const RenderQualityOptions low = RenderQualityPreset(RenderQualityLevel::Low);
+    CHECK_EQ(ctx, low.msaaSamples, 1u);
+    CHECK_EQ(ctx, low.postAA, RenderPostAA::Fxaa);
+    CHECK(ctx, !low.gtaoEnabled && !low.ssrEnabled && !low.contactShadowsEnabled);
+    const RenderQualityOptions medium = RenderQualityPreset(RenderQualityLevel::Medium);
+    CHECK_EQ(ctx, medium.msaaSamples, 1u);
+    CHECK_EQ(ctx, medium.postAA, RenderPostAA::Smaa);
+    CHECK(ctx, medium.gtaoEnabled && !medium.ssrEnabled && medium.contactShadowsEnabled);
+    const RenderQualityOptions high = RenderQualityPreset(RenderQualityLevel::High);
+    CHECK_EQ(ctx, high.msaaSamples, 2u);
+    CHECK_EQ(ctx, high.postAA, RenderPostAA::Smaa);
+    CHECK(ctx, high.gtaoEnabled && high.ssrEnabled && high.contactShadowsEnabled);
+
+    // Project settings: defaults (no post-AA) are Custom; a level sets only its
+    // five options; one changed option makes it Custom; Custom changes nothing.
+    ProjectRenderSettings rendering;
+    rendering.gtaoRadius = 1.25f;
+    rendering.ssrIntensity = 0.4f;
+    CHECK_EQ(ctx, GetRenderQualityLevel(rendering), RenderQualityLevel::Custom);
+    ApplyRenderQualityLevel(rendering, RenderQualityLevel::Medium);
+    CHECK_EQ(ctx, GetRenderQualityLevel(rendering), RenderQualityLevel::Medium);
+    CHECK_EQ(ctx, rendering.postAA, std::string("smaa"));
+    CHECK(ctx, !rendering.ssrEnabled);
+    CHECK_EQ(ctx, rendering.gtaoRadius, 1.25f);
+    CHECK_EQ(ctx, rendering.ssrIntensity, 0.4f);
+    ApplyRenderQualityLevel(rendering, RenderQualityLevel::Low);
+    CHECK_EQ(ctx, rendering.postAA, std::string("fxaa"));
+    CHECK_EQ(ctx, GetRenderQualityLevel(rendering), RenderQualityLevel::Low);
+    rendering.ssrEnabled = true;
+    CHECK_EQ(ctx, GetRenderQualityLevel(rendering), RenderQualityLevel::Custom);
+    ApplyRenderQualityLevel(rendering, RenderQualityLevel::Custom);
+    CHECK(ctx, rendering.ssrEnabled);
+    CHECK_EQ(ctx, rendering.postAA, std::string("fxaa"));
+    ApplyRenderQualityLevel(rendering, RenderQualityLevel::High);
+    rendering.postAA = "unknown";   // unknown name counts as off
+    CHECK_EQ(ctx, GetRenderQualityOptions(rendering).postAA, RenderPostAA::Off);
+    rendering.postAA = "smaa";
+    rendering.msaaSamples = 3u;     // normalised like the renderer: 3 -> 2
+    CHECK_EQ(ctx, GetRenderQualityLevel(rendering), RenderQualityLevel::High);
+
+    // Script service: default level functions go through Get/Set and keep the
+    // other options.
+    FakeRenderSettingsService service;
+    service.values.exposureEv = 1.5f;
+    service.values.specularOcclusion = false;
+    CHECK_EQ(ctx, service.GetQualityLevel(), RenderQualityLevel::Custom);   // defaults: post-AA off
+    service.SetQualityLevel(script::QualityLevel::Low);
+    CHECK_EQ(ctx, service.GetQualityLevel(), script::QualityLevel::Low);
+    CHECK_EQ(ctx, service.values.postAA, script::PostAAMode::Fxaa);
+    CHECK(ctx, !service.values.gtaoEnabled && !service.values.contactShadowsEnabled);
+    CHECK_EQ(ctx, service.values.exposureEv, 1.5f);
+    CHECK(ctx, !service.values.specularOcclusion);
+    service.SetQualityLevel(script::QualityLevel::High);
+    CHECK_EQ(ctx, service.values.msaaSamples, 2u);
+    CHECK_EQ(ctx, service.GetQualityLevel(), script::QualityLevel::High);
+    const int calls = service.setCalls;
+    service.SetQualityLevel(script::QualityLevel::Custom);
+    CHECK_EQ(ctx, service.setCalls, calls);
+    service.values.ssrEnabled = false;
+    CHECK_EQ(ctx, service.GetQualityLevel(), script::QualityLevel::Custom);
+
+    // Per-computer user settings: round trip, missing/invalid/custom = none.
+    std::string error;
+    UserGameSettings user;
+    user.qualityLevel = RenderQualityLevel::Medium;
+    const UserGameSettings read = ReadUserGameSettings(JsonParser::Parse(WriteUserGameSettings(user), error));
+    CHECK(ctx, error.empty());
+    CHECK(ctx, read.qualityLevel.has_value());
+    if (read.qualityLevel)
+        CHECK_EQ(ctx, *read.qualityLevel, RenderQualityLevel::Medium);
+    CHECK(ctx, !ReadUserGameSettings(JsonParser::Parse(WriteUserGameSettings({}), error)).qualityLevel);
+    CHECK(ctx, !ReadUserGameSettings(JsonParser::Parse(R"({"qualityLevel":"custom"})", error)).qualityLevel);
+    CHECK(ctx, !ReadUserGameSettings(JsonParser::Parse(R"({"qualityLevel":"ultra"})", error)).qualityLevel);
+    CHECK(ctx, !ReadUserGameSettings(JsonParser::Parse(R"({"qualityLevel":2})", error)).qualityLevel);
+
+    // Folder names: forbidden characters replaced, trailing dots/spaces dropped.
+    CHECK_EQ(ctx, UserGameSettingsFolderName("My Game"), std::string("My Game"));
+    CHECK_EQ(ctx, UserGameSettingsFolderName("  A:B/C\\D?*. "), std::string("A_B_C_D__"));
+    CHECK_EQ(ctx, UserGameSettingsFolderName(" .. "), std::string());
+    CHECK_EQ(ctx, UserGameSettingsFolderName(""), std::string());
+}
+
 static void TestPortableAssetPathRule(test::TestContext& ctx)
 {
     CHECK(ctx, IsPortableAssetPath(""));
@@ -595,6 +706,7 @@ int RunSerializationTests()
         .Add("Deserializer parent remap",     TestDeserializerParentRemap)
         .Add("Deserializer invalid JSON",     TestDeserializerInvalidJson)
         .Add("Project settings and legacy defaults", TestProjectSettingsRoundTrip)
+        .Add("Render quality levels",         TestRenderQualityLevels)
         .Add("Portable asset path rule",      TestPortableAssetPathRule)
         .Add("Scene drops non-portable material paths", TestSceneDropsNonPortableMaterialPaths);
 

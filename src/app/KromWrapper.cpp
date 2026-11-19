@@ -1,5 +1,6 @@
 #include "krom.h"
 #include "KromSurfaces.hpp"
+#include "core/AtomicTextFile.hpp"
 #include "core/PathUtf8.hpp"
 
 #include "addons/script/ScriptList.hpp"
@@ -132,6 +133,7 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 #include <string_view>
 #include <thread>
 #include <memory>
+#include <optional>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -232,6 +234,10 @@ struct State
     std::shared_ptr<engine::renderer::addons::ssr::SsrGpuResources> ssrResources;
     // Contact shadow add-on resources; null without it (OpenGL, enableContactShadows off).
     std::shared_ptr<engine::renderer::addons::contact_shadow::ContactShadowGpuResources> contactShadowResources;
+    // Quality level a player picked (Krom::SetQualityLevel, scripts), remembered on
+    // this computer (user-settings.json); replaces the project's level options.
+    // Not used by runs started from the editor (editor live state).
+    std::optional<engine::RenderQualityLevel> userQualityLevel;
     // BRDF options of the PBR shaders (Krom::SetShading, scene files).
     std::shared_ptr<engine::renderer::addons::forward::ShadingSettings> shadingSettings =
         std::make_shared<engine::renderer::addons::forward::ShadingSettings>();
@@ -2255,10 +2261,81 @@ static bool LoadComponentSerializedScene(State& state,
     return true;
 }
 
+// user-settings.json of an exported game: %LOCALAPPDATA%\KROM\Games\<window
+// title or EXE name>\ (Windows), $XDG_CONFIG_HOME/krom/games/<...>/ or
+// ~/.config/krom/games/<...>/ elsewhere. KROM_USER_SETTINGS_DIR replaces the
+// folder (tests). Empty if no folder can be found.
+static_assert(static_cast<uint8_t>(engine::RenderPostAA::Fxaa) ==
+              static_cast<uint8_t>(engine::renderer::addons::forward::PostAAMode::Fxaa) &&
+              static_cast<uint8_t>(engine::RenderPostAA::Smaa) ==
+              static_cast<uint8_t>(engine::renderer::addons::forward::PostAAMode::Smaa),
+              "RenderPostAA ids must match PostAAMode");
+
+static std::filesystem::path UserGameSettingsPath(const State& state)
+{
+    if (const char* dir = std::getenv("KROM_USER_SETTINGS_DIR"); dir && *dir)
+        return PathFromUtf8(dir) / "user-settings.json";
+    std::string game = engine::UserGameSettingsFolderName(state.projectSettings.windowTitle);
+#if defined(_WIN32)
+    if (game.empty())
+    {
+        wchar_t exeBuf[260]{};
+        if (::GetModuleFileNameW(nullptr, exeBuf, 260) > 0)
+            game = engine::UserGameSettingsFolderName(PathToUtf8(std::filesystem::path(exeBuf).stem()));
+    }
+    if (game.empty())
+        return {};
+    if (const wchar_t* appData = _wgetenv(L"LOCALAPPDATA"); appData && *appData)
+        return std::filesystem::path(appData) / "KROM" / "Games" / PathFromUtf8(game) / "user-settings.json";
+#else
+    if (game.empty())
+        return {};
+    if (const char* config = std::getenv("XDG_CONFIG_HOME"); config && *config)
+        return PathFromUtf8(config) / "krom" / "games" / PathFromUtf8(game) / "user-settings.json";
+    if (const char* home = std::getenv("HOME"); home && *home)
+        return PathFromUtf8(home) / ".config" / "krom" / "games" / PathFromUtf8(game) / "user-settings.json";
+#endif
+    return {};
+}
+
+static void LoadUserGameSettings(State& state)
+{
+    state.userQualityLevel.reset();
+    const std::filesystem::path path = UserGameSettingsPath(state);
+    std::ifstream file(path);
+    if (path.empty() || !file)
+        return;
+    const std::string json(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>{});
+    std::string err;
+    const engine::serialization::JsonValue root = engine::serialization::JsonParser::Parse(json, err);
+    if (!err.empty() || !root.IsObject())
+    {
+        engine::Debug::LogWarning("krom.h: ignoring invalid user settings '%s'", PathToUtf8(path).c_str());
+        return;
+    }
+    state.userQualityLevel = engine::ReadUserGameSettings(root).qualityLevel;
+    if (state.userQualityLevel)
+        engine::Debug::Log("krom.h: quality level '%s' from %s",
+                           engine::RenderQualityLevelName(*state.userQualityLevel), PathToUtf8(path).c_str());
+}
+
+static void SaveUserGameSettings(const State& state)
+{
+    const std::filesystem::path path = UserGameSettingsPath(state);
+    engine::UserGameSettings settings;
+    settings.qualityLevel = state.userQualityLevel;
+    if (path.empty() || !engine::WriteTextFileAtomically(path, engine::WriteUserGameSettings(settings)))
+        engine::Debug::LogWarning("krom.h: could not save user settings '%s'", PathToUtf8(path).c_str());
+}
+
 // Project-wide render options (project settings, or the scene of a project
 // written before they moved there). Exposure stays with the scene.
-static void ApplyProjectRenderSettings(State& state, const engine::ProjectRenderSettings& rendering)
+static void ApplyProjectRenderSettings(State& state, const engine::ProjectRenderSettings& projectRendering)
 {
+    // A player's quality level replaces the level options of the project.
+    engine::ProjectRenderSettings rendering = projectRendering;
+    if (state.userQualityLevel && !state.editorLiveStateEnabled)
+        engine::ApplyRenderQualityLevel(rendering, *state.userQualityLevel);
     if (state.tonemapSettings &&
         !engine::renderer::addons::forward::ParseTonemapOperator(rendering.tonemapOperator.c_str(),
                                                                  state.tonemapSettings->op))
@@ -2334,6 +2411,9 @@ public:
         out.specularOcclusion = m_state.probeRuntime && m_state.probeRuntime->GetSettings().specularOcclusion;
         out.gtaoEnabled = m_state.gtaoResources && m_state.gtaoResources->settings.enabled;
         out.ssrEnabled = m_state.ssrResources && m_state.ssrResources->settings.enabled;
+        out.contactShadowsEnabled = m_state.contactShadowResources && m_state.contactShadowResources->settings.enabled;
+        out.postAA = m_state.postAASettings ? static_cast<engine::script::PostAAMode>(m_state.postAASettings->mode)
+                                            : engine::script::PostAAMode::Off;
         return out;
     }
 
@@ -2362,7 +2442,14 @@ public:
             m_state.gtaoResources->settings.enabled = in.gtaoEnabled;
         if (m_state.ssrResources)
             m_state.ssrResources->settings.enabled = in.ssrEnabled;
+        if (m_state.contactShadowResources)
+            m_state.contactShadowResources->settings.enabled = in.contactShadowsEnabled;
+        if (m_state.postAASettings)
+            m_state.postAASettings->mode = static_cast<PostAAMode>(std::min<uint8_t>(static_cast<uint8_t>(in.postAA), 2u));
     }
+
+    // Also remembered on this computer, like Krom::SetQualityLevel.
+    void SetQualityLevel(engine::script::QualityLevel level) override { Krom::SetQualityLevel(level); }
 
 private:
     State& m_state;
@@ -2583,6 +2670,7 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
 
     state.projectRoot = std::filesystem::weakly_canonical(projectPath.parent_path());
     state.projectSettings = engine::ReadProjectSettings(root);
+    LoadUserGameSettings(state);   // needs the window title
     state.game.SetProjectSettings(state.projectSettings);
     if (state.projectSettings.renderingStored)
         ApplyProjectRenderSettings(state, state.projectSettings.rendering);
@@ -2790,6 +2878,10 @@ bool RegisterEngineFeatures(State& state)
     // GTAO and the probes exist only now; LoadProject may have run before.
     if (state.projectSettings.renderingStored)
         ApplyProjectRenderSettings(state, state.projectSettings.rendering);
+    Debug::Log("krom.h: render quality '%s' (MSAA %u, post-AA %u, GTAO %d, SSR %d, contact shadows %d)%s",
+               engine::RenderQualityLevelName(GetQualityLevel()), GetMsaa(), static_cast<unsigned>(GetPostAA()),
+               GetGtaoEnabled() ? 1 : 0, GetSsrEnabled() ? 1 : 0, GetContactShadowsEnabled() ? 1 : 0,
+               state.userQualityLevel && !state.editorLiveStateEnabled ? ", player's level" : "");
 
     state.featuresRegistered = true;
     return true;
@@ -3108,8 +3200,12 @@ void ApplyProjectGraphicsSettings(GraphicsConfig& config)
 void SetEditorLiveStateEnabled(bool enabled)
 {
     State& state = Get();
+    const bool userLevelChanges = state.userQualityLevel && state.editorLiveStateEnabled != enabled;
     state.editorLiveStateEnabled = enabled;
     state.runtimeStateWriteTimer = 0.0f;
+    // Runs started from the editor show the project's options, not a player's level.
+    if (userLevelChanges && state.projectSettings.renderingStored)
+        ApplyProjectRenderSettings(state, state.projectSettings.rendering);
 
     if (!enabled || state.projectRoot.empty())
         return;
@@ -4467,6 +4563,65 @@ bool GetSpecularOcclusion()
 {
     const State& state = Get();
     return state.probeRuntime && state.probeRuntime->GetSettings().specularOcclusion;
+}
+
+void SetQualityLevel(engine::RenderQualityLevel level)
+{
+    if (level == engine::RenderQualityLevel::Custom)
+        return;
+    State& state = Get();
+    engine::RenderQualityOptions options = engine::RenderQualityPreset(level);
+    SetMsaa(options.msaaSamples);
+    SetPostAA(options.postAA);
+    SetGtaoEnabled(options.gtaoEnabled);
+    SetSsrEnabled(options.ssrEnabled);
+    SetContactShadowsEnabled(options.contactShadowsEnabled);
+    if (state.editorLiveStateEnabled)
+        return;   // started from the editor: nothing to remember
+    if (state.userQualityLevel != level)
+    {
+        state.userQualityLevel = level;
+        SaveUserGameSettings(state);
+    }
+}
+
+engine::RenderQualityLevel GetQualityLevel()
+{
+    engine::RenderQualityOptions options{};
+    options.msaaSamples = GetMsaa();
+    options.postAA = GetPostAA();
+    options.gtaoEnabled = GetGtaoEnabled();
+    options.ssrEnabled = GetSsrEnabled();
+    options.contactShadowsEnabled = GetContactShadowsEnabled();
+    return engine::DetectRenderQualityLevel(options);
+}
+
+void SetPostAA(engine::RenderPostAA mode)
+{
+    State& state = Get();
+    if (state.postAASettings)
+        state.postAASettings->mode = static_cast<engine::renderer::addons::forward::PostAAMode>(
+            std::min<uint8_t>(static_cast<uint8_t>(mode), 2u));
+}
+
+engine::RenderPostAA GetPostAA()
+{
+    const State& state = Get();
+    return state.postAASettings ? static_cast<engine::RenderPostAA>(state.postAASettings->mode)
+                                : engine::RenderPostAA::Off;
+}
+
+void SetContactShadowsEnabled(bool enabled)
+{
+    State& state = Get();
+    if (state.contactShadowResources)
+        state.contactShadowResources->settings.enabled = enabled;
+}
+
+bool GetContactShadowsEnabled()
+{
+    const State& state = Get();
+    return state.contactShadowResources && state.contactShadowResources->settings.enabled;
 }
 
 void SetMsaa(uint32_t sampleCount)

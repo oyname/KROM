@@ -17,6 +17,37 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Render quality levels (Claude, 2026-11-19)
+
+- Branch `claude/admiring-cannon-fdd311`, fast-forwarded to `main` (909900d) first. Step 7 of
+  `doc/PLAN_BILDQUALITAET_2.md`.
+- Agreed with the user: players pick only a level. Low = no MSAA, FXAA, GTAO/SSR/contact shadows off; Medium =
+  no MSAA, SMAA, GTAO + contact shadows; High = MSAA 2x, SMAA, everything on. Levels set techniques only, never
+  sliders (fits step 8: volumes change values only). The level is derived from the five options (one changed
+  option -> "Custom"); no project key. The project gives the start value; an exported game remembers a level
+  set through script/krom.h per computer (like Unreal's `GameUserSettings.ini`).
+- `include/core/RenderQuality.hpp` (new): `RenderQualityLevel`, `RenderPostAA` (ids = `PostAAMode`,
+  static_assert in `KromWrapper.cpp`), `RenderQualityPreset`, `DetectRenderQualityLevel`, names.
+  `ProjectSettings.hpp`: `Get/SetRenderQualityOptions`, `ApplyRenderQualityLevel`, `GetRenderQualityLevel`,
+  `UserGameSettings` + read/write, `UserGameSettingsFolderName`.
+- Editor: Project settings > Rendering, new top section "Quality level" (combo, tooltip, hint; de/en).
+- Runtime: `user-settings.json` in `%LOCALAPPDATA%\KROM\Games\<window title or EXE name>\` (XDG elsewhere,
+  `KROM_USER_SETTINGS_DIR` overrides), read in `LoadProject`, applied over the project options in
+  `ApplyProjectRenderSettings`; ignored and not written for `--editor-live-state` runs. Log line after feature
+  registration shows the effective level.
+- Script API: `IRenderSettingsService::GetQualityLevel/SetQualityLevel` (defaults via Get/Set; the runtime
+  overrides Set to persist), new `RenderSettings::postAA` and `contactShadowsEnabled`. krom.h:
+  `Set/GetQualityLevel`, `Set/GetPostAA`, `Set/GetContactShadowsEnabled`.
+- Checked: Debug x64 (`-j 4`), `krom_tests` all passed (new "Render quality levels", 55 checks). Room 2 with
+  `KROM_VALIDATION=1 KROM_CAPTURE_LIT=1 --gtao-motion` no messages on DX11 and Vulkan for all three levels,
+  OpenGL starts; DX11 vs Vulkan 0.51-0.52/255. Runtime DX11/Vulkan picks up a stored `low` over a High project;
+  `--editor-live-state` and no file keep `high`. GPU total (Debug, 1920x1040): Low 2.53/2.36 ms, Medium
+  3.94/3.96 ms, High 5.98/5.52 ms (DX11/Vulkan); 16/25/29 passes.
+- Not checked: writing `user-settings.json` from a real script in an exported game (text function tested
+  only), visual check of the new combo, Release.
+- Please review: the derived level (no stored key) vs. future volumes, the user-settings folder naming (window
+  title), and the editor-live-state exception in `SetEditorLiveStateEnabled`.
+
 ## Auto-exposure (Claude, 2026-11-19)
 
 - Branch `claude/wonderful-taussig-04bff6` from 224a6f4 (SMAA). Step 6 of `doc/PLAN_BILDQUALITAET_2.md`.

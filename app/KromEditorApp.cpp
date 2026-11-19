@@ -6133,7 +6133,7 @@ void KromEditorApp::ApplyProjectRenderSettings()
     m_editorState.gtaoSettings.radius = rendering.gtaoRadius;
     m_editorState.gtaoSettings.intensity = rendering.gtaoIntensity;
     m_editorState.gtaoSettings.bias = rendering.gtaoBias;
-    // Contact shadows have no script API yet; the add-on takes the project values directly.
+    // The contact shadow add-on takes the project values directly (scripts: EditorRenderSettingsService).
     if (m_contactShadowResources)
     {
         renderer::addons::contact_shadow::ContactShadowSettings& cs = m_contactShadowResources->settings;
@@ -6152,7 +6152,10 @@ namespace {
 class EditorRenderSettingsService final : public engine::script::IRenderSettingsService
 {
 public:
-    explicit EditorRenderSettingsService(renderer::addons::editor::EditorState& state) noexcept : m_state(state) {}
+    using ContactShadowResources = std::shared_ptr<renderer::addons::contact_shadow::ContactShadowGpuResources>;
+    EditorRenderSettingsService(renderer::addons::editor::EditorState& state,
+                                const ContactShadowResources& contactShadows) noexcept
+        : m_state(state), m_contactShadows(contactShadows) {}
 
     engine::script::RenderSettings Get() const override
     {
@@ -6168,6 +6171,8 @@ public:
         out.specularOcclusion = m_state.specularOcclusion;
         out.gtaoEnabled = m_state.gtaoSettings.enabled;
         out.ssrEnabled = m_state.ssrEnabled;
+        out.contactShadowsEnabled = m_contactShadows && m_contactShadows->settings.enabled;
+        out.postAA = static_cast<engine::script::PostAAMode>(m_state.postAA);
         return out;
     }
 
@@ -6183,10 +6188,16 @@ public:
         m_state.specularOcclusion = in.specularOcclusion;
         m_state.gtaoSettings.enabled = in.gtaoEnabled;
         m_state.ssrEnabled = in.ssrEnabled;
+        if (m_contactShadows)
+            m_contactShadows->settings.enabled = in.contactShadowsEnabled;
+        m_state.postAA = static_cast<PostAAMode>(std::min<uint8_t>(static_cast<uint8_t>(in.postAA), 2u));
     }
+    // SetQualityLevel: the default (live values only); the editor never stores
+    // a player's level, StopEditorPlay restores the project settings.
 
 private:
     renderer::addons::editor::EditorState& m_state;
+    const ContactShadowResources& m_contactShadows;
 };
 
 } // namespace
@@ -6195,7 +6206,7 @@ engine::gameplay::GameSimulationHooks KromEditorApp::MakeEditorPlayHooks()
 {
     engine::gameplay::GameSimulationHooks hooks{};
     if (!m_playRenderSettings)
-        m_playRenderSettings = std::make_unique<EditorRenderSettingsService>(m_editorState);
+        m_playRenderSettings = std::make_unique<EditorRenderSettingsService>(m_editorState, m_contactShadowResources);
     hooks.renderSettings = m_playRenderSettings.get();
     hooks.instantiatePrefab = &m_playInstantiatePrefab;
     hooks.materials = &m_materialSystem;
