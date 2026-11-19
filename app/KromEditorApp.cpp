@@ -17,6 +17,7 @@
 #include "addons/debug_draw/DebugDraw.hpp"
 #include "addons/forward/ForwardFeature.hpp"
 #include "addons/forward/ForwardTonemapJson.hpp"
+#include "addons/script/ScriptColorGrading.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/lighting/LightingFeature.hpp"
 #include "addons/lighting/LightingSerialization.hpp"
@@ -1456,6 +1457,28 @@ std::string BuildEditorEnvironmentJson(const renderer::addons::editor::EditorSta
         out += std::string("    \"") + kSceneKeyAutoExposureMaxEv + "\":" + FloatJson(ae.maxEv) + ",\n";
         out += std::string("    \"") + kSceneKeyAutoExposureToBright + "\":" + FloatJson(ae.toBrightSpeed) + ",\n";
         out += std::string("    \"") + kSceneKeyAutoExposureToDark + "\":" + FloatJson(ae.toDarkSpeed) + ",\n";
+        // Colour grading: only written when not neutral (older scenes stay unchanged).
+        const ColorGradingSettings& g = state.tonemap.grading;
+        if (!g.IsNeutral())
+        {
+            const auto color = [](const std::array<float, 3>& c) {
+                return FloatJson(c[0]) + ", " + FloatJson(c[1]) + ", " + FloatJson(c[2]);
+            };
+            const auto wheel = [&color](const ColorGradingWheel& w) {
+                return "[" + color(w.color) + ", " + FloatJson(w.value) + "]";
+            };
+            out += std::string("    \"") + kSceneKeyColorGrading + "\":{" +
+                   "\"look\":\"" + AgxLookName(g.look) + "\", " +
+                   "\"temperature\":" + FloatJson(g.temperature) + ", " +
+                   "\"tint\":" + FloatJson(g.tint) + ", " +
+                   "\"colorFilter\":[" + color(g.colorFilter) + "], " +
+                   "\"hueShift\":" + FloatJson(g.hueShift) + ", " +
+                   "\"contrast\":" + FloatJson(g.contrast) + ", " +
+                   "\"saturation\":" + FloatJson(g.saturation) + ", " +
+                   "\"lift\":" + wheel(g.lift) + ", " +
+                   "\"gamma\":" + wheel(g.gamma) + ", " +
+                   "\"gain\":" + wheel(g.gain) + "},\n";
+        }
     }
     out += "    \"probeBakePasses\":" + std::to_string(state.probeBakePasses) + "\n";
     out += "  }";
@@ -1526,6 +1549,7 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     ctx->state.tonemap.exposureEv = 0.f;
     ctx->state.tonemap.exposureMode = renderer::addons::forward::ExposureMode::Fixed;
     ctx->state.tonemap.autoExposure = {};
+    ctx->state.tonemap.grading = {};
     ctx->state.probeBakePasses = 2u;
     if (!env || !env->IsObject())
     {
@@ -1538,6 +1562,7 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
         state.tonemap.exposureEv = std::clamp(ev->AsFloat(), renderer::addons::forward::kMinExposureEv,
                                               renderer::addons::forward::kMaxExposureEv);
     renderer::addons::forward::ReadSceneExposureJson(*env, state.tonemap.exposureMode, state.tonemap.autoExposure);
+    renderer::addons::forward::ReadSceneColorGradingJson(*env, state.tonemap.grading);
     if (const serialization::JsonValue* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
         state.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;
     if (const serialization::JsonValue* path = env->Get("texturePath");
@@ -6178,6 +6203,7 @@ public:
         out.ssrEnabled = m_state.ssrEnabled;
         out.contactShadowsEnabled = m_contactShadows && m_contactShadows->settings.enabled;
         out.postAA = static_cast<engine::script::PostAAMode>(m_state.postAA);
+        out.grading = engine::script::ToScriptColorGrading(m_state.tonemap.grading);
         return out;
     }
 
@@ -6196,6 +6222,7 @@ public:
         if (m_contactShadows)
             m_contactShadows->settings.enabled = in.contactShadowsEnabled;
         m_state.postAA = static_cast<PostAAMode>(std::min<uint8_t>(static_cast<uint8_t>(in.postAA), 2u));
+        m_state.tonemap.grading = engine::script::FromScriptColorGrading(in.grading);
     }
     // SetQualityLevel: the default (live values only); the editor never stores
     // a player's level, StopEditorPlay restores the project settings.
@@ -7006,6 +7033,7 @@ struct KsceneEnvironment
     float                exposureEv = 0.f;
     renderer::addons::forward::ExposureMode exposureMode = renderer::addons::forward::ExposureMode::Fixed;
     renderer::addons::forward::AutoExposureSettings autoExposure{};
+    renderer::addons::forward::ColorGradingSettings grading{};
     uint32_t             probeBakePasses = 2u;        // probe add-on
 };
 
@@ -7021,6 +7049,7 @@ static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::edit
     env.exposureEv       = state.tonemap.exposureEv;
     env.exposureMode     = state.tonemap.exposureMode;
     env.autoExposure     = state.tonemap.autoExposure;
+    env.grading          = state.tonemap.grading;
     env.probeBakePasses = state.probeBakePasses;       // probe add-on
     return env;
 }
@@ -7048,6 +7077,7 @@ static bool EnvironmentFromSceneJson(const serialization::JsonValue& root, Kscen
     if (const auto* ev = env->Get("exposureEv"); ev && ev->IsNumber())
         out.exposureEv = ev->AsFloat();
     renderer::addons::forward::ReadSceneExposureJson(*env, out.exposureMode, out.autoExposure);
+    renderer::addons::forward::ReadSceneColorGradingJson(*env, out.grading);
     if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
         out.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;   // probe add-on
     return true;
@@ -7076,6 +7106,7 @@ static void WriteKsceneEnvironment(serialization::JsonWriter& w, const KsceneEnv
         w.WriteFloat (kSceneKeyAutoExposureMaxEv, env.autoExposure.maxEv);
         w.WriteFloat (kSceneKeyAutoExposureToBright, env.autoExposure.toBrightSpeed);
         w.WriteFloat (kSceneKeyAutoExposureToDark, env.autoExposure.toDarkSpeed);
+        WriteSceneColorGradingJson(w, env.grading);
     }
     w.WriteInt   ("probeBakePasses", static_cast<int32_t>(env.probeBakePasses));   // probe add-on
     w.EndObject();

@@ -28,6 +28,8 @@
 #include "addons/forward/ForwardSmaa.hpp"
 #include "addons/forward/ForwardAutoExposure.hpp"
 #include "addons/forward/ForwardTonemapJson.hpp"
+#include "addons/forward/ForwardColorGrading.hpp"
+#include "addons/script/ScriptColorGrading.hpp"
 #include "addons/gtao/GtaoPass.hpp"
 #include "addons/contact_shadow/ContactShadowFeature.hpp"
 #include "addons/shadow/ShadowFeature.hpp"
@@ -1363,6 +1365,119 @@ static void TestAutoExposureSceneJson(test::TestContext& ctx)
     ReadSceneExposureJson(broken, mode, ae);
     CHECK(ctx, ae.minEv == kMaxExposureEv && ae.maxEv == kMaxExposureEv);
     CHECK(ctx, ae.toDarkSpeed == kMinAutoExposureSpeed);
+}
+
+// Colour grading constants: neutral sets no flag (image unchanged); each control
+// sets only its own flag; the AgX look only counts with the AgX operator.
+static void TestColorGradingConstants(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::forward;
+    const auto flagsOf = [](const ColorGradingConstants& c) { return static_cast<uint32_t>(c.params[1]); };
+    const auto apply = [](const ColorGradingConstants& c, const std::array<float, 3>& v) {
+        return std::array<float, 3>{ c.row0[0] * v[0] + c.row0[1] * v[1] + c.row0[2] * v[2],
+                                     c.row1[0] * v[0] + c.row1[1] * v[1] + c.row1[2] * v[2],
+                                     c.row2[0] * v[0] + c.row2[1] * v[1] + c.row2[2] * v[2] };
+    };
+    const auto luma = [](const std::array<float, 3>& v) { return 0.2126f * v[0] + 0.7152f * v[1] + 0.0722f * v[2]; };
+
+    const ColorGradingConstants neutral = BuildColorGradingConstants({}, true);
+    CHECK_EQ(ctx, flagsOf(neutral), 0u);
+    CHECK(ctx, ColorGradingSettings{}.IsNeutral());
+
+    ColorGradingSettings warm{};
+    warm.temperature = 50.f;
+    const ColorGradingConstants warmC = BuildColorGradingConstants(warm, true);
+    CHECK_EQ(ctx, flagsOf(warmC), kGradingFlagMatrix);
+    const auto white = apply(warmC, {1.f, 1.f, 1.f});
+    CHECK(ctx, white[0] > white[2]);   // warmer: more red than blue
+
+    ColorGradingSettings grey{};
+    grey.saturation = 0.f;
+    const auto g = apply(BuildColorGradingConstants(grey, true), {1.f, 0.2f, 0.f});
+    CHECK(ctx, std::abs(g[0] - g[1]) < 1e-5f && std::abs(g[1] - g[2]) < 1e-5f);
+    CHECK(ctx, std::abs(g[0] - luma({1.f, 0.2f, 0.f})) < 1e-5f);
+
+    ColorGradingSettings hue{};
+    hue.hueShift = 120.f;
+    const std::array<float, 3> red{1.f, 0.f, 0.f};
+    const auto rotated = apply(BuildColorGradingConstants(hue, true), red);
+    CHECK(ctx, rotated[1] > rotated[0]);   // red turns towards green
+
+    ColorGradingSettings contrast{};
+    contrast.contrast = 1.5f;
+    const ColorGradingConstants contrastC = BuildColorGradingConstants(contrast, true);
+    CHECK_EQ(ctx, flagsOf(contrastC), kGradingFlagContrast);
+    CHECK(ctx, contrastC.params[0] == 1.5f);
+
+    ColorGradingSettings lgg{};
+    lgg.gain.value = 0.5f;
+    const ColorGradingConstants lggC = BuildColorGradingConstants(lgg, true);
+    CHECK_EQ(ctx, flagsOf(lggC), kGradingFlagLiftGammaGain);
+    CHECK(ctx, lggC.gain[0] > 1.f && lggC.lift[0] == 0.f && lggC.invGamma[0] == 1.f);
+    ColorGradingSettings whiteTint{};
+    whiteTint.lift.color = {0.5f, 0.5f, 0.5f};   // grey = no tint, but not the default value
+    const ColorGradingConstants greyTint = BuildColorGradingConstants(whiteTint, true);
+    CHECK(ctx, std::abs(greyTint.lift[0]) < 1e-6f && std::abs(greyTint.lift[2]) < 1e-6f);
+
+    ColorGradingSettings look{};
+    look.look = AgxLook::Golden;
+    CHECK_EQ(ctx, flagsOf(BuildColorGradingConstants(look, true)), kGradingFlagAgxLook);
+    CHECK_EQ(ctx, flagsOf(BuildColorGradingConstants(look, false)), 0u);
+    CHECK(ctx, BuildColorGradingConstants(look, true).lookSlopePower[2] == 0.5f);
+
+    CHECK(ctx, ParseAgxLook("punchy") == AgxLook::Punchy);
+    CHECK(ctx, ParseAgxLook("unknown") == AgxLook::None);
+    for (uint8_t i = 0u; i < kAgxLookCount; ++i)
+        CHECK(ctx, ParseAgxLook(AgxLookName(static_cast<AgxLook>(i))) == static_cast<AgxLook>(i));
+}
+
+// Scene keys: missing object = neutral and a neutral grading writes nothing;
+// written values come back, out-of-range values are clamped; the script view
+// converts both ways without loss.
+static void TestColorGradingSceneJson(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::forward;
+    std::string error;
+    ColorGradingSettings read{};
+    read.saturation = 0.3f;
+    ReadSceneColorGradingJson(serialization::JsonParser::Parse(R"({"exposureEv":1})", error), read);
+    CHECK(ctx, read.IsNeutral());
+
+    serialization::JsonWriter neutralWriter;
+    neutralWriter.BeginObject();
+    WriteSceneColorGradingJson(neutralWriter, ColorGradingSettings{});
+    neutralWriter.EndObject();
+    CHECK(ctx, neutralWriter.GetString().find(kSceneKeyColorGrading) == std::string::npos);
+
+    ColorGradingSettings g{};
+    g.look = AgxLook::Punchy;
+    g.temperature = -30.f;
+    g.tint = 12.f;
+    g.colorFilter = {1.f, 0.8f, 0.6f};
+    g.hueShift = 15.f;
+    g.contrast = 1.2f;
+    g.saturation = 0.7f;
+    g.lift = { {0.5f, 0.6f, 1.f}, -0.1f };
+    g.gamma = { {1.f, 1.f, 0.8f}, 0.2f };
+    g.gain = { {1.f, 0.9f, 0.9f}, 0.3f };
+    serialization::JsonWriter writer;
+    writer.BeginObject();
+    WriteSceneColorGradingJson(writer, g);
+    writer.EndObject();
+    const serialization::JsonValue env = serialization::JsonParser::Parse(writer.GetString(), error);
+    CHECK(ctx, error.empty());
+    ReadSceneColorGradingJson(env, read);
+    CHECK(ctx, read == g);
+
+    ReadSceneColorGradingJson(serialization::JsonParser::Parse(
+        R"({"colorGrading":{"look":"x","temperature":500,"saturation":-1,"gain":[2,2,2,9]}})", error), read);
+    CHECK(ctx, read.look == AgxLook::None && read.temperature == 100.f && read.saturation == 0.f);
+    CHECK(ctx, read.gain.value == 1.f && read.gain.color[0] == 1.f);
+
+    CHECK(ctx, engine::script::FromScriptColorGrading(engine::script::ToScriptColorGrading(g)) == g);
+    engine::script::ColorGrading badLook{};
+    badLook.agxLook = 77u;
+    CHECK(ctx, engine::script::FromScriptColorGrading(badLook).look == AgxLook::None);
 }
 
 // Recipe: auto-exposure adds no pass; the tonemap pass runs "frame.auto_exposure"
@@ -6881,6 +6996,8 @@ int RunRendererTests()
         .Add("SMAA shaders and lookup textures", TestSmaaShadersAndLookupTextures)
         .Add("Auto-exposure settings", TestAutoExposureSettings)
         .Add("Auto-exposure scene keys", TestAutoExposureSceneJson)
+        .Add("Colour grading constants", TestColorGradingConstants)
+        .Add("Colour grading scene keys and script view", TestColorGradingSceneJson)
         .Add("Auto-exposure recipe", TestAutoExposureRecipe)
         .Add("Recipe pre-render-pass executor", TestRecipePreRenderPassExecutor)
         .Add("Auto-exposure shaders compile", TestAutoExposureShadersCompile)

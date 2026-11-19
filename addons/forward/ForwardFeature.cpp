@@ -835,8 +835,10 @@ void main()
             float op = 0.0f;
             float autoExposure = 0.0f;   // 1: exposure from the auto-exposure state buffer
             float correctionEv = 0.0f;   // added to the automatic exposure
+            ColorGradingConstants grading{};   // neutral: no shader flag set
         };
-        static_assert(sizeof(TonemapPassConstants) == 32u, "TonemapPassConstants must match PerPass in passthrough.ps.hlsl");
+        static_assert(sizeof(TonemapPassConstants) == 160u, "TonemapPassConstants must match PerPass in passthrough.ps.hlsl");
+        static_assert(sizeof(TonemapPassConstants) <= kConstantBufferAlignment, "tonemap PerPass CB is one alignment unit");
 
         // Constants that rarely change, kept in one CPU-written buffer. Writing that buffer
         // while the GPU may still read it makes the backend wait for the previous frame
@@ -2076,6 +2078,8 @@ void main()
                             const TonemapSettings settings = tonemapSettings ? *tonemapSettings : TonemapSettings{};
                             tonemapConstants.exposureScale = std::exp2(std::clamp(settings.exposureEv, kMinExposureEv, kMaxExposureEv));
                             tonemapConstants.op = static_cast<float>(static_cast<uint32_t>(settings.op));
+                            tonemapConstants.grading = BuildColorGradingConstants(settings.grading,
+                                                                                  settings.op == TonemapOperator::AgX);
                             // Auto: the shader reads the exposure from the GPU state; exposureEv is the correction.
                             const bool autoExposure = autoExposureResources && autoExposureResources->ready
                                 && settings.exposureMode == ExposureMode::Auto;

@@ -15,6 +15,7 @@
 #include "addons/camera/CameraViewBuilder.hpp"
 #include "addons/forward/ForwardFeature.hpp"
 #include "addons/forward/ForwardTonemapJson.hpp"
+#include "addons/script/ScriptColorGrading.hpp"
 #include "addons/gtao/GtaoFeature.hpp"
 #include "addons/contact_shadow/ContactShadowFeature.hpp"
 #include "addons/ssr/SsrFeature.hpp"
@@ -178,6 +179,7 @@ struct KromSceneData
     float exposureEv = 0.0f;
     engine::renderer::addons::forward::ExposureMode exposureMode = engine::renderer::addons::forward::ExposureMode::Fixed;
     engine::renderer::addons::forward::AutoExposureSettings autoExposure{};
+    engine::renderer::addons::forward::ColorGradingSettings grading{};   // neutral when missing
     // Render options of scenes written before they moved to the project settings;
     // used only when the project file has no "rendering" block.
     engine::ProjectRenderSettings legacyRendering = engine::ReadLegacySceneRenderSettings({});
@@ -1685,6 +1687,7 @@ static KromSceneData ParseKscene(const std::string& json)
                 data.exposureEv = std::clamp(ev->AsFloat(), engine::renderer::addons::forward::kMinExposureEv,
                                              engine::renderer::addons::forward::kMaxExposureEv);
             engine::renderer::addons::forward::ReadSceneExposureJson(*env, data.exposureMode, data.autoExposure);
+            engine::renderer::addons::forward::ReadSceneColorGradingJson(*env, data.grading);
             data.legacyRendering = engine::ReadLegacySceneRenderSettings(root);
             if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
                 data.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;
@@ -2417,6 +2420,8 @@ public:
         out.contactShadowsEnabled = m_state.contactShadowResources && m_state.contactShadowResources->settings.enabled;
         out.postAA = m_state.postAASettings ? static_cast<engine::script::PostAAMode>(m_state.postAASettings->mode)
                                             : engine::script::PostAAMode::Off;
+        if (m_state.tonemapSettings)
+            out.grading = engine::script::ToScriptColorGrading(m_state.tonemapSettings->grading);
         return out;
     }
 
@@ -2429,6 +2434,7 @@ public:
                 std::min<uint8_t>(static_cast<uint8_t>(in.tonemap), 3u));
             m_state.tonemapSettings->exposureEv = std::clamp(in.exposureEv, kMinExposureEv, kMaxExposureEv);
             m_state.tonemapSettings->exposureMode = in.autoExposure ? ExposureMode::Auto : ExposureMode::Fixed;
+            m_state.tonemapSettings->grading = engine::script::FromScriptColorGrading(in.grading);
         }
         if (m_state.msaaSettings)
             m_state.msaaSettings->sampleCount = NormalizeMsaaSamples(in.msaaSamples);
@@ -2467,6 +2473,7 @@ static void ApplySceneEnvironment(State& state, const KromSceneData& data)
         state.tonemapSettings->exposureEv = data.exposureEv;
         state.tonemapSettings->exposureMode = data.exposureMode;
         state.tonemapSettings->autoExposure = data.autoExposure;
+        state.tonemapSettings->grading = data.grading;
     }
     if (state.autoExposureStatus)
         state.autoExposureStatus->RequestReset();   // the new scene starts at its own exposure
@@ -4662,6 +4669,22 @@ engine::renderer::addons::forward::TonemapSettings GetTonemapping()
 {
     const State& state = Get();
     return state.tonemapSettings ? *state.tonemapSettings : engine::renderer::addons::forward::TonemapSettings{};
+}
+
+void SetColorGrading(const engine::renderer::addons::forward::ColorGradingSettings& grading)
+{
+    State& state = Get();
+    if (!state.tonemapSettings)
+        return;
+    state.tonemapSettings->grading = grading;
+    state.tonemapSettings->grading.Clamp();
+}
+
+engine::renderer::addons::forward::ColorGradingSettings GetColorGrading()
+{
+    const State& state = Get();
+    return state.tonemapSettings ? state.tonemapSettings->grading
+                                 : engine::renderer::addons::forward::ColorGradingSettings{};
 }
 
 void SetActiveEnvironment(engine::renderer::EnvironmentHandle environment)
