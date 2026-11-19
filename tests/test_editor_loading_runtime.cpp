@@ -306,6 +306,110 @@ struct EditorLoadingSmokeTest final : IAppScene
         }
         return true;
     }
+    std::filesystem::path materialPreviewCaptures;
+    int materialPreviewStep = 0;
+    int materialPreviewWait = 0;
+    std::chrono::steady_clock::time_point materialPreviewStart{};
+    bool UpdateMaterialPreview(AppSceneContext& context)
+    {
+        namespace ed = renderer::addons::editor;
+        auto& ui = *app.m_editorFrameCtx;
+        auto& io = ImGui::GetIO();
+        if (frames == 1)
+        {
+            materialPreviewStart = std::chrono::steady_clock::now();
+            const auto root = app.GetCurrentAssetRoot();
+            std::filesystem::create_directories(root / "Materials");
+            std::filesystem::create_directories(root / "Textures");
+            std::filesystem::create_directories(root / "Prefabs");
+            std::filesystem::copy_file(PathFromUtf8(KROM_SOURCE_DIR) /
+                "projects/DemoProject/Assets/Textures/Testraum/door_panel.png", root / "Textures/Preview.png");
+            std::ofstream(root / "Materials/Preview.mat") <<
+                "template pbr-lit\nbaseColorFactor 1 1 1 1\nmetallicFactor 0\nroughnessFactor 1\n"
+                "baseColorTexture Textures/Preview.png\n";
+            std::ofstream(root / "Prefabs/Preview.prefab") <<
+                R"({"type":"KromPrefab","version":2,"rootIndex":0,"records":[{"name":"Preview","parentIndex":-1}]})";
+            ed::OpenMaterialAsset(ui, root / "Materials/Preview.mat");
+            ui.assetsPanelVisible = true;
+            ui.consolePanelVisible = false;
+            ui.state.assetBrowser->highlightPath = root / "Prefabs/Preview.prefab";
+        }
+        if (std::chrono::steady_clock::now() - materialPreviewStart > std::chrono::minutes(2))
+        {
+            Check(false, "material preview regression completed within two minutes");
+            context.renderLoop.GetWindow()->RequestClose();
+            return true;
+        }
+        if (frames < 20 || !ui.state.selectedMaterialAssetLoaded ||
+            context.renderLoop.GetRenderSystem().GetShaderRuntime().HasPendingShaderCompiles())
+        {
+            materialPreviewWait = 0;
+            return true;
+        }
+        const auto capture = [&](const char* stage) {
+            Check(ui.state.selectedMaterialAssetPath == "Materials/Preview.mat",
+                  "browser selection preserves the open material path");
+            const auto* sphere = ui.world.Get<MeshComponent>(app.m_materialPreviewEntity);
+            const auto* ground = ui.world.Get<MeshComponent>(app.m_materialPreviewGround);
+            Check(sphere && sphere->visible && ground && ground->visible, "preview sphere and ground remain visible");
+            auto* device = context.renderLoop.GetRenderSystem().GetDevice();
+            uint32_t width = 0, height = 0;
+            std::vector<uint8_t> pixels;
+            const bool read = device->ReadTexturePixels(device->GetRenderTargetColorTexture(app.m_materialPreviewRT),
+                                                        pixels, width, height);
+            const bool valid = read && width > 0 && height > 0 && pixels.size() == size_t(width) * height * 4;
+            Check(valid, "read back the rendered material preview");
+            if (!valid) return;
+            // This fixture has no skybox: visible pixels must come from the preview geometry.
+            size_t visiblePixels = 0;
+            for (uint32_t y = height / 4; y < height * 3 / 4; ++y)
+                for (uint32_t x = width / 4; x < width * 3 / 4; ++x)
+                {
+                    const size_t p = (size_t(y) * width + x) * 4;
+                    if (std::max({pixels[p], pixels[p + 1], pixels[p + 2]}) > 16) ++visiblePixels;
+                }
+            Check(visiblePixels > size_t(width) * height / 10, "textured sphere produces visible GPU pixels");
+            std::ofstream image(materialPreviewCaptures / (std::string(stage) + ".ppm"), std::ios::binary);
+            image << "P6\n" << width << ' ' << height << "\n255\n";
+            for (size_t p = 0; p < pixels.size(); p += 4)
+                image.write(reinterpret_cast<const char*>(pixels.data() + p), 3);
+        };
+        if (++materialPreviewWait < 12) return true;
+        switch (materialPreviewStep)
+        {
+        case 0:
+        {
+            capture("before-prefab-click");
+            const auto title = ed::TranslateLabel("panel.assets", "Assets##editor");
+            const auto* assets = ImGui::FindWindowByName(title.c_str());
+            const ImGuiWindow* content = nullptr;
+            if (assets)
+                for (const auto* child : assets->DC.ChildWindows)
+                    if (std::string_view(child->Name).find("##content_panel") != std::string_view::npos)
+                        content = child;
+            Check(content && content->Active, "prefab browser tile is visible");
+            if (!content) { context.renderLoop.GetWindow()->RequestClose(); return true; }
+            // The fixture directory contains exactly one prefab tile.
+            io.AddMousePosEvent(content->DC.CursorStartPos.x + 40.f, content->DC.CursorStartPos.y + 30.f);
+            break;
+        }
+        case 1: io.AddMouseButtonEvent(ImGuiMouseButton_Left, true); break;
+        case 2: io.AddMouseButtonEvent(ImGuiMouseButton_Left, false); break;
+        case 3:
+            Check(ui.state.selectedPrefabAssetPath == "Prefabs/Preview.prefab", "click selected the prefab tile");
+            capture("after-prefab-click");
+            Check(app.BeginEditorPlay(), "start Play with the material editor open");
+            break;
+        case 4: app.StopEditorPlay(); break;
+        case 5:
+            capture("after-play-stop");
+            context.renderLoop.GetWindow()->RequestClose();
+            break;
+        }
+        ++materialPreviewStep;
+        materialPreviewWait = 0;
+        return true;
+    }
     EntityID scriptedMaterialEntity{}, sharedMaterialEntity{};
     MaterialHandle sharedMaterial{}, scriptedMaterial{};
     std::chrono::steady_clock::time_point materialShaderWaitStart{};
@@ -1789,6 +1893,8 @@ struct EditorLoadingSmokeTest final : IAppScene
             return UpdateAutoExposure(context);
         if (!materialIblCaptures.empty())
             return UpdateMaterialIbl(context);
+        if (!materialPreviewCaptures.empty())
+            return UpdateMaterialPreview(context);
         if (sceneClose)
             return UpdateSceneClose(context);
         if (startupProject)
@@ -2063,8 +2169,8 @@ struct EditorLoadingSmokeTest final : IAppScene
         config.visible = visualProgress || std::getenv("KROM_PERF_VISIBLE") != nullptr;
         config.windowTitle = "KROM ImGui Ladeanzeige - Sichttest";
         // --detached-window: large enough that the material editor first fits inside.
-        config.width = perfProject.empty() && !detachedWindow ? 800 : 1920;
-        config.height = perfProject.empty() && !detachedWindow ? 600 : 1080;
+        config.width = perfProject.empty() && !detachedWindow && materialPreviewCaptures.empty() ? 800 : 1920;
+        config.height = perfProject.empty() && !detachedWindow && materialPreviewCaptures.empty() ? 600 : 1080;
         config.enableDebugLayer = perfProject.empty() || std::getenv("KROM_VALIDATION") != nullptr;
         config.enableForwardPlus = true;
         config.enableGtao = std::getenv("KROM_PERF_GTAO_OFF") == nullptr;
@@ -2286,6 +2392,11 @@ int main(int argc, char** argv)
         test.perfProject = argv[2];
         test.materialIblCaptures = engine::PathFromUtf8(argv[3]);
         std::filesystem::create_directories(test.materialIblCaptures);
+    }
+    if (argc > 2 && std::string_view(argv[1]) == "--material-preview")
+    {
+        test.materialPreviewCaptures = engine::PathFromUtf8(argv[2]);
+        std::filesystem::create_directories(test.materialPreviewCaptures);
     }
     if (argc > 3 && std::string_view(argv[1]) == "--gtao-motion")
     {

@@ -3405,7 +3405,8 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 if (clicked)
                 {
                     ctx.state.selectedPrefabAssetPath = prefabPath;
-                    ctx.state.selectedMaterialAssetPath.clear();
+                    // The open material editor owns this path even when the
+                    // browser selects a different kind of asset.
                     ctx.state.selectedEntity = NULL_ENTITY;
                     if (ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left))
                         EnterPrefabMode(ctx, p);

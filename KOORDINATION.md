@@ -985,6 +985,27 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ## Befunde (Codex)
 
+### Korrektur: Materialvorschaukugel verschwindet nach Prefab-Auswahl (2026-11-19)
+
+- **[P2, behoben]** Ein Klick auf ein Prefab im Asset-Browser leerte
+  `selectedMaterialAssetPath`, ließ aber den geöffneten Materialeditor samt
+  geladenem Graphen bestehen. `SyncMaterialPreviewEntity` blendete daraufhin
+  Kugel und Boden aus; nur die Skybox blieb sichtbar. Dies erklärt auch die
+  leere Dateizeile im Screenshot. Play/Stop allein war nicht der Auslöser.
+- `DrawAssetBrowser` erhält jetzt den Pfad des geöffneten Materials bei einer
+  Prefab-Auswahl. Prefab-Auswahl und Inspector funktionieren weiterhin.
+- Neuer GPU-Regressionstest `krom_editor_loading_tests[_dx11]
+  --material-preview <capture-dir>` erstellt ein eigenes Projekt mit texturiertem
+  Material und Prefab, klickt die echte Browser-Kachel und prüft Materialpfad,
+  Sichtbarkeit und gerenderte Bildpixel vor/nach dem Klick sowie nach Play/Stop.
+  Vor Korrektur sechs fehlgeschlagene Prüfungen, nach Korrektur DX11 und Vulkan
+  bestanden. Aufnahmen zeigen die texturierte Kugel inklusive Boden/Schatten.
+  Logs/Bilder: `out/material-preview-{before,fixed}-dx11*` und
+  `out/material-preview-fixed-vulkan*`. OpenGL-Editor baut weiterhin.
+- Die bereits separat dokumentierten Vulkan-Validierungsmeldungen 09600,
+  08910 und 08914 treten weiterhin auf; diese Änderung betrifft die
+  Browser-Auswahl und keine Vulkan-Ressourcen oder Pipelines.
+
 ### Korrektur: eingedrückte Normalmap bei Box-Projektion (2026-11-19)
 
 - **[P2, behoben] Abgeleitete Tangentenbasis kehrte beide Normalmap-Achsen um.**
