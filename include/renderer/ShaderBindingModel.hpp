@@ -801,7 +801,8 @@ struct DescriptorRuntimeLayoutDesc
     desc.ranges[1] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerObject),   1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
     desc.ranges[2] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerMaterial), 1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment, false };
     desc.ranges[3] = BindingRangeDesc{ DescriptorType::ConstantBuffer, 0u, BindingRegisterRanges::CB(CBSlots::PerPass),     1u, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment | ShaderStageMask::Compute, false };
-    desc.ranges[4] = BindingRangeDesc{ DescriptorType::ShaderResource,  0u, BindingRegisterRanges::SRV(0u),    TexSlots::COUNT,    BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment, false };
+    // Textures are also visible to compute (auto-exposure reads the HDR image with Load()).
+    desc.ranges[4] = BindingRangeDesc{ DescriptorType::ShaderResource,  0u, BindingRegisterRanges::SRV(0u),    TexSlots::COUNT,    BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment | ShaderStageMask::Compute, false };
     desc.ranges[5] = BindingRangeDesc{ DescriptorType::UnorderedAccess, 0u, BindingRegisterRanges::UAV(0u),    UAVSlots::COUNT,    BindingRegisterRanges::RegisterSpace, ShaderStageMask::Compute, false };
     // BufSRV (StructuredBuffer / ByteAddressBuffer): StorageBuffer read-only, bindings 64..79
     desc.ranges[6] = BindingRangeDesc{ DescriptorType::StorageBuffer,   0u, BindingRegisterRanges::BufSRV(0u), BufSRVSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment | ShaderStageMask::Compute, false };

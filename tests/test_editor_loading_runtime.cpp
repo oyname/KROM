@@ -1387,6 +1387,9 @@ struct EditorLoadingSmokeTest final : IAppScene
             const auto& stats = context.renderLoop.GetRenderSystem().GetStats();
             std::printf("GTAO probe visible=%u opaque=%u submitted=%u passes=%u\n",
                 stats.visibleProxyCount, stats.opaqueDraws, stats.opaqueCpu.draws, stats.graphPassCount);
+            if (const auto* exposure = app.m_editorFrameCtx->autoExposureStatus;
+                exposure && exposure->valid.load())
+                std::printf("Auto-exposure current=%+.3f EV\n", exposure->currentEv.load());
             capture("still.ppm");
             break;
         }

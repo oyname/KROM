@@ -43,7 +43,7 @@ Qualitätsstufen und Post-Process-Volumes. Zeitliche Verfahren (TAA) kommen zule
 | 3 | Specular-AA | erledigt (2026-11-18), Review offen |
 | 4 | Script-API: GTAO und SSR an/aus | erledigt (2026-11-18), GTAO mit Projekt-Häkchen |
 | 5 | Post-AA: SMAA 1x, FXAA | erledigt (2026-11-19: FXAA, SMAA 1x), Review offen |
-| 6 | Auto-Exposure | offen |
+| 6 | Auto-Exposure | erledigt (2026-11-19), Review offen |
 | 7 | Qualitätsstufen | offen |
 | 8 | Post-Process-Volume: Bedienablauf abstimmen | offen |
 | 9 | Post-Process-Volume: Umsetzung | offen |
@@ -308,3 +308,56 @@ GTX 1660, Viewport 1181×709, MSAA wie Projekt, ohne Validierung), ms:
   (FXAA 0,152 ms); Vulkan 0,066 + 0,116 + 0,057 = 0,24 ms (FXAA 0,146 ms).
 - Nicht gemacht: Stencil-Maske für den Gewichte-Pass (Pixel ohne Kante kosten dort nur einen Abruf),
   Release-Messung, Sichtprüfung im Editor durch den Nutzer.
+
+### 2026-11-19 – Schritt 6, Auto-Exposure (Claude, Zweig `claude/wonderful-taussig-04bff6`)
+
+- Nutzerentscheidung (vorher abgestimmt): Einstellung **pro Szene** in der vorhandenen Inspector-Karte
+  „Belichtung“ (Szene), keine neue Oberfläche. Modus Fest/Automatisch; das bisherige EV-Feld ist im Modus
+  Automatisch die **Korrektur**. Neue und alte Szenen starten **Fest** (fehlender Schlüssel = Fest, alte
+  Szenen sehen gleich aus). Script-API: Modus + Korrektur.
+- Einstellungen (`addons/forward/ForwardTonemap.hpp`): `ExposureMode` Fixed/Auto (`fixed`/`auto`),
+  `AutoExposureSettings` Min-EV −4, Max-EV +4, Dunkel→hell 3 EV/s, Hell→dunkel 1 EV/s (Grenzen −10…+10 EV,
+  0,1…20 EV/s), `freezeAutoExposure` nur im Editor (nicht gespeichert). `AutoExposureStatus` (geteilt
+  über `ForwardFeatureConfig::autoExposureStatus`): zurückgelesener aktueller EV für die Anzeige und
+  Reset-Anforderung beim Szenenladen (die neue Szene springt auf ihren Wert statt überzublenden).
+- Szenenschlüssel im `environment`-Block (Editor-.json und .kscene): `exposureMode`,
+  `autoExposureMinEv`, `autoExposureMaxEv`, `autoExposureToBright`, `autoExposureToDark`; Lesen über
+  `ReadSceneExposureJson` (`addons/forward/ForwardTonemapJson.hpp`) in Editor und krom.h-Runtime.
+- Inspector: Modus, Belichtung/Korrektur, bei Automatisch Min./Max. Belichtung, beide Geschwindigkeiten,
+  „Belichtung einfrieren“ und „Aktuell: +x,xx EV“ (de/en, Tooltips). Unter OpenGL bleibt die Auswahl
+  bedienbar, Tooltip und Anzeige sagen „nicht verfügbar“; es gilt der feste Wert.
+- Script-API: `RenderSettings::autoExposure` (Editor und Runtime); `exposureEv` ist dann die Korrektur.
+- GPU (`addons/forward/ForwardAutoExposure.*`): zwei Compute-Shader direkt vor dem Tonemap-Draw.
+  Histogramm: 16×16-Gruppen, ein Pixel je Thread aus dem HDR-Bild (`GTAOComposite` bzw. `HDRSceneColor`,
+  ohne Bloom), 64 Bins über log2-Luminanz −14…+8, Gruppen-Histogramm in `groupshared`. Anpassung: eine
+  Gruppe, liest und löscht das Histogramm, Mittel der log2-Luminanz zwischen 10 % und 90 % der Pixel,
+  Ziel = log2(0,18) − Mittel, begrenzt auf Min/Max, Schritt höchstens Geschwindigkeit × dt in Richtung
+  Ziel (dt aus der Wandzeit, höchstens 0,25 s). Der Zustand (float4) bleibt im GPU-Puffer; der
+  Tonemap-Shader liest ihn als Buffer-SRV t13 (`shaders/passthrough.ps.hlsl`, Slot der nur im
+  Vertex-Shader genutzten Bone-Palette) und rechnet 2^(EV + Korrektur). CPU-Spiegel der Rechnung
+  (`AutoExposureTargetEv`, `AdaptExposureEv`) für die Tests.
+- Rezept: neuer allgemeiner Haken `FrameRecipePassDesc::preRenderPassExecutorName`: ein Executor, der im
+  selben Graph-Pass **vor** `BeginRenderPass` läuft (Compute ist in einem Vulkan-Render-Pass verboten;
+  ein eigener Pass ohne Schreibzugriff würde vom Graphen entfernt). `TonemapPass` bekommt
+  `frame.auto_exposure`, wenn `BuildParams::autoExposureEnabled`; keine zusätzlichen Pässe.
+  Moduswechsel baut den Graph neu (Strukturrevision Bit 16). Ohne eingebautes Tonemapping
+  (Probe-Bake) bleibt Auto-Exposure aus.
+- Backend: Vulkan-Texturen sind jetzt auch für Compute sichtbar (`BuildEnginePipelineBindingLayout`,
+  Bereich 4). DX11 `MapBuffer` liest Staging-Puffer (`MemoryAccess::CpuRead`) mit `D3D11_MAP_READ`.
+  Rücklesen für die Anzeige über 4 Kopien (älteste wird gelesen, also 4 Frames alt, keine Wartezeit).
+- Geprüft: Debug x64 (nur `-j 4`), `krom_tests` grün, neu: „Auto-exposure settings“ (Namen, Grenzen,
+  Ziel/Schritt), „Auto-exposure scene keys“ (alte Szene = Fest, Rundweg, Klemmen), „Auto-exposure
+  recipe“ (Pre-Executor am Tonemap-Pass mit Backbuffer/Editor-Ziel/Post-AA, keine Zusatzpässe),
+  „Recipe pre-render-pass executor“ (läuft vor `BeginRenderPass`), „Auto-exposure shaders compile“
+  (beide CS + Tonemap-PS für DX11 und SPIR-V, Textursichtbarkeit Compute). Room 2 (Kopie unter
+  `out/ae-auto`, `exposureMode=auto`, Korrektur +0,5) mit `KROM_VALIDATION=1 KROM_CAPTURE_LIT=1
+  --gtao-motion` ohne Meldung: DX11 und Vulkan je Fest und Automatisch, 26 Pässe wie vorher. Gemessen
+  (inkl. Korrektur): DX11 +1,350 EV, Vulkan +1,349 EV; DX11/Vulkan mittlere Abweichung 0,50/255
+  (Fest 0,49/255); Automatisch gegenüber Fest 25,5/255 heller. OpenGL startet (15 Pässe, fester Wert).
+- GPU-Zeit (Debug, 1181×709, MSAA 2×, `--perf`): TonemapPass DX11 0,043 → 0,126 ms (Auto-Exposure
+  0,083 ms), Vulkan 0,040 → 0,101 ms (0,061 ms); Descriptor-Updates weiter 0/Frame.
+- Abweichung vom Plan: kein eigener Pass im GPU-Profiler (die Zeit steckt im TonemapPass, siehe oben).
+  Die erzeugte GLSL-Variante (`shaders/generated/`, Experiment) ist nicht neu erzeugt; der neue Teil
+  von `passthrough.ps.hlsl` ist mit `KROM_OPENGL` ausgeklammert.
+- Offen: Sichtprüfung im Editor durch den Nutzer (Bedienung der Karte, Einfrieren, Anpassung beim
+  Bewegen zwischen hellen und dunklen Bereichen), Release-Messung, Mittengewichtung (bewusst weggelassen).

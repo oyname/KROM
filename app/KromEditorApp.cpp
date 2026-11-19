@@ -16,6 +16,7 @@
 #include "addons/camera/CameraSerialization.hpp"
 #include "addons/debug_draw/DebugDraw.hpp"
 #include "addons/forward/ForwardFeature.hpp"
+#include "addons/forward/ForwardTonemapJson.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/lighting/LightingFeature.hpp"
 #include "addons/lighting/LightingSerialization.hpp"
@@ -1442,6 +1443,16 @@ std::string BuildEditorEnvironmentJson(const renderer::addons::editor::EditorSta
            FloatJson(state.ambientColor.z) + "],\n";
     out += "    \"ambientIntensity\":" + FloatJson(state.ambientIntensity) + ",\n";
     out += "    \"exposureEv\":" + FloatJson(state.tonemap.exposureEv) + ",\n";
+    {
+        using namespace renderer::addons::forward;
+        const AutoExposureSettings& ae = state.tonemap.autoExposure;
+        out += std::string("    \"") + kSceneKeyExposureMode + "\":\"" +
+               ExposureModeName(state.tonemap.exposureMode) + "\",\n";
+        out += std::string("    \"") + kSceneKeyAutoExposureMinEv + "\":" + FloatJson(ae.minEv) + ",\n";
+        out += std::string("    \"") + kSceneKeyAutoExposureMaxEv + "\":" + FloatJson(ae.maxEv) + ",\n";
+        out += std::string("    \"") + kSceneKeyAutoExposureToBright + "\":" + FloatJson(ae.toBrightSpeed) + ",\n";
+        out += std::string("    \"") + kSceneKeyAutoExposureToDark + "\":" + FloatJson(ae.toDarkSpeed) + ",\n";
+    }
     out += "    \"probeBakePasses\":" + std::to_string(state.probeBakePasses) + "\n";
     out += "  }";
     return out;
@@ -1509,6 +1520,8 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     // Operator, MSAA, AO, BRDF options and specular occlusion belong to the project
     // (ApplyProjectRenderSettings); the scene keeps exposure and bake passes.
     ctx->state.tonemap.exposureEv = 0.f;
+    ctx->state.tonemap.exposureMode = renderer::addons::forward::ExposureMode::Fixed;
+    ctx->state.tonemap.autoExposure = {};
     ctx->state.probeBakePasses = 2u;
     if (!env || !env->IsObject())
     {
@@ -1520,6 +1533,7 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     if (const serialization::JsonValue* ev = env->Get("exposureEv"); ev && ev->IsNumber())
         state.tonemap.exposureEv = std::clamp(ev->AsFloat(), renderer::addons::forward::kMinExposureEv,
                                               renderer::addons::forward::kMaxExposureEv);
+    renderer::addons::forward::ReadSceneExposureJson(*env, state.tonemap.exposureMode, state.tonemap.autoExposure);
     if (const serialization::JsonValue* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
         state.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;
     if (const serialization::JsonValue* path = env->Get("texturePath");
@@ -1769,6 +1783,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         forwardConfig.bloomIntensity = 0.12f;
         forwardConfig.bloomBlurRadius = 1.0f;
         forwardConfig.tonemapSettings = m_tonemapSettings;
+        forwardConfig.autoExposureStatus = m_autoExposureStatus;
         forwardConfig.msaaSettings = m_msaaSettings;
         forwardConfig.postAASettings = m_postAASettings;
         forwardConfig.shadingSettings = m_shadingSettings;
@@ -3769,6 +3784,8 @@ int KromEditorApp::Run(IAppScene& scene)
             m_editorFrameCtx->gtaoAvailable = m_gtaoResources != nullptr;
             m_editorFrameCtx->ssrAvailable = m_ssrResources != nullptr;
             m_editorFrameCtx->contactShadowAvailable = m_contactShadowResources != nullptr;
+            m_editorFrameCtx->autoExposureAvailable = m_editorFrameCtx->msaaAvailable;   // same rule: not on OpenGL
+            m_editorFrameCtx->autoExposureStatus = m_autoExposureStatus.get();
             m_editorFrameCtx->gpuPassTimings = m_renderLoop.GetRenderSystem().GetGpuPassTimings();
             m_editorFrameCtx->frameData =
                 m_renderLoop.GetRenderSystem().GetRenderSnapshot().GetFrameDataView();
@@ -5768,6 +5785,7 @@ bool KromEditorApp::LoadEditorScene(bool clearFirst, const std::string& sceneTag
     {
         ApplyEditorCameraFromSceneJson(m_editorFrameCtx.get(), *preparedRoot);
         ApplyEditorEnvironmentFromSceneJson(m_editorFrameCtx.get(), *preparedRoot);
+        m_autoExposureStatus->RequestReset();   // the new scene starts at its own exposure
         if (!m_projectSettings.renderingStored && !m_projectRoot.empty())
         {
             // Project written before the render options moved out of the scenes:
@@ -6141,6 +6159,7 @@ public:
         engine::script::RenderSettings out{};
         out.tonemap = static_cast<engine::script::TonemapMode>(m_state.tonemap.op);
         out.exposureEv = m_state.tonemap.exposureEv;
+        out.autoExposure = m_state.tonemap.exposureMode == renderer::addons::forward::ExposureMode::Auto;
         out.msaaSamples = m_state.msaaSamples;
         out.heightCorrelatedVisibility = m_state.shading.heightCorrelatedVisibility;
         out.perLightDiffuseFresnel = m_state.shading.perLightDiffuseFresnel;
@@ -6157,6 +6176,7 @@ public:
         using namespace renderer::addons::forward;
         m_state.tonemap.op = static_cast<TonemapOperator>(std::min<uint8_t>(static_cast<uint8_t>(in.tonemap), 3u));
         m_state.tonemap.exposureEv = std::clamp(in.exposureEv, kMinExposureEv, kMaxExposureEv);
+        m_state.tonemap.exposureMode = in.autoExposure ? ExposureMode::Auto : ExposureMode::Fixed;
         m_state.msaaSamples = NormalizeMsaaSamples(in.msaaSamples);
         m_state.shading = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel, in.multiScatterCompensation,
                             in.specularAntiAliasing };
@@ -6350,6 +6370,7 @@ void KromEditorApp::CreateDefaultSceneEntities()
 
     // New scenes start with the filmic default operator.
     m_editorFrameCtx->state.tonemap = renderer::addons::forward::TonemapSettings{};
+    m_autoExposureStatus->RequestReset();
 
     using namespace renderer::addons::editor;
 
@@ -6967,6 +6988,8 @@ struct KsceneEnvironment
     math::Vec3           ambientColor{0.06f, 0.06f, 0.08f};
     float                ambientIntensity = 1.f;
     float                exposureEv = 0.f;
+    renderer::addons::forward::ExposureMode exposureMode = renderer::addons::forward::ExposureMode::Fixed;
+    renderer::addons::forward::AutoExposureSettings autoExposure{};
     uint32_t             probeBakePasses = 2u;        // probe add-on
 };
 
@@ -6980,6 +7003,8 @@ static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::edit
     env.ambientColor     = state.ambientColor;
     env.ambientIntensity = state.ambientIntensity;
     env.exposureEv       = state.tonemap.exposureEv;
+    env.exposureMode     = state.tonemap.exposureMode;
+    env.autoExposure     = state.tonemap.autoExposure;
     env.probeBakePasses = state.probeBakePasses;       // probe add-on
     return env;
 }
@@ -7006,6 +7031,7 @@ static bool EnvironmentFromSceneJson(const serialization::JsonValue& root, Kscen
         out.ambientIntensity = ambientIntensity->AsFloat();
     if (const auto* ev = env->Get("exposureEv"); ev && ev->IsNumber())
         out.exposureEv = ev->AsFloat();
+    renderer::addons::forward::ReadSceneExposureJson(*env, out.exposureMode, out.autoExposure);
     if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
         out.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;   // probe add-on
     return true;
@@ -7027,6 +7053,14 @@ static void WriteKsceneEnvironment(serialization::JsonWriter& w, const KsceneEnv
     w.EndArray();
     w.WriteFloat ("ambientIntensity", env.ambientIntensity);
     w.WriteFloat ("exposureEv", env.exposureEv);
+    {
+        using namespace renderer::addons::forward;
+        w.WriteString(kSceneKeyExposureMode, ExposureModeName(env.exposureMode));
+        w.WriteFloat (kSceneKeyAutoExposureMinEv, env.autoExposure.minEv);
+        w.WriteFloat (kSceneKeyAutoExposureMaxEv, env.autoExposure.maxEv);
+        w.WriteFloat (kSceneKeyAutoExposureToBright, env.autoExposure.toBrightSpeed);
+        w.WriteFloat (kSceneKeyAutoExposureToDark, env.autoExposure.toDarkSpeed);
+    }
     w.WriteInt   ("probeBakePasses", static_cast<int32_t>(env.probeBakePasses));   // probe add-on
     w.EndObject();
 }

@@ -2,6 +2,7 @@ add_library(engine_forward STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/ForwardFeature.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ForwardPlusLighting.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/ForwardSmaa.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/ForwardAutoExposure.cpp
 )
 target_include_directories(engine_forward
     PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>

@@ -9,10 +9,17 @@ Texture2D    uHDRInput     : register(t8);
 Texture2D    uBloomTexture : register(t12);
 SamplerState uSampler      : register(s1);
 
+#ifndef KROM_OPENGL
+#include "krom_platform.hlsl"
+// Automatic exposure (addons/forward/ForwardAutoExposure.hpp): element 0, x = EV.
+// Buffer slot 13 (t13): the bone palette there is vertex-only.
+KROM_BUFFER_SRV(StructuredBuffer<float4>, uAutoExposure, 13);
+#endif
+
 cbuffer PerPass : register(b3)
 {
     float4 bloomParams;    // x=threshold, y=intensity, z=blurRadius
-    float4 tonemapParams;  // x=exposure scale (2^EV), y=operator, zw unused
+    float4 tonemapParams;  // x=exposure scale (2^EV), y=operator, z=1: automatic exposure, w=correction EV
 };
 
 // Operator ids (addons/forward/ForwardTonemap.hpp, TonemapOperator).
@@ -115,7 +122,12 @@ float4 main(PSInput IN) : SV_TARGET
 {
     float3 v = uHDRInput.Sample(uSampler, IN.uv).rgb;
     v += uBloomTexture.Sample(uSampler, IN.uv).rgb * bloomParams.y;
-    v *= max(tonemapParams.x, 0.0f);
+    float exposure = max(tonemapParams.x, 0.0f);
+#ifndef KROM_OPENGL
+    if (tonemapParams.z > 0.5f)
+        exposure = exp2(uAutoExposure[0].x + tonemapParams.w);
+#endif
+    v *= exposure;
 
     const int op = (int)(tonemapParams.y + 0.5f);
     if (op == KROM_TONEMAP_ACES_FITTED)

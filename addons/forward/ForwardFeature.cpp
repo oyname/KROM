@@ -1,4 +1,5 @@
 #include "ForwardFeature.hpp"
+#include "addons/forward/ForwardAutoExposure.hpp"
 #include "addons/forward/ForwardPlusLighting.hpp"
 #include "addons/forward/ForwardSmaa.hpp"
 #include "addons/forward/ForwardSceneBindings.hpp"
@@ -6,6 +7,7 @@
 #include "addons/lighting/LightingFrameData.hpp"
 #include "addons/shadow/ShadowFrameData.hpp"
 #include "renderer/RenderExtractionContext.hpp"
+#include "renderer/FrameRingBuffer.hpp"
 #include "renderer/RenderFrameConstants.hpp"
 #include "renderer/RenderFramePassInterfaces.hpp"
 #include "renderer/RenderLayers.hpp"
@@ -609,6 +611,164 @@ void main()
             res = PostAAGpuResources{};
         }
 
+        // Automatic exposure (ForwardAutoExposure.hpp): two compute pipelines, the
+        // histogram and state buffers (GPU only, kept across frames), the per-frame
+        // constants and a few CPU-readable copies of the state for the display.
+        struct AutoExposureGpuResources
+        {
+            static constexpr uint32_t kReadbackCopies = 4u;   // more than frames in flight
+
+            ShaderHandle histogramShader = ShaderHandle::Invalid();
+            ShaderHandle adaptShader = ShaderHandle::Invalid();
+            PipelineHandle histogramPipeline = PipelineHandle::Invalid();
+            PipelineHandle adaptPipeline = PipelineHandle::Invalid();
+            BufferHandle histogram = BufferHandle::Invalid();
+            BufferHandle state = BufferHandle::Invalid();
+            FrameRingBuffer constants;
+            std::array<BufferHandle, kReadbackCopies> readback{};
+            std::array<bool, kReadbackCopies> readbackWritten{};
+            uint32_t readbackIndex = 0u;
+            bool attempted = false;
+            bool ready = false;
+
+            // Adaptation bookkeeping (CPU side).
+            bool measured = false;              // false: the next measurement jumps to its target
+            uint32_t resetSerial = 0u;
+            std::chrono::steady_clock::time_point lastTime{};
+            bool hasLastTime = false;
+        };
+
+        void DestroyAutoExposureGpuResources(IDevice& device, AutoExposureGpuResources& res)
+        {
+            for (PipelineHandle* pipeline : { &res.histogramPipeline, &res.adaptPipeline })
+                if (pipeline->IsValid())
+                    device.DestroyPipeline(*pipeline);
+            for (ShaderHandle* shader : { &res.histogramShader, &res.adaptShader })
+                if (shader->IsValid())
+                    device.DestroyShader(*shader);
+            for (BufferHandle* buffer : { &res.histogram, &res.state })
+                if (buffer->IsValid())
+                    device.DestroyBuffer(*buffer);
+            for (BufferHandle& buffer : res.readback)
+                if (buffer.IsValid())
+                    device.DestroyBuffer(buffer);
+            res.constants.Release(&device);
+            res.histogramShader = res.adaptShader = ShaderHandle::Invalid();
+            res.histogramPipeline = res.adaptPipeline = PipelineHandle::Invalid();
+            res.histogram = res.state = BufferHandle::Invalid();
+            res.readback = {};
+            res.readbackWritten = {};
+            res.readbackIndex = 0u;
+            res.attempted = false;
+            res.ready = false;
+            res.measured = false;
+            res.hasLastTime = false;
+        }
+
+        [[nodiscard]] ShaderHandle CreateAutoExposureShader(IDevice& device, const char* source, const char* debugName)
+        {
+            assets::ShaderAsset shader{};
+            shader.debugName = debugName;
+            shader.stage = assets::ShaderStage::Compute;
+            shader.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+            shader.entryPoint = "main";
+            shader.sourceCode = source;
+            assets::CompiledShaderArtifact compiled{};
+            std::string error;
+            if (!ShaderCompiler::CompileForTarget(shader, ShaderCompiler::ResolveTargetProfile(device), compiled, &error))
+            {
+                Debug::LogError("ForwardFeature.cpp: failed to compile auto-exposure shader '%s': %s",
+                                debugName, error.c_str());
+                return ShaderHandle::Invalid();
+            }
+            return compiled.bytecode.empty()
+                ? device.CreateShaderFromSource(compiled.sourceText, ShaderStageMask::Compute,
+                                                compiled.entryPoint.empty() ? "main" : compiled.entryPoint, debugName)
+                : device.CreateShaderFromBytecode(compiled.bytecode.data(), compiled.bytecode.size(),
+                                                  ShaderStageMask::Compute, debugName);
+        }
+
+        [[nodiscard]] PipelineHandle CreateAutoExposurePipeline(IDevice& device, ShaderHandle shader, const char* debugName)
+        {
+            PipelineDesc desc{};
+            desc.pipelineClass = PipelineClass::Compute;
+            desc.debugName = debugName;
+            desc.shaderStages.push_back(ShaderStageDesc{ shader, ShaderStageMask::Compute, "main" });
+            return device.CreatePipeline(desc);
+        }
+
+        // Creates shaders, pipelines and buffers once. False on backends without
+        // compute (OpenGL is frozen and keeps the fixed exposure).
+        bool EnsureAutoExposureGpuResources(IDevice& device, AutoExposureGpuResources& res)
+        {
+            if (res.attempted)
+                return res.ready;
+            res.attempted = true;
+            if (ShaderCompiler::ResolveTargetProfile(device) == assets::ShaderTargetProfile::OpenGL_GLSL450)
+                return false;
+            const ComputeRuntimeDesc compute = device.GetComputeRuntime();
+            if (!compute.computePipelinesSupported || !compute.computeDispatchSupported)
+                return false;
+
+            res.histogramShader = CreateAutoExposureShader(device, auto_exposure::kHistogramCsHlsl, "ForwardAutoExposureHistogramCS");
+            res.adaptShader = CreateAutoExposureShader(device, auto_exposure::kAdaptCsHlsl, "ForwardAutoExposureAdaptCS");
+            if (res.histogramShader.IsValid())
+                res.histogramPipeline = CreateAutoExposurePipeline(device, res.histogramShader, "ForwardAutoExposureHistogram_Pipeline");
+            if (res.adaptShader.IsValid())
+                res.adaptPipeline = CreateAutoExposurePipeline(device, res.adaptShader, "ForwardAutoExposureAdapt_Pipeline");
+
+            const auto makeBuffer = [&device](uint32_t count, uint32_t stride, const char* name)
+            {
+                BufferDesc desc{};
+                desc.byteSize = static_cast<uint64_t>(count) * stride;
+                desc.stride = stride;
+                desc.type = BufferType::Structured;
+                desc.usage = ResourceUsage::ShaderResource | ResourceUsage::UnorderedAccess | ResourceUsage::CopyDest
+                           | ResourceUsage::CopySource;
+                desc.access = MemoryAccess::GpuOnly;
+                desc.initialState = ResourceState::ShaderRead;
+                desc.debugName = name;
+                return device.CreateBuffer(desc);
+            };
+            res.histogram = makeBuffer(auto_exposure::kHistogramBins, sizeof(uint32_t), "ForwardAutoExposure_Histogram");
+            res.state = makeBuffer(1u, sizeof(auto_exposure::StateGpu), "ForwardAutoExposure_State");
+            if (res.histogram.IsValid())
+            {
+                const std::array<uint32_t, auto_exposure::kHistogramBins> zeros{};
+                device.UploadBufferData(res.histogram, zeros.data(), sizeof(zeros));
+            }
+            if (res.state.IsValid())
+            {
+                const auto_exposure::StateGpu zero{};
+                device.UploadBufferData(res.state, &zero, sizeof(zero));
+            }
+
+            res.ready = res.histogramPipeline.IsValid() && res.adaptPipeline.IsValid()
+                     && res.histogram.IsValid() && res.state.IsValid();
+            if (!res.ready)
+            {
+                Debug::LogError("ForwardFeature.cpp: auto-exposure resources failed, the fixed exposure is used");
+                DestroyAutoExposureGpuResources(device, res);
+                res.attempted = true;
+                return false;
+            }
+
+            // Readback copies for the display; without them the exposure still works.
+            for (BufferHandle& buffer : res.readback)
+            {
+                BufferDesc desc{};
+                desc.byteSize = sizeof(auto_exposure::StateGpu);
+                desc.stride = sizeof(auto_exposure::StateGpu);
+                desc.type = BufferType::Structured;
+                desc.usage = ResourceUsage::CopyDest;
+                desc.access = MemoryAccess::CpuRead;
+                desc.initialState = ResourceState::CopyDest;
+                desc.debugName = "ForwardAutoExposure_Readback";
+                buffer = device.CreateBuffer(desc);
+            }
+            return true;
+        }
+
         // Writes the BRDF options into the add-on's frame parameter block
         // (kShadingFrameParameterBlock); the PBR shaders read featureParams[2].
         class ShadingFrameConstantsContributor final : public IFrameConstantsContributor
@@ -665,8 +825,8 @@ void main()
             BloomPassConstants bloom{};
             float exposureScale = 1.0f;
             float op = 0.0f;
-            float pad0 = 0.0f;
-            float pad1 = 0.0f;
+            float autoExposure = 0.0f;   // 1: exposure from the auto-exposure state buffer
+            float correctionEv = 0.0f;   // added to the automatic exposure
         };
         static_assert(sizeof(TonemapPassConstants) == 32u, "TonemapPassConstants must match PerPass in passthrough.ps.hlsl");
 
@@ -956,6 +1116,115 @@ void main()
             return true;
         }
 
+        // Buffer SRV slot of the auto-exposure state in the tonemap pixel shader
+        // (shaders/passthrough.ps.hlsl, t13): the bone palette there is vertex-only.
+        constexpr uint32_t kAutoExposureBufferSlot = BufSRVSlots::BonePalette;
+
+        // Histogram of the HDR image, then adaptation of the exposure (both compute,
+        // outside any render pass). Also copies the state for the display and reads
+        // back the copy written kReadbackCopies frames ago.
+        void RecordAutoExposure(IDevice& device, ICommandList& cmd, AutoExposureGpuResources& res,
+                                const TonemapSettings& settings, AutoExposureStatus* status,
+                                TextureHandle sourceTex, uint32_t width, uint32_t height)
+        {
+            AutoExposureSettings limits = settings.autoExposure;
+            limits.Clamp();
+
+            const auto now = std::chrono::steady_clock::now();
+            float dt = res.hasLastTime ? std::chrono::duration<float>(now - res.lastTime).count() : 0.0f;
+            dt = std::clamp(dt, 0.0f, 0.25f);   // a stall must not skip the whole adaptation
+            res.lastTime = now;
+            res.hasLastTime = true;
+
+            bool reset = !res.measured;
+            if (status)
+            {
+                const uint32_t serial = status->resetSerial.load(std::memory_order_relaxed);
+                if (serial != res.resetSerial)
+                {
+                    res.resetSerial = serial;
+                    reset = true;
+                }
+            }
+            res.measured = true;
+
+            auto_exposure::PassConstants constants{};
+            constants.width = static_cast<float>(width);
+            constants.height = static_cast<float>(height);
+            constants.deltaTime = dt;
+            constants.toBrightSpeed = limits.toBrightSpeed;
+            constants.toDarkSpeed = limits.toDarkSpeed;
+            constants.reset = reset ? 1.0f : 0.0f;
+            constants.minEv = limits.minEv;
+            constants.maxEv = limits.maxEv;
+            constants.freeze = settings.freezeAutoExposure ? 1.0f : 0.0f;
+
+            BufferDesc cbDesc{};
+            cbDesc.byteSize = kConstantBufferAlignment;
+            cbDesc.type = BufferType::Constant;
+            cbDesc.usage = ResourceUsage::ConstantBuffer | ResourceUsage::CopyDest;
+            cbDesc.access = MemoryAccess::CpuWrite;
+            cbDesc.initialState = ResourceState::ConstantBuffer;
+            cbDesc.debugName = "ForwardAutoExposure_PerPassCB";
+            const BufferHandle cb = res.constants.Next(device, cbDesc);
+            if (!cb.IsValid())
+                return;
+            device.UploadBufferData(cb, &constants, sizeof(constants));
+
+            // Display: the copy of kReadbackCopies frames ago is finished by now.
+            const uint32_t slot = res.readbackIndex;
+            res.readbackIndex = (res.readbackIndex + 1u) % AutoExposureGpuResources::kReadbackCopies;
+            const BufferHandle readback = res.readback[slot];
+            if (status && readback.IsValid() && res.readbackWritten[slot])
+            {
+                if (const void* mapped = device.MapBuffer(readback))
+                {
+                    auto_exposure::StateGpu value{};
+                    std::memcpy(&value, mapped, sizeof(value));
+                    device.UnmapBuffer(readback);
+                    if (value.valid > 0.5f)
+                    {
+                        const float correction = std::clamp(settings.exposureEv, kMinExposureEv, kMaxExposureEv);
+                        status->currentEv.store(value.exposureEv + correction, std::memory_order_relaxed);
+                        status->valid.store(true, std::memory_order_relaxed);
+                    }
+                }
+            }
+
+            const uint32_t groupsX = (std::max(width, 1u) + auto_exposure::kHistogramGroupSize - 1u) / auto_exposure::kHistogramGroupSize;
+            const uint32_t groupsY = (std::max(height, 1u) + auto_exposure::kHistogramGroupSize - 1u) / auto_exposure::kHistogramGroupSize;
+
+            cmd.TransitionResource(res.histogram, ResourceState::ShaderRead, ResourceState::UnorderedAccess);
+            cmd.SetPipeline(res.histogramPipeline);
+            cmd.SetConstantBuffer(CBSlots::PerPass, cb, ShaderStageMask::Compute);
+            cmd.SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Compute);
+            cmd.SetUnorderedAccess(UAVSlots::Output0, res.histogram, ShaderStageMask::Compute);
+            cmd.Dispatch(groupsX, groupsY, 1u);
+            cmd.SetShaderResource(TexSlots::PassSRV0, TextureHandle::Invalid(), ShaderStageMask::Compute);
+
+            cmd.TransitionResource(res.state, ResourceState::ShaderRead, ResourceState::UnorderedAccess);
+            cmd.SetPipeline(res.adaptPipeline);
+            cmd.SetConstantBuffer(CBSlots::PerPass, cb, ShaderStageMask::Compute);
+            cmd.SetUnorderedAccess(UAVSlots::Output0, res.histogram, ShaderStageMask::Compute);
+            cmd.SetUnorderedAccess(UAVSlots::Output1, res.state, ShaderStageMask::Compute);
+            cmd.Dispatch(1u, 1u, 1u);
+            cmd.SetUnorderedAccess(UAVSlots::Output0, BufferHandle::Invalid(), ShaderStageMask::Compute);
+            cmd.SetUnorderedAccess(UAVSlots::Output1, BufferHandle::Invalid(), ShaderStageMask::Compute);
+            cmd.TransitionResource(res.histogram, ResourceState::UnorderedAccess, ResourceState::ShaderRead);
+
+            if (status && readback.IsValid())
+            {
+                cmd.TransitionResource(res.state, ResourceState::UnorderedAccess, ResourceState::CopySource);
+                cmd.CopyBuffer(readback, 0u, res.state, 0u, sizeof(auto_exposure::StateGpu));
+                cmd.TransitionResource(res.state, ResourceState::CopySource, ResourceState::ShaderRead);
+                res.readbackWritten[slot] = true;
+            }
+            else
+            {
+                cmd.TransitionResource(res.state, ResourceState::UnorderedAccess, ResourceState::ShaderRead);
+            }
+        }
+
         class ForwardRenderPipeline final : public IRenderPipeline
         {
         public:
@@ -977,15 +1246,18 @@ void main()
                 , m_msaa(std::move(msaa))
                 , m_resolveResources(std::make_shared<MsaaResolveGpuResources>())
                 , m_postAAResources(std::make_shared<PostAAGpuResources>())
+                , m_autoExposureResources(std::make_shared<AutoExposureGpuResources>())
             {
             }
 
             [[nodiscard]] uint64_t GetStructureRevision() const noexcept override
             {
+                const uint64_t autoExposure = AutoExposureWanted() ? 1u : 0u;
                 if (!m_msaa)
-                    return 1u;
+                    return 1u | (autoExposure << 16u);
                 return static_cast<uint64_t>(m_msaa->EffectiveSamples())
-                    | (static_cast<uint64_t>(m_msaa->EffectivePostAA()) << 8u);
+                    | (static_cast<uint64_t>(m_msaa->EffectivePostAA()) << 8u)
+                    | (autoExposure << 16u);
             }
 
             std::string_view GetName() const noexcept override
@@ -1064,6 +1336,24 @@ void main()
                         params.postAASmaa = params.postAAEnabled && postAAMode == PostAAMode::Smaa;
                     }
                 }
+                // Auto-exposure runs before the built-in tonemap draw (bakes bring their own).
+                if (AutoExposureWanted() && buildDevice && m_autoExposureResources
+                    && !context.externalCallbacks.Has(StandardFrameExecutors::Tonemap)
+                    && context.defaultTonemapMaterial.IsValid() && context.tonemapMaterialSystem)
+                {
+                    IDevice* device = context.shaderRuntime.GetDevice();
+                    if (device)
+                    {
+                        m_device = device;
+                        params.autoExposureEnabled = EnsureAutoExposureGpuResources(*device, *m_autoExposureResources);
+                    }
+                }
+                // Switched on (again): the first measurement jumps to its target.
+                if (params.autoExposureEnabled && !m_autoExposureBuilt && m_autoExposureResources)
+                    m_autoExposureResources->measured = false;
+                m_autoExposureBuilt = params.autoExposureEnabled;
+                if (!params.autoExposureEnabled && m_config.autoExposureStatus)
+                    m_config.autoExposureStatus->valid.store(false, std::memory_order_relaxed);
                 const bool mrtSupported = buildDevice && buildDevice->SupportsFeature("mrt");
 
                 FramePipelineCallbacks callbacks = context.externalCallbacks;
@@ -1719,6 +2009,8 @@ void main()
                     auto bloomResources = m_bloomResources;
                     auto tonemapResources = m_tonemapResources;
                     auto tonemapSettings = m_config.tonemapSettings;
+                    auto autoExposureResources = params.autoExposureEnabled ? m_autoExposureResources
+                                                                            : std::shared_ptr<AutoExposureGpuResources>{};
                     const BloomPassConstants bloomConstants{
                         std::max(0.0f, m_config.bloomThreshold),
                         std::max(0.0f, m_config.bloomIntensity),
@@ -1726,7 +2018,8 @@ void main()
                         0.0f
                     };
                     callbacks.Register(StandardFrameExecutors::Tonemap,
-                        [state, runtimeTonemap, bloomResources, bloomConstants, tonemapResources, tonemapSettings](const rendergraph::RGExecContext& execCtx)
+                        [state, runtimeTonemap, bloomResources, bloomConstants, tonemapResources, tonemapSettings,
+                         autoExposureResources](const rendergraph::RGExecContext& execCtx)
                         {
                             if (!execCtx.cmd || !state->ready)
                                 return;
@@ -1766,6 +2059,14 @@ void main()
                             const TonemapSettings settings = tonemapSettings ? *tonemapSettings : TonemapSettings{};
                             tonemapConstants.exposureScale = std::exp2(std::clamp(settings.exposureEv, kMinExposureEv, kMaxExposureEv));
                             tonemapConstants.op = static_cast<float>(static_cast<uint32_t>(settings.op));
+                            // Auto: the shader reads the exposure from the GPU state; exposureEv is the correction.
+                            const bool autoExposure = autoExposureResources && autoExposureResources->ready
+                                && settings.exposureMode == ExposureMode::Auto;
+                            if (autoExposure)
+                            {
+                                tonemapConstants.autoExposure = 1.0f;
+                                tonemapConstants.correctionEv = std::clamp(settings.exposureEv, kMinExposureEv, kMaxExposureEv);
+                            }
                             const BufferHandle perPassCB = tonemapResources ? tonemapResources->perPassCB
                                                                             : BufferHandle::Invalid();
                             if (perPassCB.IsValid() && execCtx.device)
@@ -1790,8 +2091,44 @@ void main()
 
                             execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Fragment);
                             execCtx.cmd->SetShaderResource(TexSlots::BloomTexture, bloomTex, ShaderStageMask::Fragment);
+                            if (autoExposure)
+                                execCtx.cmd->SetShaderResource(kAutoExposureBufferSlot, autoExposureResources->state,
+                                                               ShaderStageMask::Fragment);
                             execCtx.cmd->SetSampler(SamplerSlots::LinearClamp, SamplerSlots::LinearClamp, ShaderStageMask::Fragment);
                             execCtx.cmd->Draw(3u, 1u, 0u, 0u);
+                            // Next frame the adaptation writes the buffer as UAV; DX11 must not
+                            // find it still bound as pixel shader input.
+                            if (autoExposure)
+                                execCtx.cmd->SetShaderResource(kAutoExposureBufferSlot, BufferHandle::Invalid(),
+                                                               ShaderStageMask::Fragment);
+                        });
+                }
+
+                if (params.autoExposureEnabled && !callbacks.Has(StandardFrameExecutors::AutoExposure))
+                {
+                    auto state = pipelineState;
+                    auto aeResources = m_autoExposureResources;
+                    auto tonemapSettings = m_config.tonemapSettings;
+                    auto status = m_config.autoExposureStatus;
+                    const uint32_t width = params.viewportWidth;
+                    const uint32_t height = params.viewportHeight;
+                    callbacks.Register(StandardFrameExecutors::AutoExposure,
+                        [state, aeResources, tonemapSettings, status, width, height](const rendergraph::RGExecContext& execCtx)
+                        {
+                            if (!execCtx.cmd || !execCtx.device || !state->ready || !aeResources || !aeResources->ready)
+                                return;
+                            const TonemapSettings settings = tonemapSettings ? *tonemapSettings : TonemapSettings{};
+                            if (settings.exposureMode != ExposureMode::Auto)
+                                return;
+                            const rendergraph::RGResourceID srcId =
+                                (state->resources.gtaoComposite != rendergraph::RG_INVALID_RESOURCE)
+                                ? state->resources.gtaoComposite
+                                : state->resources.hdrSceneColor;
+                            const TextureHandle sourceTex = execCtx.GetTexture(srcId);
+                            if (!sourceTex.IsValid())
+                                return;
+                            RecordAutoExposure(*execCtx.device, *execCtx.cmd, *aeResources, settings, status.get(),
+                                               sourceTex, width, height);
                         });
                 }
 
@@ -1971,10 +2308,19 @@ void main()
                     DestroyForwardPlusGpuResources(*m_device, *m_forwardPlusResources);
                 if (m_device && m_postAAResources)
                     DestroyPostAAGpuResources(*m_device, *m_postAAResources);
+                if (m_device && m_autoExposureResources)
+                    DestroyAutoExposureGpuResources(*m_device, *m_autoExposureResources);
+                if (m_config.autoExposureStatus)
+                    m_config.autoExposureStatus->valid.store(false, std::memory_order_relaxed);
                 m_device = nullptr;
             }
 
         private:
+            [[nodiscard]] bool AutoExposureWanted() const noexcept
+            {
+                return m_config.tonemapSettings && m_config.tonemapSettings->exposureMode == ExposureMode::Auto;
+            }
+
             // Post-AA pipelines for the given mode and output format. Shaders (and the
             // SMAA lookup textures) are created once; the pipelines writing the output
             // are rebuilt when the format changes.
@@ -2193,7 +2539,9 @@ void main()
             std::shared_ptr<MsaaRuntime> m_msaa;
             std::shared_ptr<MsaaResolveGpuResources> m_resolveResources;
             std::shared_ptr<PostAAGpuResources> m_postAAResources;
+            std::shared_ptr<AutoExposureGpuResources> m_autoExposureResources;
             mutable IDevice* m_device = nullptr;
+            mutable bool m_autoExposureBuilt = false;
             mutable uint32_t m_metricsLogFrameCounter = 0u;
         };
 

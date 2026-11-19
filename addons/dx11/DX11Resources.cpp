@@ -106,6 +106,7 @@ BufferHandle DX11Device::CreateBuffer(const BufferDesc& desc)
     entry.stride   = desc.stride;
     entry.bindFlags = d.BindFlags;
     entry.dynamic  = (desc.access == MemoryAccess::CpuWrite);
+    entry.readback = (desc.access == MemoryAccess::CpuRead);
 
     if (HasFlag(desc.usage, ResourceUsage::ShaderResource))
     {
@@ -197,9 +198,10 @@ void* DX11Device::MapBuffer(BufferHandle h)
 {
 #ifdef _WIN32
     auto* e = m_resources.buffers.Get(h);
-    if (!e || !e->dynamic) return nullptr;
+    if (!e || (!e->dynamic && !e->readback)) return nullptr;
     D3D11_MAPPED_SUBRESOURCE mapped{};
-    if (FAILED(m_context->Map(e->buffer, 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+    // Staging buffers are read back (waits if the GPU has not finished the copy).
+    if (FAILED(m_context->Map(e->buffer, 0, e->readback ? D3D11_MAP_READ : D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
         return nullptr;
     e->mapped = mapped.pData;
     return mapped.pData;
