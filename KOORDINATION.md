@@ -48,6 +48,9 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
   the plan target of < 0.5 ms at 1080p is not met yet.
 - Not checked: visual check by the user, MSAA 4x, thin objects in motion. Known: dotted stair pattern on
   steep edges, thin dark line at depth silhouettes (derivative normal).
+- Fix 2026-11-19 after the user's visual check (hard black crescents next to a cube): hits fade with the
+  distance to the occluder, the assumed thickness grows along the ray, edge fade per hit, fade at grazing
+  light. Confirmed by the user in the editor.
 - Please review: the t20 / `TexSlots::COUNT` change on all backends (Vulkan layouts; the OpenGL bone palette
   unit moves to 21), the light index source, and the opaque/transparent binding of opaque inputs.
 

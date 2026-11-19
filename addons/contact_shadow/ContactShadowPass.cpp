@@ -196,16 +196,22 @@ float2 main(PSInput IN) : SV_TARGET
             continue;
         const float sceneZ = LinearDepth(WorldPosition((float2(sp) + 0.5f) / size, sd));
         const float delta  = LinearDepth(S) - sceneZ;
-        if (delta > depthBias && delta < thickness)
+        // The assumed occluder depth grows along the ray (like a cone), so thick
+        // objects cast a closed shadow instead of thin crescents along their edges.
+        if (delta > depthBias && delta < thickness + t * 0.5f)
         {
-            // Soft end of the ray and of the screen border.
-            const float rayFade  = 1.0f - saturate((t / rayLen - 0.75f) * 4.0f);
+            // Darkest at the contact, fading out towards the ray end: a hit is a
+            // soft value instead of a hard 0/1 edge. Soft at the screen border.
+            const float distanceToHit = saturate(t / rayLen);
+            const float rayFade  = 1.0f - distanceToHit * distanceToHit * (3.0f - 2.0f * distanceToHit);
             const float2 border  = min(suv, 1.0f - suv);
             const float edgeFade = saturate(min(border.x, border.y) * 20.0f);
             occlusion = rayFade * edgeFade;
             break;
         }
     }
+    // Surfaces almost parallel to the light: fade out instead of a hard seam.
+    occlusion *= saturate((dot(Ng, L) - 0.02f) * 8.0f);
 
     return float2(1.0f - saturate(csIntensity) * occlusion * distanceFade, z);
 }

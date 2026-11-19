@@ -274,3 +274,10 @@ PBR-Shader statt als eigener Pass. Erst angehen, wenn Schritt 6 abgenommen ist.
 - Offen: Sichtprüfung durch den Nutzer (dünne Objekte, schräge Flächen, Schwenk), MSAA 4×, gepunktetes
   Treppenmuster an steil gesehenen Kanten (Jitter + kleiner Blur), dünne dunkle Linie an Silhouetten
   (ddx-Normale über Tiefensprung), Script-API, Punkt-/Spotlichter (Schritt 7).
+
+### 2026-11-19 – Feinschliff nach Sichtprüfung (Claude)
+
+- Nutzer sah harte schwarze Sicheln an der Wand neben einem Würfel. Treffer sind jetzt weich: Stärke fällt
+  mit dem Abstand zum Verdecker (Smoothstep über die Strahllänge), angenommene Dicke wächst entlang des
+  Strahls (`thickness + t·0,5`), Ausblenden am Bildrand pro Treffer und bei streifendem Licht
+  (`dot(N,L)` 0,02–0,145). Nutzer hat das Ergebnis im Editor bestätigt.
