@@ -18,6 +18,8 @@ Libraries compiled into the game
   Jolt Physics         MIT                          JoltPhysics.txt
   miniaudio            Public Domain or MIT-0       miniaudio.txt
   Lucide (icon font)   ISC                          Lucide.txt
+  SMAA lookup textures
+  and shader code      MIT                          SMAA.txt
 
 Shader compiler (Vulkan and DirectX 12 builds only, in tools/)
   DirectX Shader Compiler (dxc.exe, dxcompiler.dll)

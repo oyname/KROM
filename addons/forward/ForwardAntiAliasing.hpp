@@ -26,6 +26,8 @@ enum class PostAAMode : uint8_t
 {
     Off  = 0,
     Fxaa = 1,
+    // SMAA 1x: edge detection, blending weights, neighborhood blending.
+    Smaa = 2,
 };
 
 struct PostAASettings
@@ -38,6 +40,7 @@ struct PostAASettings
     switch (mode)
     {
     case PostAAMode::Fxaa: return "fxaa";
+    case PostAAMode::Smaa: return "smaa";
     case PostAAMode::Off:
     default:               return "off";
     }
@@ -47,7 +50,7 @@ struct PostAASettings
 {
     if (!name)
         return false;
-    for (PostAAMode mode : { PostAAMode::Off, PostAAMode::Fxaa })
+    for (PostAAMode mode : { PostAAMode::Off, PostAAMode::Fxaa, PostAAMode::Smaa })
     {
         if (std::strcmp(name, PostAAModeName(mode)) == 0)
         {

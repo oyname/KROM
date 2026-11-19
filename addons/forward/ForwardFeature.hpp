@@ -40,7 +40,7 @@ struct ForwardFeatureConfig
     // settings; a change rebuilds targets and graph on the next frame. Not available
     // on OpenGL (stays at 1). Null: the feature keeps its own setting (off).
     std::shared_ptr<MsaaSettings> msaaSettings;
-    // Post-process AA after the tonemap pass (FXAA). Shared like MSAA; a change
+    // Post-process AA after the tonemap pass (FXAA or SMAA 1x). Shared like MSAA; a change
     // rebuilds the graph. Not available on OpenGL. Null: the feature keeps its own (off).
     std::shared_ptr<PostAASettings> postAASettings;
     // BRDF options of the PBR shaders. Shared like the tonemap settings and read

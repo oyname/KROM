@@ -49,7 +49,7 @@ struct ProjectRenderSettings
     float    contactShadowThickness = 0.05f;  // world-space metres
     float    contactShadowIntensity = 1.0f;   // 0 = none
     uint32_t contactShadowSteps = 12u;
-    // Post-process AA after tonemapping: off, fxaa (forward add-on, not under OpenGL).
+    // Post-process AA after tonemapping: off, fxaa, smaa (forward add-on, not under OpenGL).
     std::string postAA = "off";
 };
 

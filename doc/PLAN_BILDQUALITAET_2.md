@@ -42,7 +42,7 @@ Qualitätsstufen und Post-Process-Volumes. Zeitliche Verfahren (TAA) kommen zule
 | 2 | Echtes GTAO | erledigt (2026-11-18), Review offen |
 | 3 | Specular-AA | erledigt (2026-11-18), Review offen |
 | 4 | Script-API: GTAO und SSR an/aus | erledigt (2026-11-18), GTAO mit Projekt-Häkchen |
-| 5 | Post-AA: SMAA 1x, FXAA | FXAA erledigt (2026-11-19), SMAA offen (eigene Session) |
+| 5 | Post-AA: SMAA 1x, FXAA | erledigt (2026-11-19: FXAA, SMAA 1x), Review offen |
 | 6 | Auto-Exposure | offen |
 | 7 | Qualitätsstufen | offen |
 | 8 | Post-Process-Volume: Bedienablauf abstimmen | offen |
@@ -272,4 +272,39 @@ GTX 1660, Viewport 1181×709, MSAA wie Projekt, ohne Validierung), ms:
   0,41/255. OpenGL startet (15 Pässe, ohne FXAA). Bild: `out/claude-fxaa-compare.png` (links aus,
   rechts FXAA, 4×).
 - GPU-Zeit (Debug, 1181×709, MSAA 2×): `PostAAPass` DX11 0,139 ms, Vulkan 0,135 ms.
-- Offen: Sichtprüfung durch den Nutzer (Textschärfe, Outline), Release, SMAA 1x (eigene Session).
+- Offen: Sichtprüfung durch den Nutzer (Textschärfe, Outline), Release. SMAA 1x: siehe nächster Eintrag.
+
+### 2026-11-19 – Schritt 5, Teil SMAA 1x (Claude, Zweig `claude/smaa-b6b7b7`, auf `feature/fxaa`)
+
+- Modus `PostAAMode::Smaa` (Name `smaa`) in `addons/forward/ForwardAntiAliasing.hpp`; Auswahl „SMAA“ im
+  Feld „Post-AA“ (Projekteinstellungen > Rendering), Tooltip de/en ergänzt. Projektschlüssel, Editor,
+  Runtime und `KROM_POST_AA=smaa` laufen über den vorhandenen FXAA-Weg.
+- Rezept: `BuildParams::postAASmaa`. Zwischen `TonemapPass` und `PostAAPass` liegen `SmaaEdgePass`
+  (`frame.smaa_edges`, liest `Tonemapped`, schreibt `SmaaEdges` RG8) und `SmaaWeightPass`
+  (`frame.smaa_weights`, liest `SmaaEdges`, schreibt `SmaaWeights` RGBA8); beide Ziele werden auf 0
+  gelöscht. `PostAAPass` ist bei SMAA das Neighborhood Blending (liest `Tonemapped` + `SmaaWeights`) und
+  schreibt wie bei FXAA das bisherige Ziel (Backbuffer oder `EditorSceneView`).
+- Shader in `addons/forward/ForwardSmaa.cpp`: Portierung aus dem offiziellen `SMAA.hlsl`
+  (Jimenez et al., MIT), Voreinstellung „high“ (Schwelle 0,1, 16 Suchschritte, Diagonale 8, Ecken 25),
+  Luma-Kantenerkennung ohne Predication/Reprojection. Texturkoordinaten aus `SV_Position` (DX11 und
+  Vulkan gleich). Die Eingabe ist sRGB: die Kantenerkennung rechnet zurück in Gammaraum, das Mischen
+  bleibt linear. Samplerslots s1 (linear) und s2 (Punkt), Texturen t8–t10.
+- Lookup-Texturen: offizielle `AreaTex.h`/`SearchTex.h` als erzeugtes Array
+  `addons/forward/SmaaLookupTextures.inl` (74 KB). Von der Area-Textur nur Zeilen 0–79 (Subsample 0,
+  das einzige, was SMAA 1x liest; 160×80 RG8 statt 160×560), Search 64×16 R8 unverändert. Beim ersten
+  Einschalten hochgeladen, beim Device-Ende mit allen Post-AA-Pipelines freigegeben. Lizenz:
+  `licenses/SMAA.txt`, Eintrag in `licenses/README.txt`. Arrays statt Asset-Dateien: kein Pfad- oder
+  Exportproblem, die Daten ändern sich nie.
+- Geprüft: Debug x64 (nur `-j 4`, der volle Parallelbuild hat den Rechner zweimal abstürzen lassen),
+  `krom_tests` grün (Rezept SMAA: Pässe +3, Ressourcen +3, Formate, Zugriffe, Reihenfolge
+  Tonemap → Kanten → Gewichte → PostAA → UI; Namen; Projekt-Rundweg `smaa`; neuer Test: die drei Shader
+  kompilieren für DX11 und Vulkan, Texturgrößen). Room 2 mit `KROM_VALIDATION=1`, MSAA 2×, ohne Meldung:
+  DX11 aus/FXAA/SMAA, Vulkan aus/SMAA; 26 → 29 Pässe. SMAA DX11/Vulkan mittlere Abweichung 0,53/255
+  (aus: 0,49/255). OpenGL startet (15 Pässe, ohne Post-AA).
+- Bildvergleich `out/claude-smaa-compare.png` (Worktree; aus / FXAA / SMAA, 4×): SMAA glättet Treppen an
+  Türkante, Warnstreifen und Kiste und bleibt schärfer als FXAA. Geänderte Pixel (> 8/255) gegenüber aus:
+  FXAA 11 091, SMAA 6 484.
+- GPU-Zeit (Debug, 1181×709, MSAA 2×): DX11 Kanten 0,055 + Gewichte 0,115 + Mischen 0,090 = 0,26 ms
+  (FXAA 0,152 ms); Vulkan 0,066 + 0,116 + 0,057 = 0,24 ms (FXAA 0,146 ms).
+- Nicht gemacht: Stencil-Maske für den Gewichte-Pass (Pixel ohne Kante kosten dort nur einen Abruf),
+  Release-Messung, Sichtprüfung im Editor durch den Nutzer.

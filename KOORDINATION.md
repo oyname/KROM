@@ -17,6 +17,26 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## SMAA 1x post-process anti-aliasing (Claude, 2026-11-19)
+
+- Branch `claude/smaa-b6b7b7` on top of `feature/fxaa` (2f9b14c). Step 5 of `doc/PLAN_BILDQUALITAET_2.md`,
+  SMAA part.
+- `PostAAMode::Smaa` (`smaa`), combo entry "SMAA" in Project settings > Rendering > Post-AA.
+- Recipe (`BuildParams::postAASmaa`): `TonemapPass` -> `SmaaEdgePass` (`frame.smaa_edges`, `SmaaEdges`
+  RG8) -> `SmaaWeightPass` (`frame.smaa_weights`, `SmaaWeights` RGBA8) -> `PostAAPass` (neighborhood
+  blending, reads `Tonemapped` + `SmaaWeights`, writes the former tonemap target). Both SMAA targets clear
+  to 0.
+- Shaders in `addons/forward/ForwardSmaa.cpp`, ported from the official `SMAA.hlsl` (preset high, luma
+  edges, no predication/reprojection). Lookup data from the official `AreaTex.h`/`SearchTex.h` as a
+  generated array (`SmaaLookupTextures.inl`); the area texture is cropped to subsample 0 (160x80, the only
+  part SMAA 1x reads). License in `licenses/SMAA.txt`.
+- Checked: Debug x64, `krom_tests` all passed (SMAA recipe checks, shader compile test DX11 + SPIR-V).
+  Room 2 with `KROM_VALIDATION=1` no messages: DX11 off/FXAA/SMAA, Vulkan off/SMAA; 26 -> 29 passes.
+  OpenGL starts (15 passes). GPU (Debug, 1181x709): SMAA total 0.26 ms DX11 / 0.24 ms Vulkan vs FXAA
+  0.15 ms. Comparison: `out/claude-smaa-compare.png` in the worktree.
+- Please review: the cropped area texture and its `SMAA_AREATEX_PIXEL_SIZE`, the gamma conversion in the
+  edge pass, and resource cleanup in `DestroyPostAAGpuResources`.
+
 ## FXAA post-process anti-aliasing (Claude, 2026-11-19)
 
 - Branch `feature/fxaa` from `main`, not committed. Step 5 of `doc/PLAN_BILDQUALITAET_2.md`, FXAA part;

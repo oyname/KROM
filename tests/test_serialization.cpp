@@ -425,7 +425,7 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     settings.actions.push_back({"Jump", platform::Key::Space, platform::GamepadButton::South});
     settings.rendering.tonemapOperator = "pbrNeutral";
     settings.rendering.msaaSamples = 4u;
-    settings.rendering.postAA = "fxaa";
+    settings.rendering.postAA = "smaa";
     settings.rendering.brdfPerLightFresnel = false;
     settings.rendering.specularOcclusion = false;
     settings.rendering.gtaoEnabled = false;
@@ -468,7 +468,7 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK(ctx, result.renderingStored);
     CHECK_EQ(ctx, result.rendering.tonemapOperator, settings.rendering.tonemapOperator);
     CHECK_EQ(ctx, result.rendering.msaaSamples, 4u);
-    CHECK_EQ(ctx, result.rendering.postAA, std::string("fxaa"));
+    CHECK_EQ(ctx, result.rendering.postAA, std::string("smaa"));
     CHECK(ctx, result.rendering.brdfHeightCorrelated);
     CHECK(ctx, !result.rendering.brdfPerLightFresnel);
     CHECK(ctx, result.rendering.brdfMultiScatter);

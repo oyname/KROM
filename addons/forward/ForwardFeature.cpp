@@ -1,5 +1,6 @@
 #include "ForwardFeature.hpp"
 #include "addons/forward/ForwardPlusLighting.hpp"
+#include "addons/forward/ForwardSmaa.hpp"
 #include "addons/forward/ForwardSceneBindings.hpp"
 #include "addons/forward/StandardFramePipeline.hpp"
 #include "addons/lighting/LightingFrameData.hpp"
@@ -563,7 +564,9 @@ void main()
             bool attempted = false;
         };
 
-        // FXAA pipeline; rebuilt when the output format changes.
+        // Post-AA pipelines. FXAA and the SMAA blend pass write the output and are
+        // rebuilt when its format changes; the SMAA edge/weight pipelines have fixed
+        // formats. Shaders and lookup textures are created on first use per mode.
         struct PostAAGpuResources
         {
             ShaderHandle vertexShader = ShaderHandle::Invalid();
@@ -571,7 +574,40 @@ void main()
             PipelineHandle fxaaPipeline = PipelineHandle::Invalid();
             Format fxaaFormat = Format::Unknown;
             bool shadersAttempted = false;
+
+            ShaderHandle smaaEdgeShader = ShaderHandle::Invalid();
+            ShaderHandle smaaWeightShader = ShaderHandle::Invalid();
+            ShaderHandle smaaBlendShader = ShaderHandle::Invalid();
+            PipelineHandle smaaEdgePipeline = PipelineHandle::Invalid();
+            PipelineHandle smaaWeightPipeline = PipelineHandle::Invalid();
+            PipelineHandle smaaBlendPipeline = PipelineHandle::Invalid();
+            Format smaaBlendFormat = Format::Unknown;
+            TextureHandle smaaAreaTex = TextureHandle::Invalid();
+            TextureHandle smaaSearchTex = TextureHandle::Invalid();
+            bool smaaAttempted = false;
         };
+
+        void DestroyPostAAGpuResources(IDevice& device, PostAAGpuResources& res)
+        {
+            for (PipelineHandle* pipeline : { &res.fxaaPipeline, &res.smaaEdgePipeline,
+                                              &res.smaaWeightPipeline, &res.smaaBlendPipeline })
+            {
+                if (pipeline->IsValid())
+                    device.DestroyPipeline(*pipeline);
+            }
+            for (ShaderHandle* shader : { &res.vertexShader, &res.fxaaShader, &res.smaaEdgeShader,
+                                          &res.smaaWeightShader, &res.smaaBlendShader })
+            {
+                if (shader->IsValid())
+                    device.DestroyShader(*shader);
+            }
+            for (TextureHandle* texture : { &res.smaaAreaTex, &res.smaaSearchTex })
+            {
+                if (texture->IsValid())
+                    device.DestroyTexture(*texture);
+            }
+            res = PostAAGpuResources{};
+        }
 
         // Writes the BRDF options into the add-on's frame parameter block
         // (kShadingFrameParameterBlock); the PBR shaders read featureParams[2].
@@ -1010,20 +1046,22 @@ void main()
                 params.msaaSamples = msaaSamples;
                 const IDevice* buildDevice = context.shaderRuntime.GetDevice();
                 // Post-AA needs the built-in tonemap pass (bakes bring their own).
-                const bool postAAWanted = m_msaa && m_msaa->EffectivePostAA() == PostAAMode::Fxaa
+                const PostAAMode postAAMode = m_msaa ? m_msaa->EffectivePostAA() : PostAAMode::Off;
+                const bool postAAWanted = postAAMode != PostAAMode::Off
                     && !context.externalCallbacks.Has(StandardFrameExecutors::Tonemap)
                     && context.defaultTonemapMaterial.IsValid() && context.tonemapMaterialSystem
                     && buildDevice;
                 if (postAAWanted)
                 {
                     // Same format the tonemap material pipeline is built for
-                    // (the swapchain format); the FXAA output uses it as well.
+                    // (the swapchain format); the post-AA output uses it as well.
                     const MaterialRuntimeDesc* tonemapRuntime = MaterialRuntimeBridge::GetRuntimeDesc(
                         *context.tonemapMaterialSystem, context.defaultTonemapMaterial);
                     if (tonemapRuntime && tonemapRuntime->colorFormat != Format::Unknown)
                     {
                         params.postAAFormat = tonemapRuntime->colorFormat;
-                        params.postAAEnabled = EnsurePostAAResources(context, params.postAAFormat);
+                        params.postAAEnabled = EnsurePostAAResources(context, postAAMode, params.postAAFormat);
+                        params.postAASmaa = params.postAAEnabled && postAAMode == PostAAMode::Smaa;
                     }
                 }
                 const bool mrtSupported = buildDevice && buildDevice->SupportsFeature("mrt");
@@ -1758,21 +1796,74 @@ void main()
                 }
 
 
+                if (params.postAASmaa && !callbacks.Has(StandardFrameExecutors::SmaaEdges))
+                {
+                    auto state = pipelineState;
+                    auto postAAResources = m_postAAResources;
+                    callbacks.Register(StandardFrameExecutors::SmaaEdges,
+                        [state, postAAResources](const rendergraph::RGExecContext& execCtx)
+                        {
+                            if (!execCtx.cmd || !state->ready || !postAAResources ||
+                                !postAAResources->smaaEdgePipeline.IsValid())
+                                return;
+                            const TextureHandle colorTex = execCtx.GetTexture(state->resources.tonemapped);
+                            if (!colorTex.IsValid())
+                                return;
+                            execCtx.cmd->SetPipeline(postAAResources->smaaEdgePipeline);
+                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, colorTex, ShaderStageMask::Fragment);
+                            execCtx.cmd->SetSampler(SamplerSlots::PointClamp, SamplerSlots::PointClamp, ShaderStageMask::Fragment);
+                            execCtx.cmd->Draw(3u, 1u, 0u, 0u);
+                        });
+                }
+                if (params.postAASmaa && !callbacks.Has(StandardFrameExecutors::SmaaWeights))
+                {
+                    auto state = pipelineState;
+                    auto postAAResources = m_postAAResources;
+                    callbacks.Register(StandardFrameExecutors::SmaaWeights,
+                        [state, postAAResources](const rendergraph::RGExecContext& execCtx)
+                        {
+                            if (!execCtx.cmd || !state->ready || !postAAResources ||
+                                !postAAResources->smaaWeightPipeline.IsValid())
+                                return;
+                            const TextureHandle edgesTex = execCtx.GetTexture(state->resources.smaaEdges);
+                            if (!edgesTex.IsValid())
+                                return;
+                            execCtx.cmd->SetPipeline(postAAResources->smaaWeightPipeline);
+                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, edgesTex, ShaderStageMask::Fragment);
+                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV1, postAAResources->smaaAreaTex, ShaderStageMask::Fragment);
+                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV2, postAAResources->smaaSearchTex, ShaderStageMask::Fragment);
+                            execCtx.cmd->SetSampler(SamplerSlots::LinearClamp, SamplerSlots::LinearClamp, ShaderStageMask::Fragment);
+                            execCtx.cmd->SetSampler(SamplerSlots::PointClamp, SamplerSlots::PointClamp, ShaderStageMask::Fragment);
+                            execCtx.cmd->Draw(3u, 1u, 0u, 0u);
+                        });
+                }
                 if (params.postAAEnabled && !callbacks.Has(StandardFrameExecutors::PostAA))
                 {
                     auto state = pipelineState;
                     auto postAAResources = m_postAAResources;
+                    const bool smaa = params.postAASmaa;
                     callbacks.Register(StandardFrameExecutors::PostAA,
-                        [state, postAAResources](const rendergraph::RGExecContext& execCtx)
+                        [state, postAAResources, smaa](const rendergraph::RGExecContext& execCtx)
                         {
-                            if (!execCtx.cmd || !state->ready || !postAAResources ||
-                                !postAAResources->fxaaPipeline.IsValid())
+                            if (!execCtx.cmd || !state->ready || !postAAResources)
+                                return;
+                            const PipelineHandle pipeline = smaa ? postAAResources->smaaBlendPipeline
+                                                                 : postAAResources->fxaaPipeline;
+                            if (!pipeline.IsValid())
                                 return;
                             const TextureHandle sourceTex = execCtx.GetTexture(state->resources.tonemapped);
                             if (!sourceTex.IsValid())
                                 return;
-                            execCtx.cmd->SetPipeline(postAAResources->fxaaPipeline);
+                            execCtx.cmd->SetPipeline(pipeline);
                             execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Fragment);
+                            if (smaa)
+                            {
+                                // SMAA neighborhood blending: colour + blending weights.
+                                const TextureHandle weightsTex = execCtx.GetTexture(state->resources.smaaWeights);
+                                if (!weightsTex.IsValid())
+                                    return;
+                                execCtx.cmd->SetShaderResource(TexSlots::PassSRV1, weightsTex, ShaderStageMask::Fragment);
+                            }
                             execCtx.cmd->SetSampler(SamplerSlots::LinearClamp, SamplerSlots::LinearClamp, ShaderStageMask::Fragment);
                             execCtx.cmd->Draw(3u, 1u, 0u, 0u);
                         });
@@ -1878,13 +1969,16 @@ void main()
                     DestroyBloomGpuResources(*m_device, *m_bloomResources);
                 if (m_device && m_forwardPlusResources)
                     DestroyForwardPlusGpuResources(*m_device, *m_forwardPlusResources);
+                if (m_device && m_postAAResources)
+                    DestroyPostAAGpuResources(*m_device, *m_postAAResources);
                 m_device = nullptr;
             }
 
         private:
-            // FXAA pipeline for the given output format. Shaders are compiled once;
-            // the pipeline is rebuilt when the format changes.
-            bool EnsurePostAAResources(const RenderPipelineBuildContext& context, Format format) const
+            // Post-AA pipelines for the given mode and output format. Shaders (and the
+            // SMAA lookup textures) are created once; the pipelines writing the output
+            // are rebuilt when the format changes.
+            bool EnsurePostAAResources(const RenderPipelineBuildContext& context, PostAAMode mode, Format format) const
             {
                 if (!m_postAAResources)
                     return false;
@@ -1905,7 +1999,11 @@ void main()
                     if (!res.vertexShader.IsValid() || !res.fxaaShader.IsValid())
                         Debug::LogError("ForwardFeature.cpp: FXAA shaders failed, post-AA stays off");
                 }
-                if (!res.vertexShader.IsValid() || !res.fxaaShader.IsValid())
+                if (!res.vertexShader.IsValid())
+                    return false;
+                if (mode == PostAAMode::Smaa)
+                    return EnsureSmaaResources(*device, res, format);
+                if (!res.fxaaShader.IsValid())
                     return false;
                 if (res.fxaaPipeline.IsValid() && res.fxaaFormat == format)
                     return true;
@@ -1914,19 +2012,7 @@ void main()
                     device->DestroyPipeline(res.fxaaPipeline);
                     res.fxaaPipeline = PipelineHandle::Invalid();
                 }
-
-                PipelineDesc desc{};
-                desc.shaderStages.push_back({ res.vertexShader, ShaderStageMask::Vertex });
-                desc.shaderStages.push_back({ res.fxaaShader, ShaderStageMask::Fragment });
-                desc.topology = PrimitiveTopology::TriangleList;
-                desc.colorFormat = format;
-                desc.depthFormat = Format::Unknown;
-                desc.sampleCount = 1u;
-                desc.rasterizer.cullMode = CullMode::None;
-                desc.depthStencil.depthEnable = false;
-                desc.depthStencil.depthWrite = false;
-                desc.debugName = "ForwardFxaa_Pipeline";
-                res.fxaaPipeline = device->CreatePipeline(desc);
+                res.fxaaPipeline = CreatePostAAPipeline(*device, res.vertexShader, res.fxaaShader, format, "ForwardFxaa_Pipeline");
                 res.fxaaFormat = format;
                 if (!res.fxaaPipeline.IsValid())
                 {
@@ -1934,6 +2020,94 @@ void main()
                     return false;
                 }
                 return true;
+            }
+
+            // SMAA 1x: three shaders, the edge (RG8) and weight (RGBA8) pipelines, the
+            // blend pipeline in the output format, and the area/search lookup textures.
+            static bool EnsureSmaaResources(IDevice& device, PostAAGpuResources& res, Format format)
+            {
+                if (!res.smaaAttempted)
+                {
+                    res.smaaAttempted = true;
+                    const assets::ShaderTargetProfile target = ShaderCompiler::ResolveTargetProfile(device);
+                    res.smaaEdgeShader = CreateSkyShader(device, target, assets::ShaderStage::Fragment,
+                        assets::ShaderSourceLanguage::HLSL, smaa::kEdgeDetectionPsHlsl, "ForwardSmaaEdgePS");
+                    res.smaaWeightShader = CreateSkyShader(device, target, assets::ShaderStage::Fragment,
+                        assets::ShaderSourceLanguage::HLSL, smaa::kBlendingWeightPsHlsl, "ForwardSmaaWeightPS");
+                    res.smaaBlendShader = CreateSkyShader(device, target, assets::ShaderStage::Fragment,
+                        assets::ShaderSourceLanguage::HLSL, smaa::kNeighborhoodBlendingPsHlsl, "ForwardSmaaBlendPS");
+                    if (res.smaaEdgeShader.IsValid() && res.smaaWeightShader.IsValid())
+                    {
+                        res.smaaEdgePipeline = CreatePostAAPipeline(device, res.vertexShader, res.smaaEdgeShader,
+                            Format::RG8_UNORM, "ForwardSmaaEdge_Pipeline");
+                        res.smaaWeightPipeline = CreatePostAAPipeline(device, res.vertexShader, res.smaaWeightShader,
+                            Format::RGBA8_UNORM, "ForwardSmaaWeight_Pipeline");
+                    }
+                    res.smaaAreaTex = CreateLookupTexture(device, smaa::kAreaTexWidth, smaa::kAreaTexHeight,
+                        Format::RG8_UNORM, smaa::AreaTexData(), smaa::AreaTexSize(), "SMAA_AreaTex");
+                    res.smaaSearchTex = CreateLookupTexture(device, smaa::kSearchTexWidth, smaa::kSearchTexHeight,
+                        Format::R8_UNORM, smaa::SearchTexData(), smaa::SearchTexSize(), "SMAA_SearchTex");
+                    if (!SmaaBaseResourcesValid(res))
+                        Debug::LogError("ForwardFeature.cpp: SMAA resources failed, post-AA stays off");
+                }
+                if (!SmaaBaseResourcesValid(res))
+                    return false;
+                if (res.smaaBlendPipeline.IsValid() && res.smaaBlendFormat == format)
+                    return true;
+                if (res.smaaBlendPipeline.IsValid())
+                {
+                    device.DestroyPipeline(res.smaaBlendPipeline);
+                    res.smaaBlendPipeline = PipelineHandle::Invalid();
+                }
+                res.smaaBlendPipeline = CreatePostAAPipeline(device, res.vertexShader, res.smaaBlendShader,
+                    format, "ForwardSmaaBlend_Pipeline");
+                res.smaaBlendFormat = format;
+                if (!res.smaaBlendPipeline.IsValid())
+                {
+                    Debug::LogError("ForwardFeature.cpp: SMAA blend pipeline failed, post-AA stays off");
+                    return false;
+                }
+                return true;
+            }
+
+            [[nodiscard]] static bool SmaaBaseResourcesValid(const PostAAGpuResources& res) noexcept
+            {
+                return res.smaaEdgePipeline.IsValid() && res.smaaWeightPipeline.IsValid()
+                    && res.smaaBlendShader.IsValid() && res.smaaAreaTex.IsValid() && res.smaaSearchTex.IsValid();
+            }
+
+            // Fullscreen triangle without depth, blending or MSAA.
+            static PipelineHandle CreatePostAAPipeline(IDevice& device, ShaderHandle vs, ShaderHandle ps,
+                                                       Format format, const char* debugName)
+            {
+                PipelineDesc desc{};
+                desc.shaderStages.push_back({ vs, ShaderStageMask::Vertex });
+                desc.shaderStages.push_back({ ps, ShaderStageMask::Fragment });
+                desc.topology = PrimitiveTopology::TriangleList;
+                desc.colorFormat = format;
+                desc.depthFormat = Format::Unknown;
+                desc.sampleCount = 1u;
+                desc.rasterizer.cullMode = CullMode::None;
+                desc.depthStencil.depthEnable = false;
+                desc.depthStencil.depthWrite = false;
+                desc.debugName = debugName;
+                return device.CreatePipeline(desc);
+            }
+
+            static TextureHandle CreateLookupTexture(IDevice& device, uint32_t width, uint32_t height, Format format,
+                                                     const uint8_t* data, size_t byteSize, const char* debugName)
+            {
+                TextureDesc desc{};
+                desc.width = width;
+                desc.height = height;
+                desc.format = format;
+                desc.usage = ResourceUsage::ShaderResource | ResourceUsage::CopyDest;
+                desc.initialState = ResourceState::ShaderRead;
+                desc.debugName = debugName;
+                const TextureHandle texture = device.CreateTexture(desc);
+                if (texture.IsValid())
+                    device.UploadTextureData(texture, data, byteSize, 0u, 0u);
+                return texture;
             }
 
             // Resolve pipeline: colour RGBA16F + D24S8 (written via SV_Depth). Built once.
