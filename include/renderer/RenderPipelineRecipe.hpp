@@ -85,6 +85,10 @@ struct FrameRecipePassDesc
 {
     std::string name;
     std::string executorName;
+    // Optional executor run before the render pass opens, in the same graph pass
+    // (e.g. compute dispatches whose results the pass reads). Uses the pass's
+    // accesses and barriers; empty: none.
+    std::string preRenderPassExecutorName;
     RGPassType type = RGPassType::Graphics;
     std::vector<FrameRecipeResourceAccess> accesses;
     FrameRecipeRenderPassDesc renderPass{};
@@ -191,6 +195,13 @@ private:
                 Debug::LogWarning("FrameRecipeCompiler: pass '%s' has no executor '%s'",
                                   pass.name.c_str(),
                                   pass.executorName.c_str());
+            }
+            if (!pass.preRenderPassExecutorName.empty() &&
+                executors.Find(pass.preRenderPassExecutorName) == nullptr)
+            {
+                Debug::LogWarning("FrameRecipeCompiler: pass '%s' has no pre-render-pass executor '%s'",
+                                  pass.name.c_str(),
+                                  pass.preRenderPassExecutorName.c_str());
             }
 
             if (pass.renderPass.enabled && resourceNames.find(pass.renderPass.targetResourceName) == resourceNames.end())
@@ -308,10 +319,14 @@ private:
                 ApplyAccess(builder, access, materializedResources);
 
             const FramePipelinePassCallback executor = ResolveExecutor(executors, desc.executorName);
+            const FramePipelinePassCallback preExecutor = desc.preRenderPassExecutorName.empty()
+                ? FramePipelinePassCallback{}
+                : ResolveExecutor(executors, desc.preRenderPassExecutorName);
 
             if (!desc.renderPass.enabled)
             {
-                builder.Execute([executor](const RGExecContext& ctx) {
+                builder.Execute([executor, preExecutor](const RGExecContext& ctx) {
+                    if (preExecutor) preExecutor(ctx);
                     if (executor) executor(ctx);
                 });
                 continue;
@@ -343,6 +358,7 @@ private:
             }
 
             builder.Execute([executor,
+                             preExecutor,
                              targetId,
                              depthTargetId,
                              depthOnly,
@@ -357,6 +373,7 @@ private:
                              extraClears,
                              extraCount,
                              clearExtraColors](const RGExecContext& ctx) {
+                if (preExecutor) preExecutor(ctx);
                 ICommandList::RenderPassBeginInfo rp{};
                 rp.renderTarget = ctx.GetRenderTarget(targetId);
                 rp.depthTarget = ctx.GetRenderTarget(depthTargetId);

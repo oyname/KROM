@@ -17,6 +17,31 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Auto-exposure (Claude, 2026-11-19)
+
+- Branch `claude/wonderful-taussig-04bff6` from 224a6f4 (SMAA). Step 6 of `doc/PLAN_BILDQUALITAET_2.md`.
+- Agreed with the user: per scene, in the existing Inspector card "Exposure"; mode Fixed/Automatic, the
+  EV field becomes the correction in Automatic; missing key = Fixed (old scenes unchanged); script API gets
+  mode + correction (`RenderSettings::autoExposure`).
+- Settings: `ExposureMode`, `AutoExposureSettings` (min/max EV, EV/s brighter/darker), editor-only
+  `freezeAutoExposure` in `TonemapSettings`; `AutoExposureStatus` (read-back EV, reset on scene load) via
+  `ForwardFeatureConfig::autoExposureStatus`. Scene keys `exposureMode`, `autoExposureMinEv/MaxEv/ToBright/
+  ToDark`, read by `ReadSceneExposureJson` (`ForwardTonemapJson.hpp`) in editor and krom.h runtime.
+- GPU (`ForwardAutoExposure.*`): histogram CS (64 log2 bins, groupshared) + adapt CS (10-90 % average,
+  clamp, EV/s step, histogram reset), state float4 in a GPU buffer, read by `passthrough.ps.hlsl` as buffer
+  SRV t13 (bone palette slot, vertex-only). Display via 4 CPU-read copies (oldest is read).
+- New generic recipe hook `FrameRecipePassDesc::preRenderPassExecutorName`: runs in the same graph pass
+  before `BeginRenderPass`; `TonemapPass` uses it for `frame.auto_exposure`. No extra passes.
+- Backend changes: Vulkan texture SRV range also visible to compute; DX11 `MapBuffer` reads staging
+  (`CpuRead`) buffers.
+- Checked: Debug x64 (`-j 4`), `krom_tests` all passed (5 new tests). Room 2 with `KROM_VALIDATION=1
+  KROM_CAPTURE_LIT=1 --gtao-motion` no messages on DX11 and Vulkan, fixed and auto; 26 passes; measured
+  +1.350 / +1.349 EV (incl. +0.5 correction); DX11 vs Vulkan 0.50/255. OpenGL starts (15 passes, fixed).
+  GPU (Debug, 1181x709): +0.083 ms DX11, +0.061 ms Vulkan (inside TonemapPass).
+- Please review: barriers/state of the histogram and state buffers in `RecordAutoExposure` (Vulkan:
+  fragment read -> compute write next frame relies on the buffer transition), the readback timing (4 copies,
+  no host barrier), the t13 slot choice, and the recipe hook in `RenderPipelineRecipe.hpp`.
+
 ## SMAA 1x post-process anti-aliasing (Claude, 2026-11-19)
 
 - Branch `claude/smaa-b6b7b7` on top of `feature/fxaa` (2f9b14c). Step 5 of `doc/PLAN_BILDQUALITAET_2.md`,

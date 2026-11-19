@@ -31,6 +31,7 @@ namespace engine::renderer {
         PostAA,
         SmaaEdges,
         SmaaWeights,
+        AutoExposure,
     };
 
     enum class StandardFrameResourceID : uint8_t
@@ -89,6 +90,7 @@ namespace engine::renderer {
             case StandardFrameExecutorID::PostAA:       return "frame.post_aa";
             case StandardFrameExecutorID::SmaaEdges:    return "frame.smaa_edges";
             case StandardFrameExecutorID::SmaaWeights:  return "frame.smaa_weights";
+            case StandardFrameExecutorID::AutoExposure: return "frame.auto_exposure";
             }
             return {};
         }
@@ -109,6 +111,7 @@ namespace engine::renderer {
         inline constexpr std::string_view PostAA       = Name(StandardFrameExecutorID::PostAA);
         inline constexpr std::string_view SmaaEdges    = Name(StandardFrameExecutorID::SmaaEdges);
         inline constexpr std::string_view SmaaWeights  = Name(StandardFrameExecutorID::SmaaWeights);
+        inline constexpr std::string_view AutoExposure = Name(StandardFrameExecutorID::AutoExposure);
 
     } // namespace StandardFrameExecutors
 
@@ -254,6 +257,9 @@ namespace engine::renderer {
             bool   postAAEnabled = false;
             bool   postAASmaa    = false;
             Format postAAFormat  = Format::RGBA8_UNORM_SRGB;
+            // Auto-exposure: the tonemap pass runs the "frame.auto_exposure" executor
+            // (luminance histogram and adaptation, compute) before its render pass.
+            bool   autoExposureEnabled = false;
 
             std::array<float, 4> clearColorValue = { 0.3f, 0.3f, 0.3f, 1.f };
 
@@ -720,6 +726,8 @@ namespace engine::renderer {
             }
             if (p.bloomEnabled)
                 AddAccess(tonemap, StandardFrameResourceID::BloomBlurV,  FrameRecipeAccessKind::ReadTexture);
+            if (p.autoExposureEnabled)
+                tonemap.preRenderPassExecutorName = std::string(StandardFrameExecutors::AutoExposure);
 
             // The last scene pass (tonemap, or PostAA behind it) writes the view output.
             const auto writeSceneOutput = [&p](FrameRecipePassDesc& pass)

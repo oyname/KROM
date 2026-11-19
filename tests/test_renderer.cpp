@@ -26,6 +26,8 @@
 #include "addons/forward/ForwardTonemap.hpp"
 #include "addons/forward/ForwardShading.hpp"
 #include "addons/forward/ForwardSmaa.hpp"
+#include "addons/forward/ForwardAutoExposure.hpp"
+#include "addons/forward/ForwardTonemapJson.hpp"
 #include "addons/gtao/GtaoPass.hpp"
 #include "addons/contact_shadow/ContactShadowFeature.hpp"
 #include "addons/shadow/ShadowFeature.hpp"
@@ -1272,6 +1274,218 @@ static void TestSmaaShadersAndLookupTextures(test::TestContext& ctx)
             CHECK(ctx, !artifact.bytecode.empty());
         }
     }
+}
+
+// Auto-exposure settings: names, defaults (old scenes stay fixed), limits, and the
+// CPU mirror of the shader's target and adaptation step.
+static void TestAutoExposureSettings(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::forward;
+    CHECK(ctx, TonemapSettings{}.exposureMode == ExposureMode::Fixed);
+    CHECK(ctx, !TonemapSettings{}.freezeAutoExposure);
+    CHECK_EQ(ctx, std::string(ExposureModeName(ExposureMode::Fixed)), std::string("fixed"));
+    CHECK_EQ(ctx, std::string(ExposureModeName(ExposureMode::Auto)), std::string("auto"));
+    CHECK(ctx, ParseExposureMode("auto") == ExposureMode::Auto);
+    CHECK(ctx, ParseExposureMode("fixed") == ExposureMode::Fixed);
+    CHECK(ctx, ParseExposureMode("histogram") == ExposureMode::Fixed);
+    CHECK(ctx, ParseExposureMode(nullptr) == ExposureMode::Fixed);
+
+    const AutoExposureSettings defaults{};
+    CHECK(ctx, defaults.minEv == -4.0f && defaults.maxEv == 4.0f);
+    CHECK(ctx, defaults.toBrightSpeed == 3.0f && defaults.toDarkSpeed == 1.0f);
+
+    AutoExposureSettings wild{};
+    wild.minEv = 30.0f;
+    wild.maxEv = -30.0f;
+    wild.toBrightSpeed = 0.0f;
+    wild.toDarkSpeed = 100.0f;
+    wild.Clamp();
+    CHECK(ctx, wild.minEv == kMaxExposureEv);
+    CHECK(ctx, wild.maxEv == wild.minEv);
+    CHECK(ctx, wild.toBrightSpeed == kMinAutoExposureSpeed);
+    CHECK(ctx, wild.toDarkSpeed == kMaxAutoExposureSpeed);
+
+    // Middle grey needs no exposure; one stop brighter needs -1 EV; limits apply.
+    const float grey = std::log2(kAutoExposureMiddleGrey);
+    CHECK(ctx, std::fabs(AutoExposureTargetEv(grey, defaults)) < 1e-5f);
+    CHECK(ctx, std::fabs(AutoExposureTargetEv(grey + 1.0f, defaults) + 1.0f) < 1e-5f);
+    CHECK(ctx, AutoExposureTargetEv(grey - 10.0f, defaults) == defaults.maxEv);
+    CHECK(ctx, AutoExposureTargetEv(grey + 10.0f, defaults) == defaults.minEv);
+
+    // Brighter view (target below current): toBrightSpeed; darker: toDarkSpeed; no overshoot.
+    CHECK(ctx, std::fabs(AdaptExposureEv(2.0f, -2.0f, 0.5f, defaults) - 0.5f) < 1e-5f);
+    CHECK(ctx, std::fabs(AdaptExposureEv(-2.0f, 2.0f, 0.5f, defaults) + 1.5f) < 1e-5f);
+    CHECK(ctx, AdaptExposureEv(0.0f, 0.2f, 1.0f, defaults) == 0.2f);
+    CHECK(ctx, AdaptExposureEv(1.0f, 3.0f, 0.0f, defaults) == 1.0f);
+
+    AutoExposureStatus status{};
+    CHECK(ctx, !status.valid.load());
+    status.RequestReset();
+    CHECK_EQ(ctx, status.resetSerial.load(), 1u);
+}
+
+// Scene keys: missing keys keep the fixed exposure and the default limits; written
+// values come back, out-of-range ones are clamped.
+static void TestAutoExposureSceneJson(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::forward;
+    std::string error;
+    const serialization::JsonValue legacy = serialization::JsonParser::Parse(R"({"exposureEv":1.5})", error);
+    ExposureMode mode = ExposureMode::Auto;
+    AutoExposureSettings ae{};
+    ae.minEv = 3.0f;
+    ReadSceneExposureJson(legacy, mode, ae);
+    CHECK(ctx, mode == ExposureMode::Fixed);
+    CHECK(ctx, ae.minEv == AutoExposureSettings{}.minEv);
+
+    const serialization::JsonValue autoScene = serialization::JsonParser::Parse(
+        R"({"exposureMode":"auto","autoExposureMinEv":-2.5,"autoExposureMaxEv":6,)"
+        R"("autoExposureToBright":5,"autoExposureToDark":0.5})", error);
+    ReadSceneExposureJson(autoScene, mode, ae);
+    CHECK(ctx, mode == ExposureMode::Auto);
+    CHECK(ctx, ae.minEv == -2.5f && ae.maxEv == 6.0f);
+    CHECK(ctx, ae.toBrightSpeed == 5.0f && ae.toDarkSpeed == 0.5f);
+
+    const serialization::JsonValue broken = serialization::JsonParser::Parse(
+        R"({"exposureMode":"auto","autoExposureMinEv":50,"autoExposureMaxEv":-50,"autoExposureToDark":-1})", error);
+    ReadSceneExposureJson(broken, mode, ae);
+    CHECK(ctx, ae.minEv == kMaxExposureEv && ae.maxEv == kMaxExposureEv);
+    CHECK(ctx, ae.toDarkSpeed == kMinAutoExposureSpeed);
+}
+
+// Recipe: auto-exposure adds no pass; the tonemap pass runs "frame.auto_exposure"
+// before its render pass (backbuffer, editor view and post-AA target alike).
+static void TestAutoExposureRecipe(test::TestContext& ctx)
+{
+    for (const bool sceneOutput : { false, true })
+    {
+        for (const bool postAA : { false, true })
+        {
+            StandardFrameRecipeBuilder::BuildParams params{};
+            params.viewportWidth = 640u;
+            params.viewportHeight = 360u;
+            params.uiEnabled = true;
+            params.bloomEnabled = true;
+            params.postAAEnabled = postAA;
+            if (sceneOutput)
+            {
+                params.sceneOutputRT = RenderTargetHandle::Make(7u, 1u);
+                params.backbufferWidth = 1024u;
+                params.backbufferHeight = 768u;
+            }
+            const FrameRecipe plain = StandardFrameRecipeBuilder::BuildRecipe(params);
+            params.autoExposureEnabled = true;
+            const FrameRecipe recipe = StandardFrameRecipeBuilder::BuildRecipe(params);
+            CHECK_EQ(ctx, recipe.passes.size(), plain.passes.size());
+            CHECK_EQ(ctx, recipe.resources.size(), plain.resources.size());
+            const FrameRecipePassDesc* plainTonemap = FindRecipePass(plain, "TonemapPass");
+            const FrameRecipePassDesc* tonemap = FindRecipePass(recipe, "TonemapPass");
+            CHECK(ctx, plainTonemap != nullptr && plainTonemap->preRenderPassExecutorName.empty());
+            CHECK(ctx, tonemap != nullptr);
+            if (!tonemap)
+                continue;
+            CHECK_EQ(ctx, tonemap->preRenderPassExecutorName, std::string(StandardFrameExecutors::AutoExposure));
+            CHECK_EQ(ctx, std::string(StandardFrameExecutors::AutoExposure), std::string("frame.auto_exposure"));
+            CHECK(ctx, tonemap->renderPass.enabled);
+            for (const FrameRecipePassDesc& pass : recipe.passes)
+                if (pass.name != "TonemapPass")
+                    CHECK(ctx, pass.preRenderPassExecutorName.empty());
+        }
+    }
+}
+
+// The pre-render-pass executor runs in the same graph pass, before BeginRenderPass
+// (compute dispatches are not allowed inside a Vulkan render pass).
+static void TestRecipePreRenderPassExecutor(test::TestContext& ctx)
+{
+    using namespace engine::rendergraph;
+    RenderGraph rg;
+    FrameRecipe recipe{};
+    recipe.resources.push_back(FrameRecipeResourceDesc{ "Backbuffer", true, 64u, 64u, Format::RGBA8_UNORM_SRGB, RGResourceKind::Backbuffer });
+    FrameRecipePassDesc pass{};
+    pass.name = "Final";
+    pass.executorName = "exec.final";
+    pass.preRenderPassExecutorName = "exec.before";
+    pass.accesses.push_back({ "Backbuffer", FrameRecipeAccessKind::WriteRenderTarget });
+    pass.renderPass.enabled = true;
+    pass.renderPass.targetResourceName = "Backbuffer";
+    pass.renderPass.viewportWidth = 64u;
+    pass.renderPass.viewportHeight = 64u;
+    recipe.passes.push_back(pass);
+
+    RecordingCommandList cmd;
+    size_t passesAtPre = 99u;
+    size_t passesAtMain = 99u;
+    int calls = 0;
+    FramePipelineCallbacks callbacks{};
+    callbacks.Register("exec.before", [&](const RGExecContext&) { passesAtPre = cmd.renderPasses.size(); calls += 1; });
+    callbacks.Register("exec.final", [&](const RGExecContext&) { passesAtMain = cmd.renderPasses.size(); calls += 10; });
+
+    const FrameRecipeCompileParams params{ RenderTargetHandle::Make(1u, 1u), TextureHandle::Make(1u, 1u) };
+    FrameRecipeCompiler::Build(rg, params, recipe, callbacks);
+    CompiledFrame frame;
+    CHECK(ctx, rg.Compile(frame));
+    RGExecContext exec{};
+    exec.cmd = &cmd;
+    rg.Execute(frame, exec);
+    CHECK_EQ(ctx, calls, 11);
+    CHECK_EQ(ctx, passesAtPre, static_cast<size_t>(0u));
+    CHECK_EQ(ctx, passesAtMain, static_cast<size_t>(1u));
+}
+
+// The two compute shaders and the tonemap pixel shader (with the auto-exposure
+// buffer) compile for DX11 (FXC) and Vulkan (SPIR-V); textures are visible to compute.
+static void TestAutoExposureShadersCompile(test::TestContext& ctx)
+{
+    namespace ae = engine::renderer::addons::forward::auto_exposure;
+    const PipelineBindingLayoutDesc layout = BuildEnginePipelineBindingLayout();
+    CHECK(ctx, HasFlag(layout.ranges[4].visibility, ShaderStageMask::Compute));
+    CHECK(ctx, HasFlag(layout.ranges[4].visibility, ShaderStageMask::Fragment));
+    CHECK(ctx, layout.ranges[4].type == DescriptorType::ShaderResource);
+
+    const bool haveDxc = !FindShaderTool(ShaderTool::Dxc).path.empty();
+    const auto compile = [&](assets::ShaderAsset& shader)
+    {
+        for (const assets::ShaderTargetProfile target : { assets::ShaderTargetProfile::DirectX11_SM5,
+                                                          assets::ShaderTargetProfile::Vulkan_SPIRV })
+        {
+            if (target == assets::ShaderTargetProfile::Vulkan_SPIRV && !haveDxc)
+                continue;
+            assets::CompiledShaderArtifact artifact{};
+            std::string error;
+            const bool compiled = ShaderCompiler::CompileForTarget(shader, target, artifact, &error);
+            if (!compiled)
+                Debug::LogError("Auto-exposure shader test: %s (%s): %s", shader.debugName.c_str(),
+                                ShaderCompiler::ToString(target), error.c_str());
+            CHECK(ctx, compiled);
+            CHECK(ctx, !artifact.bytecode.empty());
+        }
+    };
+    const struct { const char* name; const char* source; } computeShaders[] = {
+        { "AutoExposureHistogramCS", ae::kHistogramCsHlsl },
+        { "AutoExposureAdaptCS", ae::kAdaptCsHlsl },
+    };
+    for (const auto& entry : computeShaders)
+    {
+        assets::ShaderAsset cs{};
+        cs.debugName = entry.name;
+        cs.stage = assets::ShaderStage::Compute;
+        cs.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+        cs.entryPoint = "main";
+        cs.sourceCode = entry.source;
+        compile(cs);
+    }
+    assets::ShaderAsset tonemap{};
+    tonemap.debugName = "passthrough.ps.hlsl";
+    tonemap.stage = assets::ShaderStage::Fragment;
+    tonemap.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    tonemap.entryPoint = "main";
+    tonemap.resolvedPath = PathToUtf8(PathFromUtf8(KROM_SOURCE_DIR) / "shaders" / "passthrough.ps.hlsl");
+    compile(tonemap);
+
+    CHECK_EQ(ctx, ae::kHistogramBins, 64u);
+    CHECK(ctx, ae::kMinLog2Luminance < std::log2(0.18f) - 10.0f);
+    CHECK(ctx, ae::kMaxLog2Luminance > std::log2(0.18f) + 10.0f - 0.5f);
 }
 
 static void TestGtaoDepthPrepassRecipe(test::TestContext& ctx)
@@ -6291,6 +6505,11 @@ int RunRendererTests()
         .Add("GTAO depth prepass recipe", TestGtaoDepthPrepassRecipe)
         .Add("Post-AA recipe", TestPostAARecipe)
         .Add("SMAA shaders and lookup textures", TestSmaaShadersAndLookupTextures)
+        .Add("Auto-exposure settings", TestAutoExposureSettings)
+        .Add("Auto-exposure scene keys", TestAutoExposureSceneJson)
+        .Add("Auto-exposure recipe", TestAutoExposureRecipe)
+        .Add("Recipe pre-render-pass executor", TestRecipePreRenderPassExecutor)
+        .Add("Auto-exposure shaders compile", TestAutoExposureShadersCompile)
         .Add("Forward pipeline: opaque input enables depth prepass", TestForwardPipelineOpaqueInputEnablesDepthPrepass)
         .Add("Contact shadow pass recipe", TestContactShadowPassRecipe)
         .Add("GTAO depth pipeline states", TestGtaoDepthPipelineStates)

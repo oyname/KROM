@@ -533,6 +533,9 @@ struct EditorFrameContext
     bool gtaoAvailable = true;                // false when the GTAO add-on is not registered (OpenGL)
     bool ssrAvailable = true;                 // false when the SSR add-on is not registered (OpenGL)
     bool contactShadowAvailable = true;       // false when the contact shadow add-on is not registered (OpenGL)
+    bool autoExposureAvailable = true;        // false on backends without compute (OpenGL)
+    // Automatic exposure as last measured (Inspector display); null without renderer.
+    const renderer::addons::forward::AutoExposureStatus* autoExposureStatus = nullptr;
     renderer::RenderFrameDataView frameData{};
 
     float renderViewX = 0.f;

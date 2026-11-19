@@ -3842,19 +3842,64 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
 
     card::End(lightingCard);
 
-    // Exposure of the scene. The tonemap operator and the other render options
+    // Exposure of the scene: fixed, or measured on the GPU (auto-exposure) with the
+    // EV field as correction. The tonemap operator and the other render options
     // are project settings (Project Settings > Rendering).
     card::Card tonemapCard;
     if (card::Begin(tonemapCard, "##scene_tonemapping", Translate("tonemap.title"),
                     ICON_LC_SUN, ComponentColor(ComponentIcon::Environment)))
     {
+        using namespace renderer::addons::forward;
+        TonemapSettings& tonemap = ctx.state.tonemap;
         value_ui::InlineLabelScope rows;
-        value_ui::RowLabel(Translate("tonemap.exposure"));
-        value_ui::DragFloat("##tonemapExposureEv", &ctx.state.tonemap.exposureEv, 0.05f,
-                            renderer::addons::forward::kMinExposureEv,
-                            renderer::addons::forward::kMaxExposureEv, "%+.2f EV",
-                            ImGuiSliderFlags_AlwaysClamp);
-        ImGui::SetItemTooltip("%s", Translate("tonemap.exposure_tooltip"));
+
+        // Order of the list = ExposureMode ids.
+        const char* modeNames[] = { Translate("exposure.mode_fixed"), Translate("exposure.mode_auto") };
+        int mode = tonemap.exposureMode == ExposureMode::Auto ? 1 : 0;
+        if (value_ui::Combo(TranslateLabel("exposure.mode", "Mode").c_str(), &mode, modeNames, 2))
+            tonemap.exposureMode = mode == 1 ? ExposureMode::Auto : ExposureMode::Fixed;
+        ImGui::SetItemTooltip("%s", Translate(ctx.autoExposureAvailable ? "exposure.mode_tooltip"
+                                                                        : "exposure.mode_unavailable"));
+        const bool automatic = tonemap.exposureMode == ExposureMode::Auto;
+
+        value_ui::RowLabel(Translate(automatic ? "exposure.correction" : "tonemap.exposure"));
+        value_ui::DragFloat("##tonemapExposureEv", &tonemap.exposureEv, 0.05f,
+                            kMinExposureEv, kMaxExposureEv, "%+.2f EV", ImGuiSliderFlags_AlwaysClamp);
+        ImGui::SetItemTooltip("%s", Translate(automatic ? "exposure.correction_tooltip" : "tonemap.exposure_tooltip"));
+
+        if (automatic)
+        {
+            AutoExposureSettings& ae = tonemap.autoExposure;
+            value_ui::RowLabel(Translate("exposure.min_ev"));
+            if (value_ui::DragFloat("##autoExposureMinEv", &ae.minEv, 0.05f, kMinExposureEv, kMaxExposureEv,
+                                    "%+.2f EV", ImGuiSliderFlags_AlwaysClamp))
+                ae.maxEv = std::max(ae.maxEv, ae.minEv);
+            ImGui::SetItemTooltip("%s", Translate("exposure.limits_tooltip"));
+            value_ui::RowLabel(Translate("exposure.max_ev"));
+            if (value_ui::DragFloat("##autoExposureMaxEv", &ae.maxEv, 0.05f, kMinExposureEv, kMaxExposureEv,
+                                    "%+.2f EV", ImGuiSliderFlags_AlwaysClamp))
+                ae.minEv = std::min(ae.minEv, ae.maxEv);
+            ImGui::SetItemTooltip("%s", Translate("exposure.limits_tooltip"));
+            value_ui::RowLabel(Translate("exposure.to_bright"));
+            value_ui::DragFloat("##autoExposureToBright", &ae.toBrightSpeed, 0.05f, kMinAutoExposureSpeed,
+                                kMaxAutoExposureSpeed, "%.2f EV/s", ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SetItemTooltip("%s", Translate("exposure.to_bright_tooltip"));
+            value_ui::RowLabel(Translate("exposure.to_dark"));
+            value_ui::DragFloat("##autoExposureToDark", &ae.toDarkSpeed, 0.05f, kMinAutoExposureSpeed,
+                                kMaxAutoExposureSpeed, "%.2f EV/s", ImGuiSliderFlags_AlwaysClamp);
+            ImGui::SetItemTooltip("%s", Translate("exposure.to_dark_tooltip"));
+
+            // Editor only, not saved with the scene.
+            value_ui::Checkbox(TranslateLabel("exposure.freeze", "Freeze exposure").c_str(), &tonemap.freezeAutoExposure);
+            ImGui::SetItemTooltip("%s", Translate("exposure.freeze_tooltip"));
+
+            value_ui::RowLabel(Translate("exposure.current"));
+            if (ctx.autoExposureStatus && ctx.autoExposureStatus->valid.load(std::memory_order_relaxed))
+                ImGui::Text("%+.2f EV", ctx.autoExposureStatus->currentEv.load(std::memory_order_relaxed));
+            else
+                ImGui::TextDisabled("%s", Translate(ctx.autoExposureAvailable ? "exposure.current_none"
+                                                                              : "exposure.current_unavailable"));
+        }
     }
     card::End(tonemapCard);
 

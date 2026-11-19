@@ -106,6 +106,7 @@ struct DX11BufferEntry {
     uint32_t      stride    = 0u;   // Vertex-Stride für IASetVertexBuffers
     uint32_t      bindFlags = 0u;
     bool          dynamic   = false;
+    bool          readback  = false;  // staging buffer (MemoryAccess::CpuRead): MapBuffer reads
     void*         mapped    = nullptr;
 };
 

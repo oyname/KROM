@@ -16,12 +16,15 @@ enum class TonemapMode : uint8_t
     KhronosPbrNeutral = 3,
 };
 
-// The project settings give the start values, except exposureEv, which comes
-// from the scene and is set again by every scene load.
+// The project settings give the start values, except exposureEv and
+// autoExposure, which come from the scene and are set again by every scene load.
 struct RenderSettings
 {
     TonemapMode tonemap = TonemapMode::AgX;
-    float       exposureEv = 0.f;        // EV stops; HDR colour *= 2^EV
+    float       exposureEv = 0.f;        // EV stops; HDR colour *= 2^EV. With autoExposure: correction
+    // Automatic exposure (limits and speeds are set per scene in the Inspector);
+    // no effect under OpenGL, which keeps the fixed exposure.
+    bool        autoExposure = false;
     uint32_t    msaaSamples = 1u;        // 1 = off, 2, 4; no effect under OpenGL
     bool        heightCorrelatedVisibility = true;
     bool        perLightDiffuseFresnel = true;

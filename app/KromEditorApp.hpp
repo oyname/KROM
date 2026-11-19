@@ -345,6 +345,9 @@ private:
     // Read every frame by the forward tonemap pass; filled from EditorState::tonemap.
     std::shared_ptr<renderer::addons::forward::TonemapSettings>  m_tonemapSettings =
         std::make_shared<renderer::addons::forward::TonemapSettings>();
+    // Measured automatic exposure (shown in the Inspector) and scene-load reset.
+    std::shared_ptr<renderer::addons::forward::AutoExposureStatus> m_autoExposureStatus =
+        std::make_shared<renderer::addons::forward::AutoExposureStatus>();
     std::shared_ptr<renderer::addons::forward::MsaaSettings>     m_msaaSettings =
         std::make_shared<renderer::addons::forward::MsaaSettings>();
     // Post-process AA after tonemapping; filled from EditorState::postAA.

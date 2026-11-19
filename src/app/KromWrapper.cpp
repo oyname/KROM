@@ -13,6 +13,7 @@
 #include "addons/camera/CameraSerialization.hpp"
 #include "addons/camera/CameraViewBuilder.hpp"
 #include "addons/forward/ForwardFeature.hpp"
+#include "addons/forward/ForwardTonemapJson.hpp"
 #include "addons/gtao/GtaoFeature.hpp"
 #include "addons/contact_shadow/ContactShadowFeature.hpp"
 #include "addons/ssr/SsrFeature.hpp"
@@ -173,6 +174,8 @@ struct KromSceneData
     float ambientIntensity = 1.0f;
     bool hasAmbientIntensity = false;
     float exposureEv = 0.0f;
+    engine::renderer::addons::forward::ExposureMode exposureMode = engine::renderer::addons::forward::ExposureMode::Fixed;
+    engine::renderer::addons::forward::AutoExposureSettings autoExposure{};
     // Render options of scenes written before they moved to the project settings;
     // used only when the project file has no "rendering" block.
     engine::ProjectRenderSettings legacyRendering = engine::ReadLegacySceneRenderSettings({});
@@ -216,6 +219,9 @@ struct State
     // Read every frame by the forward tonemap pass (Krom::SetTonemapping, scene files).
     std::shared_ptr<engine::renderer::addons::forward::TonemapSettings> tonemapSettings =
         std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
+    // Reset request of the automatic exposure on scene loads.
+    std::shared_ptr<engine::renderer::addons::forward::AutoExposureStatus> autoExposureStatus =
+        std::make_shared<engine::renderer::addons::forward::AutoExposureStatus>();
     std::shared_ptr<engine::renderer::addons::forward::MsaaSettings> msaaSettings =
         std::make_shared<engine::renderer::addons::forward::MsaaSettings>();
     // Post-process AA after tonemapping (project settings, KROM_POST_AA).
@@ -1669,6 +1675,7 @@ static KromSceneData ParseKscene(const std::string& json)
             if (const auto* ev = env->Get("exposureEv"); ev && ev->IsNumber())
                 data.exposureEv = std::clamp(ev->AsFloat(), engine::renderer::addons::forward::kMinExposureEv,
                                              engine::renderer::addons::forward::kMaxExposureEv);
+            engine::renderer::addons::forward::ReadSceneExposureJson(*env, data.exposureMode, data.autoExposure);
             data.legacyRendering = engine::ReadLegacySceneRenderSettings(root);
             if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
                 data.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;
@@ -2315,6 +2322,7 @@ public:
         {
             out.tonemap = static_cast<engine::script::TonemapMode>(m_state.tonemapSettings->op);
             out.exposureEv = m_state.tonemapSettings->exposureEv;
+            out.autoExposure = m_state.tonemapSettings->exposureMode == engine::renderer::addons::forward::ExposureMode::Auto;
         }
         out.msaaSamples = m_state.msaaSettings ? m_state.msaaSettings->sampleCount : 1u;
         const engine::renderer::addons::forward::ShadingSettings shading =
@@ -2337,6 +2345,7 @@ public:
             m_state.tonemapSettings->op = static_cast<TonemapOperator>(
                 std::min<uint8_t>(static_cast<uint8_t>(in.tonemap), 3u));
             m_state.tonemapSettings->exposureEv = std::clamp(in.exposureEv, kMinExposureEv, kMaxExposureEv);
+            m_state.tonemapSettings->exposureMode = in.autoExposure ? ExposureMode::Auto : ExposureMode::Fixed;
         }
         if (m_state.msaaSettings)
             m_state.msaaSettings->sampleCount = NormalizeMsaaSamples(in.msaaSamples);
@@ -2364,7 +2373,13 @@ static void ApplySceneEnvironment(State& state, const KromSceneData& data)
     if (!state.projectSettings.renderingStored)
         ApplyProjectRenderSettings(state, data.legacyRendering);
     if (state.tonemapSettings)
+    {
         state.tonemapSettings->exposureEv = data.exposureEv;
+        state.tonemapSettings->exposureMode = data.exposureMode;
+        state.tonemapSettings->autoExposure = data.autoExposure;
+    }
+    if (state.autoExposureStatus)
+        state.autoExposureStatus->RequestReset();   // the new scene starts at its own exposure
     if (state.probeRuntime)
     {
         engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
@@ -2718,6 +2733,7 @@ bool RegisterEngineFeatures(State& state)
     forwardConfig.bloomIntensity = 0.12f;
     forwardConfig.bloomBlurRadius = 1.0f;
     forwardConfig.tonemapSettings = state.tonemapSettings;
+    forwardConfig.autoExposureStatus = state.autoExposureStatus;
     forwardConfig.msaaSettings = state.msaaSettings;
     forwardConfig.postAASettings = state.postAASettings;
     forwardConfig.shadingSettings = state.shadingSettings;
