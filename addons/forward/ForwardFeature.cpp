@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cstring>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace engine::renderer::addons::forward {
@@ -638,6 +639,13 @@ void main()
             bool hasLastTime = false;
         };
 
+        struct AutoExposureViewState
+        {
+            std::shared_ptr<AutoExposureGpuResources> resources = std::make_shared<AutoExposureGpuResources>();
+            RenderTargetHandle outputRT;
+            bool enabled = false;
+        };
+
         void DestroyAutoExposureGpuResources(IDevice& device, AutoExposureGpuResources& res)
         {
             for (PipelineHandle* pipeline : { &res.histogramPipeline, &res.adaptPipeline })
@@ -1124,7 +1132,7 @@ void main()
         // outside any render pass). Also copies the state for the display and reads
         // back the copy written kReadbackCopies frames ago.
         void RecordAutoExposure(IDevice& device, ICommandList& cmd, AutoExposureGpuResources& res,
-                                const TonemapSettings& settings, AutoExposureStatus* status,
+                                const TonemapSettings& settings, AutoExposureStatus* status, bool publishStatus,
                                 TextureHandle sourceTex, uint32_t width, uint32_t height)
         {
             AutoExposureSettings limits = settings.autoExposure;
@@ -1175,7 +1183,7 @@ void main()
             const uint32_t slot = res.readbackIndex;
             res.readbackIndex = (res.readbackIndex + 1u) % AutoExposureGpuResources::kReadbackCopies;
             const BufferHandle readback = res.readback[slot];
-            if (status && readback.IsValid() && res.readbackWritten[slot])
+            if (status && publishStatus && readback.IsValid() && res.readbackWritten[slot])
             {
                 if (const void* mapped = device.MapBuffer(readback))
                 {
@@ -1212,7 +1220,7 @@ void main()
             cmd.SetUnorderedAccess(UAVSlots::Output1, BufferHandle::Invalid(), ShaderStageMask::Compute);
             cmd.TransitionResource(res.histogram, ResourceState::UnorderedAccess, ResourceState::ShaderRead);
 
-            if (status && readback.IsValid())
+            if (status && publishStatus && readback.IsValid())
             {
                 cmd.TransitionResource(res.state, ResourceState::UnorderedAccess, ResourceState::CopySource);
                 cmd.CopyBuffer(readback, 0u, res.state, 0u, sizeof(auto_exposure::StateGpu));
@@ -1246,7 +1254,6 @@ void main()
                 , m_msaa(std::move(msaa))
                 , m_resolveResources(std::make_shared<MsaaResolveGpuResources>())
                 , m_postAAResources(std::make_shared<PostAAGpuResources>())
-                , m_autoExposureResources(std::make_shared<AutoExposureGpuResources>())
             {
             }
 
@@ -1316,7 +1323,17 @@ void main()
                 if (msaaSamples > 1u && !EnsureMsaaResolveResources(context))
                     msaaSamples = 1u;   // no resolve pipeline: draw without MSAA
                 params.msaaSamples = msaaSamples;
-                const IDevice* buildDevice = context.shaderRuntime.GetDevice();
+                IDevice* buildDevice = context.shaderRuntime.GetDevice();
+                if (buildDevice)
+                    ReleaseExpiredExposureViews(*buildDevice);
+                // The main view keeps one history across swapchain images and resizes.
+                // Offscreen views have their own persistent output handles. A shared
+                // histogram/history lets a material preview meter the main scene.
+                const uint64_t exposureViewKey = context.presentOutput ? 0u
+                    : (static_cast<uint64_t>(context.backbufferRT.value) << 32u) | context.backbufferTex.value;
+                AutoExposureViewState& exposureView = m_autoExposureViews[exposureViewKey];
+                exposureView.outputRT = context.presentOutput ? RenderTargetHandle{} : context.backbufferRT;
+                const auto viewAutoExposure = exposureView.resources;
                 // Post-AA needs the built-in tonemap pass (bakes bring their own).
                 const PostAAMode postAAMode = m_msaa ? m_msaa->EffectivePostAA() : PostAAMode::Off;
                 const bool postAAWanted = postAAMode != PostAAMode::Off
@@ -1337,7 +1354,7 @@ void main()
                     }
                 }
                 // Auto-exposure runs before the built-in tonemap draw (bakes bring their own).
-                if (AutoExposureWanted() && buildDevice && m_autoExposureResources
+                if (AutoExposureWanted() && buildDevice && viewAutoExposure
                     && !context.externalCallbacks.Has(StandardFrameExecutors::Tonemap)
                     && context.defaultTonemapMaterial.IsValid() && context.tonemapMaterialSystem)
                 {
@@ -1345,14 +1362,14 @@ void main()
                     if (device)
                     {
                         m_device = device;
-                        params.autoExposureEnabled = EnsureAutoExposureGpuResources(*device, *m_autoExposureResources);
+                        params.autoExposureEnabled = EnsureAutoExposureGpuResources(*device, *viewAutoExposure);
                     }
                 }
                 // Switched on (again): the first measurement jumps to its target.
-                if (params.autoExposureEnabled && !m_autoExposureBuilt && m_autoExposureResources)
-                    m_autoExposureResources->measured = false;
-                m_autoExposureBuilt = params.autoExposureEnabled;
-                if (!params.autoExposureEnabled && m_config.autoExposureStatus)
+                if (params.autoExposureEnabled && !exposureView.enabled && viewAutoExposure)
+                    viewAutoExposure->measured = false;
+                exposureView.enabled = params.autoExposureEnabled;
+                if (context.presentOutput && !params.autoExposureEnabled && m_config.autoExposureStatus)
                     m_config.autoExposureStatus->valid.store(false, std::memory_order_relaxed);
                 const bool mrtSupported = buildDevice && buildDevice->SupportsFeature("mrt");
 
@@ -2009,7 +2026,7 @@ void main()
                     auto bloomResources = m_bloomResources;
                     auto tonemapResources = m_tonemapResources;
                     auto tonemapSettings = m_config.tonemapSettings;
-                    auto autoExposureResources = params.autoExposureEnabled ? m_autoExposureResources
+                    auto autoExposureResources = params.autoExposureEnabled ? viewAutoExposure
                                                                             : std::shared_ptr<AutoExposureGpuResources>{};
                     const BloomPassConstants bloomConstants{
                         std::max(0.0f, m_config.bloomThreshold),
@@ -2107,13 +2124,14 @@ void main()
                 if (params.autoExposureEnabled && !callbacks.Has(StandardFrameExecutors::AutoExposure))
                 {
                     auto state = pipelineState;
-                    auto aeResources = m_autoExposureResources;
+                    auto aeResources = viewAutoExposure;
                     auto tonemapSettings = m_config.tonemapSettings;
                     auto status = m_config.autoExposureStatus;
+                    const bool publishStatus = context.presentOutput;
                     const uint32_t width = params.viewportWidth;
                     const uint32_t height = params.viewportHeight;
                     callbacks.Register(StandardFrameExecutors::AutoExposure,
-                        [state, aeResources, tonemapSettings, status, width, height](const rendergraph::RGExecContext& execCtx)
+                        [state, aeResources, tonemapSettings, status, publishStatus, width, height](const rendergraph::RGExecContext& execCtx)
                         {
                             if (!execCtx.cmd || !execCtx.device || !state->ready || !aeResources || !aeResources->ready)
                                 return;
@@ -2127,7 +2145,7 @@ void main()
                             const TextureHandle sourceTex = execCtx.GetTexture(srcId);
                             if (!sourceTex.IsValid())
                                 return;
-                            RecordAutoExposure(*execCtx.device, *execCtx.cmd, *aeResources, settings, status.get(),
+                            RecordAutoExposure(*execCtx.device, *execCtx.cmd, *aeResources, settings, status.get(), publishStatus,
                                                sourceTex, width, height);
                         });
                 }
@@ -2308,14 +2326,31 @@ void main()
                     DestroyForwardPlusGpuResources(*m_device, *m_forwardPlusResources);
                 if (m_device && m_postAAResources)
                     DestroyPostAAGpuResources(*m_device, *m_postAAResources);
-                if (m_device && m_autoExposureResources)
-                    DestroyAutoExposureGpuResources(*m_device, *m_autoExposureResources);
+                if (m_device)
+                    for (auto& [key, view] : m_autoExposureViews)
+                        DestroyAutoExposureGpuResources(*m_device, *view.resources);
+                m_autoExposureViews.clear();
                 if (m_config.autoExposureStatus)
                     m_config.autoExposureStatus->valid.store(false, std::memory_order_relaxed);
                 m_device = nullptr;
             }
 
         private:
+            void ReleaseExpiredExposureViews(IDevice& device) const
+            {
+                for (auto it = m_autoExposureViews.begin(); it != m_autoExposureViews.end();)
+                {
+                    if (it->first != 0u && it->second.outputRT.IsValid() &&
+                        !device.GetRenderTargetColorTexture(it->second.outputRT).IsValid())
+                    {
+                        DestroyAutoExposureGpuResources(device, *it->second.resources);
+                        it = m_autoExposureViews.erase(it);
+                    }
+                    else
+                        ++it;
+                }
+            }
+
             [[nodiscard]] bool AutoExposureWanted() const noexcept
             {
                 return m_config.tonemapSettings && m_config.tonemapSettings->exposureMode == ExposureMode::Auto;
@@ -2539,9 +2574,8 @@ void main()
             std::shared_ptr<MsaaRuntime> m_msaa;
             std::shared_ptr<MsaaResolveGpuResources> m_resolveResources;
             std::shared_ptr<PostAAGpuResources> m_postAAResources;
-            std::shared_ptr<AutoExposureGpuResources> m_autoExposureResources;
+            mutable std::unordered_map<uint64_t, AutoExposureViewState> m_autoExposureViews;
             mutable IDevice* m_device = nullptr;
-            mutable bool m_autoExposureBuilt = false;
             mutable uint32_t m_metricsLogFrameCounter = 0u;
         };
 

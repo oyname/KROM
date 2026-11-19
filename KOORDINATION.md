@@ -985,6 +985,34 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ## Befunde (Codex)
 
+### Korrektur: Materialeditor beeinflusste Auto-Exposure der Szene (2026-11-19)
+
+- Nutzer meldet „Car“ dauerhaft zu dunkel und bestätigt die Kopplung an den
+  geöffneten Materialeditor. Szene enthält Auto-Exposure mit Standardgrenzen
+  -4/+4 EV. Fehler am echten Renderer mit einer gleichmäßigen HDR-Testfläche
+  und geöffnetem/geschlossenem Materialeditor reproduziert: dunkle Ansicht
+  geschlossen +3,4943 EV, geöffnet nur ca. +0,1954 EV. Der Test schlägt vor
+  der Korrektur für beide Helligkeiten mit geöffneter Vorschau fehl.
+- **Ursache:** `ForwardRenderPipeline` hatte einen gemeinsamen Histogramm-/
+  Zustandsbuffer und eine gemeinsame Adaptationszeit für sämtliche Ansichten.
+  Die vor dem Hauptbild gerenderten Vorschauen beeinflussten damit dessen
+  Belichtung und den angezeigten EV-Wert.
+- **Korrektur:** Eigenständige Auto-Exposure-Ressourcen und Adaptationszustände
+  je Ausgabeziel; das Hauptbild hat eine stabile Identität über Swapchain-Bilder
+  und Größenänderungen. Zustände zerstörter Renderziele werden freigegeben,
+  beim Device-Shutdown alle Zustände. Nur das Hauptbild publiziert den
+  angezeigten Belichtungswert; der Scene-Reset erreicht weiterhin alle Ansichten.
+- **Regression:** Optionaler GPU-Test
+  `krom_editor_loading_tests[_dx11] --auto-exposure <project.json> <capture-dir>`:
+  helle/dunkle HDR-Fläche ohne/mit Materialeditor, erneutes Schließen. Prüft
+  gemessene EV-Werte und tatsächliche GPU-Bildhelligkeit. Nach Korrektur in
+  beiden Fällen -3,4898 / +3,4943 EV. DX11-Bildmitte der dunklen Fläche:
+  vorher offen 39,475 statt geschlossen 134,642 von 255, nachher beides 134,642.
+  Logs und GPU-Bilder unter `out/exposure-{before,after}-dx11*` bzw.
+  `out/exposure-after-vulkan*`. Reguläre Tests: 460/460 grün, Debug-Build ohne
+  optionale Physik-/Audiomodule; OpenGL-Editor ebenfalls gebaut. Die bereits
+  dokumentierten Vulkan-Formatmeldungen der Vorschau bleiben ein separater Befund.
+
 ### Nachprüfung und Korrektur: Wellenmuster in der Materialvorschau (2026-11-19)
 
 - Die Rückmeldung „absolut keine Verbesserung“ nach `d22a1e0` wurde am echten

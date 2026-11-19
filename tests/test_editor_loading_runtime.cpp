@@ -99,6 +99,117 @@ struct EditorLoadingSmokeTest final : IAppScene
         return value.intValue;
     }
     bool materialUi = false;
+    // --auto-exposure <project.json> <capture-dir>: a uniform HDR surface changes
+    // from bright to dark, first alone and then with the material preview open.
+    std::filesystem::path autoExposureCaptures;
+    MaterialHandle exposureProbeMaterial{};
+    size_t exposureProbeStage = 0u;
+    std::chrono::steady_clock::time_point exposureProbeStarted{};
+    std::array<float, 5> exposureProbeValues{};
+    std::array<float, 5> exposureProbeBrightness{};
+    bool UpdateAutoExposure(AppSceneContext& context)
+    {
+        namespace ed = renderer::addons::editor;
+        using namespace renderer::addons::forward;
+        auto& ui = *app.m_editorFrameCtx;
+        if (!exposureProbeMaterial.IsValid())
+        {
+            assets::SubMeshData quad;
+            quad.positions = {-20.f,-20.f,0.f, 20.f,-20.f,0.f, 20.f,20.f,0.f, -20.f,20.f,0.f};
+            quad.normals = {0.f,0.f,1.f, 0.f,0.f,1.f, 0.f,0.f,1.f, 0.f,0.f,1.f};
+            quad.uvs = {0.f,0.f, 1.f,0.f, 1.f,1.f, 0.f,1.f};
+            quad.indices = {0u,1u,2u, 0u,2u,3u};
+            const auto root = app.GetCurrentAssetRoot();
+            Check(assets::KMeshSave(root / "ExposureProbe.kmesh", {quad}), "save exposure probe mesh");
+            std::ofstream(root / "Materials/ExposureProbe.mat") <<
+                "template unlit\ndoubleSided true\nbaseColorFactor 1 1 1 1\n";
+            const auto mesh = context.assetPipeline.LoadMesh("ExposureProbe.kmesh");
+            const auto entity = ed::CreateEmptyEntity(ui, "Exposure metering probe");
+            auto* transform = app.m_world->Get<TransformComponent>(entity);
+            transform->localPosition = {};
+            transform->localRotation = {};
+            transform->localScale = {1.f,1.f,1.f};
+            transform->dirty = true;
+            app.m_world->Add<MeshComponent>(entity, mesh);
+            Check(ed::ApplyMaterialAssetToEntity(ui, entity, "Materials/ExposureProbe.mat"),
+                  "bind exposure probe material");
+            auto* material = app.m_world->Get<MaterialComponent>(entity);
+            exposureProbeMaterial = material ? material->material : MaterialHandle{};
+            if (material) material->materialAssetPath.clear(); // the test drives the runtime colour
+            Check(exposureProbeMaterial.IsValid(), "exposure probe material ready");
+            if (!exposureProbeMaterial.IsValid())
+            {
+                context.renderLoop.GetWindow()->RequestClose();
+                return true;
+            }
+            ui.state.editorCamera.position = {0.f,0.f,4.f};
+            ui.state.editorCamera.pitchDeg = ui.state.editorCamera.yawDeg = 0.f;
+            ui.state.tonemap.exposureMode = ExposureMode::Auto;
+            ui.state.tonemap.exposureEv = 0.f;
+            ui.state.tonemap.freezeAutoExposure = false;
+            ui.state.tonemap.autoExposure.toBrightSpeed = ui.state.tonemap.autoExposure.toDarkSpeed = 20.f;
+            app.m_autoExposureStatus->RequestReset();
+        }
+        const bool bright = exposureProbeStage == 0u || exposureProbeStage == 2u;
+        const float value = bright ? 1.8f : 0.018f;
+        context.materialSystem.SetVec4(exposureProbeMaterial, "baseColorFactor", {value,value,value,1.f});
+        auto& runtime = context.renderLoop.GetRenderSystem().GetShaderRuntime();
+        if (runtime.HasPendingShaderCompiles() || frames < 20)
+        {
+            exposureProbeStarted = {};
+            return true;
+        }
+        const auto now = std::chrono::steady_clock::now();
+        if (exposureProbeStarted == std::chrono::steady_clock::time_point{})
+            exposureProbeStarted = now;
+        if (now - exposureProbeStarted < std::chrono::seconds(2))
+            return true;
+        const char* names[] = {"bright-closed", "dark-closed", "bright-preview", "dark-preview", "dark-closed-again"};
+        Check(app.m_autoExposureStatus->valid.load(), "automatic exposure produced a measurement");
+        const float ev = app.m_autoExposureStatus->currentEv.load();
+        exposureProbeValues[exposureProbeStage] = ev;
+        std::printf("EXPOSURE %s %+.4f EV\n", names[exposureProbeStage], ev);
+        auto* device = context.renderLoop.GetRenderSystem().GetDevice();
+        const auto texture = device->GetRenderTargetColorTexture(app.m_sceneView.rt);
+        std::vector<uint8_t> pixels;
+        uint32_t width = 0u, height = 0u;
+        const bool read = device->ReadTexturePixels(texture, pixels, width, height) && width >= 40u && height >= 40u &&
+            pixels.size() == static_cast<size_t>(width) * height * 4u;
+        Check(read, "exposure probe GPU image readback");
+        if (read)
+        {
+            float sum = 0.f;
+            for (uint32_t y = height/2u-20u; y < height/2u+20u; ++y)
+                for (uint32_t x = width/2u-20u; x < width/2u+20u; ++x)
+                    for (uint32_t c = 0u; c < 3u; ++c)
+                        sum += pixels[(static_cast<size_t>(y)*width+x)*4u+c];
+            exposureProbeBrightness[exposureProbeStage] = sum / (40.f*40.f*3.f);
+            std::ofstream out(autoExposureCaptures / (std::string(names[exposureProbeStage]) + ".ppm"), std::ios::binary);
+            out << "P6\n" << width << ' ' << height << "\n255\n";
+            for (size_t i = 0u; i < pixels.size(); i += 4u)
+                out.write(reinterpret_cast<const char*>(pixels.data()+i), 3);
+        }
+        exposureProbeStarted = now;
+        ++exposureProbeStage;
+        if (exposureProbeStage == 2u)
+            ed::OpenMaterialAsset(ui, app.GetCurrentAssetRoot() / "Materials/Weiss.mat");
+        if (exposureProbeStage == 4u)
+            ui.state.materialWindowOpen = false;
+        if (exposureProbeStage == 5u)
+        {
+            Check(exposureProbeValues[1] > exposureProbeValues[0] + 4.f, "dark view increases automatic exposure");
+            Check(std::fabs(exposureProbeValues[2] - exposureProbeValues[0]) < 0.15f,
+                  "material preview preserves bright scene exposure");
+            Check(std::fabs(exposureProbeValues[3] - exposureProbeValues[1]) < 0.15f,
+                  "material preview preserves dark scene exposure");
+            Check(std::fabs(exposureProbeBrightness[2] - exposureProbeBrightness[0]) < 1.f,
+                  "material preview preserves rendered bright scene brightness");
+            Check(std::fabs(exposureProbeBrightness[3] - exposureProbeBrightness[1]) < 1.f,
+                  "material preview preserves rendered dark scene brightness");
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        return true;
+    }
     // --material-ibl <project.json> <capture-dir>: isolate lighting on the real
     // material-editor sphere, without changing the material or production view.
     struct MaterialIblConstants final : renderer::IFrameConstantsContributor
@@ -1674,6 +1785,8 @@ struct EditorLoadingSmokeTest final : IAppScene
     bool Update(AppSceneContext& context, float) override
     {
         ++frames; // AppScene-Update ruht waehrend des Lade-Jobs.
+        if (!autoExposureCaptures.empty())
+            return UpdateAutoExposure(context);
         if (!materialIblCaptures.empty())
             return UpdateMaterialIbl(context);
         if (sceneClose)
@@ -2162,6 +2275,12 @@ int main(int argc, char** argv)
     test.toolbarLogo = argc > 1 && std::string_view(argv[1]) == "--toolbar-logo";
     if (argc > 2 && std::string_view(argv[1]) == "--perf")
         test.perfProject = argv[2];
+    if (argc > 3 && std::string_view(argv[1]) == "--auto-exposure")
+    {
+        test.perfProject = argv[2];
+        test.autoExposureCaptures = engine::PathFromUtf8(argv[3]);
+        std::filesystem::create_directories(test.autoExposureCaptures);
+    }
     if (argc > 3 && std::string_view(argv[1]) == "--material-ibl")
     {
         test.perfProject = argv[2];
