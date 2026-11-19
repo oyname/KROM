@@ -1528,6 +1528,16 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
     int level = rendering.msaaSamples >= 4u ? 2 : (rendering.msaaSamples == 2u ? 1 : 0);
     if (ImGui::Combo(TranslateLabel("msaa.level", "MSAA").c_str(), &level, levels, IM_ARRAYSIZE(levels)))
         rendering.msaaSamples = level == 2 ? 4u : (level == 1 ? 2u : 1u);
+    // Order of the list = PostAAMode ids; the file stores the names.
+    const char* postAANames[] = { "off", "fxaa" };
+    const char* postAAModes[] = { Translate("msaa.off"), "FXAA" };
+    int postAA = 0;
+    for (int i = 0; i < IM_ARRAYSIZE(postAANames); ++i)
+        if (rendering.postAA == postAANames[i])
+            postAA = i;
+    if (ImGui::Combo(TranslateLabel("msaa.post_aa", "Post-AA").c_str(), &postAA, postAAModes, IM_ARRAYSIZE(postAAModes)))
+        rendering.postAA = postAANames[std::clamp(postAA, 0, IM_ARRAYSIZE(postAANames) - 1)];
+    ImGui::SetItemTooltip("%s", Translate("msaa.post_aa_tip"));
     if (!ctx.msaaAvailable)
         ImGui::TextDisabled("%s", Translate("settings.opengl_unavailable"));
 

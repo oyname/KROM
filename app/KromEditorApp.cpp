@@ -1770,6 +1770,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         forwardConfig.bloomBlurRadius = 1.0f;
         forwardConfig.tonemapSettings = m_tonemapSettings;
         forwardConfig.msaaSettings = m_msaaSettings;
+        forwardConfig.postAASettings = m_postAASettings;
         forwardConfig.shadingSettings = m_shadingSettings;
         forwardConfig.mode = m_forwardPlusActive
             ? renderer::addons::forward::ForwardRendererMode::ForwardPlus
@@ -3733,6 +3734,7 @@ int KromEditorApp::Run(IAppScene& scene)
             m_renderLoop.GetRenderSystem().SetGpuPassTimingEnabled(m_editorState.profilerGpuTiming);
             *m_tonemapSettings = m_editorState.tonemap;
             m_msaaSettings->sampleCount = m_editorState.msaaSamples;
+            m_postAASettings->mode = m_editorState.postAA;
             *m_shadingSettings = m_editorState.shading;
             if (m_ssrResources)
             {
@@ -6098,6 +6100,9 @@ void KromEditorApp::ApplyProjectRenderSettings()
     if (!renderer::addons::forward::ParseTonemapOperator(rendering.tonemapOperator.c_str(), m_editorState.tonemap.op))
         Debug::LogWarning("KromEditorApp.cpp: unknown tonemap operator '%s'", rendering.tonemapOperator.c_str());
     m_editorState.msaaSamples = renderer::addons::forward::NormalizeMsaaSamples(rendering.msaaSamples);
+    m_editorState.postAA = renderer::addons::forward::PostAAMode::Off;
+    if (!renderer::addons::forward::ParsePostAAMode(rendering.postAA.c_str(), m_editorState.postAA))
+        Debug::LogWarning("KromEditorApp.cpp: unknown post-AA mode '%s'", rendering.postAA.c_str());
     m_editorState.shading = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
                               rendering.brdfMultiScatter, rendering.specularAntiAliasing };
     m_editorState.specularOcclusion = rendering.specularOcclusion;

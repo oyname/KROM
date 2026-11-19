@@ -42,7 +42,7 @@ Qualitätsstufen und Post-Process-Volumes. Zeitliche Verfahren (TAA) kommen zule
 | 2 | Echtes GTAO | erledigt (2026-11-18), Review offen |
 | 3 | Specular-AA | erledigt (2026-11-18), Review offen |
 | 4 | Script-API: GTAO und SSR an/aus | erledigt (2026-11-18), GTAO mit Projekt-Häkchen |
-| 5 | Post-AA: SMAA 1x, FXAA | offen |
+| 5 | Post-AA: SMAA 1x, FXAA | FXAA erledigt (2026-11-19), SMAA offen (eigene Session) |
 | 6 | Auto-Exposure | offen |
 | 7 | Qualitätsstufen | offen |
 | 8 | Post-Process-Volume: Bedienablauf abstimmen | offen |
@@ -246,3 +246,30 @@ GTX 1660, Viewport 1181×709, MSAA wie Projekt, ohne Validierung), ms:
 - GPU-Zeit MainOpaquePass (Debug, 1181×709): DX11 1,650 → 1,683 ms, Vulkan 1,588 → 1,612 ms.
 - Nicht geprüft: Sichtprüfung im Editor in echter Bewegung, harte Kanten flach schattierter Geometrie
   (Roughness-Saum an Kanten möglich), MSAA 4×, Release.
+
+### 2026-11-19 – Schritt 5, Teil FXAA (Claude, Zweig `feature/fxaa`)
+
+- Nutzerentscheidung: erst FXAA, SMAA danach in einer eigenen Session. Editor-Overlays (Outline, Gizmos,
+  Gitter) liegen im HDR-Bild vor dem Tonemapping und werden mitgeglättet (Empfehlung, keine Rückmeldung);
+  ImGui-Text liegt separat und bleibt scharf.
+- Einstellung: `PostAAMode` Off/Fxaa + `PostAASettings` in `addons/forward/ForwardAntiAliasing.hpp`
+  (Namen `off`/`fxaa`), `ForwardFeatureConfig::postAASettings` (geteilt wie MSAA, Änderung baut den Graph
+  neu: Strukturrevision = MSAA-Samples | Modus << 8). Unter OpenGL aus (wie MSAA).
+- Rezept: `BuildParams::postAAEnabled/postAAFormat`. Bei an schreibt `TonemapPass` in `Tonemapped`
+  (Format der Tonemap-Material-Pipeline = Swapchain-Format, aus `MaterialRuntimeDesc::colorFormat`),
+  `PostAAPass` (Executor `frame.post_aa`) liest es und schreibt das bisherige Ziel (Backbuffer oder
+  `EditorSceneView`, gleiche Clear-Einstellung). Ohne eingebautes Tonemapping (Probe-Bake bringt einen
+  eigenen Tonemap-Executor) bleibt Post-AA aus.
+- Shader `kFxaaPsHlsl` in `ForwardFeature.cpp`: eigene Umsetzung des FXAA-3-Quality-Verfahrens
+  (Kontrasttest 0,125/0,0312, Kantenrichtung, Suche entlang der Kante 12 Schritte, Subpixel 0,75). Eingabe
+  ist eine sRGB-Textur, Luma = sqrt(lineare Luma). Pixelposition statt interpolierter UV.
+- Einstellungen: Projektschlüssel `postAA` (fehlend = `off`), Auswahl "Post-AA" unter Kantenglättung in
+  Projekteinstellungen > Rendering (de/en, Tooltip). Editor und krom.h-Runtime geben den Wert in
+  `ApplyProjectRenderSettings` weiter; Runtime zusätzlich `KROM_POST_AA=fxaa`. Script-API: mit Schritt 7.
+- Geprüft: Debug x64, `krom_tests` grün (neuer Test "Post-AA recipe": Backbuffer- und Editor-Ziel,
+  Format, Reihenfolge Tonemap → PostAA → UI; Projekt-Rundweg). Room 2 mit `KROM_VALIDATION=1` ohne
+  Meldung: DX11 MSAA 1×/2× + FXAA, Vulkan MSAA 1× + FXAA; 24 → 25 Pässe. DX11/Vulkan mittlere Abweichung
+  0,41/255. OpenGL startet (15 Pässe, ohne FXAA). Bild: `out/claude-fxaa-compare.png` (links aus,
+  rechts FXAA, 4×).
+- GPU-Zeit (Debug, 1181×709, MSAA 2×): `PostAAPass` DX11 0,139 ms, Vulkan 0,135 ms.
+- Offen: Sichtprüfung durch den Nutzer (Textschärfe, Outline), Release, SMAA 1x (eigene Session).

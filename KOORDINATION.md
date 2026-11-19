@@ -17,6 +17,26 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## FXAA post-process anti-aliasing (Claude, 2026-11-19)
+
+- Branch `feature/fxaa` from `main`, not committed. Step 5 of `doc/PLAN_BILDQUALITAET_2.md`, FXAA part;
+  SMAA follows in its own session.
+- `PostAAMode`/`PostAASettings` in `addons/forward/ForwardAntiAliasing.hpp`, shared via
+  `ForwardFeatureConfig::postAASettings`; off on OpenGL. A change rebuilds the graph (structure revision).
+- Recipe: with post-AA on, `TonemapPass` writes `Tonemapped` (format of the tonemap material pipeline, i.e.
+  the swapchain format) and the new `PostAAPass` (`frame.post_aa`) reads it and writes the former tonemap
+  target (backbuffer or `EditorSceneView`). Off when an external tonemap executor exists (probe bakes).
+- FXAA shader (`kFxaaPsHlsl`): own implementation of the FXAA 3 quality algorithm, sRGB input, luma =
+  sqrt(linear luma). Editor overlays drawn into the HDR image are smoothed too; ImGui is not.
+- Project key `postAA` (`off`/`fxaa`, missing = off), combo in Project settings > Rendering; editor and
+  krom.h runtime apply it; runtime also reads `KROM_POST_AA`. No script API yet (step 7).
+- Checked: Debug x64, `krom_tests` all passed (new "Post-AA recipe"). Room 2 with `KROM_VALIDATION=1` no
+  messages: DX11 MSAA 1x/2x + FXAA, Vulkan MSAA 1x + FXAA; 24 -> 25 passes; DX11 vs Vulkan mean diff
+  0.41/255. OpenGL starts (15 passes, no FXAA). GPU (Debug, 1181x709): PostAAPass 0.14 ms on both.
+- Note: the editor loading test executables are not part of the default build; build them by name.
+- Please review: the tonemap target switch in `StandardFramePipeline.hpp` (render pass of `Tonemapped`
+  does not clear; the fullscreen triangle covers it) and the pipeline format source.
+
 ## Screen-space contact shadows (Claude, 2026-11-18)
 
 - Branch `feature/contact-shadows` from `main`, not committed. Steps 2-6 of `doc/PLAN_KONTAKTSCHATTEN.md`.

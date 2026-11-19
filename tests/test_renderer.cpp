@@ -1094,6 +1094,82 @@ static void TestStandardFrameRecipe(test::TestContext& ctx)
     CHECK(ctx, !present->renderPass.enabled);
 }
 
+// Post-AA: the tonemap pass writes "Tonemapped", the PostAA pass reads it and
+// takes over the former tonemap target (backbuffer or editor scene view).
+static void TestPostAARecipe(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::forward;
+    PostAAMode mode = PostAAMode::Off;
+    CHECK(ctx, ParsePostAAMode("fxaa", mode));
+    CHECK_EQ(ctx, mode, PostAAMode::Fxaa);
+    CHECK(ctx, !ParsePostAAMode("smaa", mode));
+    CHECK_EQ(ctx, std::string(PostAAModeName(PostAAMode::Off)), std::string("off"));
+
+    for (const bool sceneOutput : { false, true })
+    {
+        StandardFrameRecipeBuilder::BuildParams params{};
+        params.viewportWidth = 800u;
+        params.viewportHeight = 600u;
+        params.uiEnabled = true;
+        if (sceneOutput)
+        {
+            params.sceneOutputRT = RenderTargetHandle::Make(7u, 1u);
+            params.backbufferWidth = 1024u;
+            params.backbufferHeight = 768u;
+        }
+        const FrameRecipe plain = StandardFrameRecipeBuilder::BuildRecipe(params);
+        params.postAAEnabled = true;
+        params.postAAFormat = Format::BGRA8_UNORM_SRGB;
+        const FrameRecipe recipe = StandardFrameRecipeBuilder::BuildRecipe(params);
+        CHECK_EQ(ctx, recipe.passes.size(), plain.passes.size() + 1u);
+        CHECK_EQ(ctx, recipe.resources.size(), plain.resources.size() + 1u);
+
+        const std::string target = sceneOutput ? std::string(StandardFrameRecipeBuilder::kEditorSceneViewResource)
+                                               : std::string("Backbuffer");
+        const FrameRecipePassDesc* plainTonemap = FindRecipePass(plain, "TonemapPass");
+        CHECK(ctx, plainTonemap != nullptr && plainTonemap->renderPass.targetResourceName == target);
+
+        const FrameRecipePassDesc* tonemap = FindRecipePass(recipe, "TonemapPass");
+        const FrameRecipePassDesc* postAA = FindRecipePass(recipe, "PostAAPass");
+        CHECK(ctx, tonemap != nullptr);
+        CHECK(ctx, postAA != nullptr);
+        if (!tonemap || !postAA)
+            continue;
+        CHECK_EQ(ctx, tonemap->renderPass.targetResourceName, std::string("Tonemapped"));
+        CHECK_EQ(ctx, postAA->executorName, std::string(StandardFrameExecutors::PostAA));
+        CHECK_EQ(ctx, postAA->renderPass.targetResourceName, target);
+        CHECK_EQ(ctx, postAA->renderPass.viewportWidth, 800u);
+        CHECK(ctx, postAA->renderPass.clearColor);
+        bool readsTonemapped = false;
+        for (const FrameRecipeResourceAccess& access : postAA->accesses)
+            readsTonemapped |= access.resourceName == "Tonemapped" && access.access == FrameRecipeAccessKind::ReadTexture;
+        CHECK(ctx, readsTonemapped);
+
+        const FrameRecipeResourceDesc* tonemapped = nullptr;
+        for (const FrameRecipeResourceDesc& res : recipe.resources)
+            if (res.name == "Tonemapped")
+                tonemapped = &res;
+        CHECK(ctx, tonemapped != nullptr);
+        if (tonemapped)
+        {
+            CHECK_EQ(ctx, tonemapped->format, Format::BGRA8_UNORM_SRGB);
+            CHECK_EQ(ctx, tonemapped->width, 800u);
+            CHECK_EQ(ctx, tonemapped->height, 600u);
+        }
+
+        // Tonemap before PostAA before UI.
+        size_t tonemapIndex = 0u, postAAIndex = 0u, uiIndex = 0u;
+        for (size_t i = 0; i < recipe.passes.size(); ++i)
+        {
+            if (recipe.passes[i].name == "TonemapPass") tonemapIndex = i;
+            if (recipe.passes[i].name == "PostAAPass")  postAAIndex = i;
+            if (recipe.passes[i].name == "UIPass")      uiIndex = i;
+        }
+        CHECK(ctx, tonemapIndex < postAAIndex);
+        CHECK(ctx, postAAIndex < uiIndex);
+    }
+}
+
 static void TestGtaoDepthPrepassRecipe(test::TestContext& ctx)
 {
     using Builder = StandardFrameRecipeBuilder;
@@ -6109,6 +6185,7 @@ int RunRendererTests()
         .Add("PlatformRenderLoop",        TestPlatformRenderLoop)
         .Add("Recipe extra colour targets (MRT)", TestRecipeExtraColorTargets)
         .Add("GTAO depth prepass recipe", TestGtaoDepthPrepassRecipe)
+        .Add("Post-AA recipe", TestPostAARecipe)
         .Add("Forward pipeline: opaque input enables depth prepass", TestForwardPipelineOpaqueInputEnablesDepthPrepass)
         .Add("Contact shadow pass recipe", TestContactShadowPassRecipe)
         .Add("GTAO depth pipeline states", TestGtaoDepthPipelineStates)

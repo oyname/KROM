@@ -360,6 +360,8 @@
   "msaa.title": "Kantenglättung",
   "msaa.level": "MSAA",
   "msaa.off": "Aus",
+  "msaa.post_aa": "Post-AA",
+  "msaa.post_aa_tip": "Kantenglättung nach dem Tonemapping, zusätzlich zu MSAA. FXAA glättet auch Kanten innerhalb von Texturen und Alpha-Test, macht das Bild aber etwas weicher.",
   "settings.opengl_unavailable": "Unter OpenGL nicht verfügbar. Die Einstellung bleibt gespeichert und wirkt unter DX11 und Vulkan.",
   "ssr.title": "Bildschirmraum-Spiegelungen (SSR)",
   "ssr.enabled": "Aktiv",

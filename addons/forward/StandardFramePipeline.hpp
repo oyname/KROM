@@ -28,6 +28,7 @@ namespace engine::renderer {
         DebugDraw,
         Particles,
         DepthPrepass,
+        PostAA,
     };
 
     enum class StandardFrameResourceID : uint8_t
@@ -57,6 +58,7 @@ namespace engine::renderer {
         DebugDraw,
         Particles,
         DepthPrepass,
+        PostAA,
     };
 
     namespace StandardFrameExecutors {
@@ -78,6 +80,7 @@ namespace engine::renderer {
             case StandardFrameExecutorID::Tonemap:      return "frame.tonemap";
             case StandardFrameExecutorID::UI:           return "frame.ui";
             case StandardFrameExecutorID::Present:      return "frame.present";
+            case StandardFrameExecutorID::PostAA:       return "frame.post_aa";
             }
             return {};
         }
@@ -95,6 +98,7 @@ namespace engine::renderer {
         inline constexpr std::string_view Tonemap      = Name(StandardFrameExecutorID::Tonemap);
         inline constexpr std::string_view UI           = Name(StandardFrameExecutorID::UI);
         inline constexpr std::string_view Present      = Name(StandardFrameExecutorID::Present);
+        inline constexpr std::string_view PostAA       = Name(StandardFrameExecutorID::PostAA);
 
     } // namespace StandardFrameExecutors
 
@@ -146,6 +150,7 @@ namespace engine::renderer {
             case StandardFramePassID::Tonemap:     return "TonemapPass";
             case StandardFramePassID::UI:          return "UIPass";
             case StandardFramePassID::Present:     return "PresentPass";
+            case StandardFramePassID::PostAA:      return "PostAAPass";
             }
             return {};
         }
@@ -163,6 +168,7 @@ namespace engine::renderer {
         inline constexpr std::string_view Tonemap     = Name(StandardFramePassID::Tonemap);
         inline constexpr std::string_view UI          = Name(StandardFramePassID::UI);
         inline constexpr std::string_view Present     = Name(StandardFramePassID::Present);
+        inline constexpr std::string_view PostAA      = Name(StandardFramePassID::PostAA);
 
     } // namespace StandardFramePassNames
 
@@ -220,6 +226,11 @@ namespace engine::renderer {
             // The legacy path also draws transparent geometry before resolving.
             uint32_t msaaSamples    = 1u;
             [[nodiscard]] bool MsaaEnabled() const noexcept { return msaaSamples > 1u; }
+            // Post-process AA (FXAA): the tonemap pass writes "Tonemapped" in this
+            // format (the one the tonemap pipeline was built for), the PostAA pass
+            // reads it and writes the former tonemap target.
+            bool   postAAEnabled = false;
+            Format postAAFormat  = Format::RGBA8_UNORM_SRGB;
 
             std::array<float, 4> clearColorValue = { 0.3f, 0.3f, 0.3f, 1.f };
 
@@ -526,6 +537,12 @@ namespace engine::renderer {
                 recipe.resources.push_back(MakeResource(StandardFrameResourceID::BloomBlurV,     false, p.bloomWidth,      p.bloomHeight,      Format::RGBA16_FLOAT,       RGResourceKind::ColorTexture));
             }
 
+            if (p.postAAEnabled)
+            {
+                recipe.resources.push_back(MakeResource(StandardFrameResourceID::Tonemapped,
+                    false, p.viewportWidth, p.viewportHeight, p.postAAFormat, RGResourceKind::ColorTexture));
+            }
+
             // UIOverlay: kein separater Puffer noetig. UI-Pass schreibt direkt auf Backbuffer.
         }
 
@@ -671,23 +688,43 @@ namespace engine::renderer {
             }
             if (p.bloomEnabled)
                 AddAccess(tonemap, StandardFrameResourceID::BloomBlurV,  FrameRecipeAccessKind::ReadTexture);
-            if (p.HasSceneOutput())
+
+            // The last scene pass (tonemap, or PostAA behind it) writes the view output.
+            const auto writeSceneOutput = [&p](FrameRecipePassDesc& pass)
             {
-                tonemap.accesses.push_back(FrameRecipeResourceAccess{
-                    kEditorSceneViewResource, FrameRecipeAccessKind::WriteRenderTarget });
-                tonemap.renderPass.enabled            = true;
-                tonemap.renderPass.targetResourceName = kEditorSceneViewResource;
-                tonemap.renderPass.viewportWidth      = p.viewportWidth;
-                tonemap.renderPass.viewportHeight     = p.viewportHeight;
-                tonemap.renderPass.clearColor         = true;
-                tonemap.renderPass.clearDepth         = false;
+                if (p.HasSceneOutput())
+                {
+                    pass.accesses.push_back(FrameRecipeResourceAccess{
+                        kEditorSceneViewResource, FrameRecipeAccessKind::WriteRenderTarget });
+                    pass.renderPass.enabled            = true;
+                    pass.renderPass.targetResourceName = kEditorSceneViewResource;
+                    pass.renderPass.viewportWidth      = p.viewportWidth;
+                    pass.renderPass.viewportHeight     = p.viewportHeight;
+                    pass.renderPass.clearColor         = true;
+                    pass.renderPass.clearDepth         = false;
+                }
+                else
+                {
+                    AddAccess(pass, StandardFrameResourceID::Backbuffer, FrameRecipeAccessKind::WriteRenderTarget);
+                    ConfigureRenderPass(pass, StandardFrameResourceID::Backbuffer, p.viewportWidth, p.viewportHeight, true, false);
+                }
+            };
+            if (p.postAAEnabled)
+            {
+                AddAccess(tonemap, StandardFrameResourceID::Tonemapped, FrameRecipeAccessKind::WriteRenderTarget);
+                ConfigureRenderPass(tonemap, StandardFrameResourceID::Tonemapped, p.viewportWidth, p.viewportHeight, false, false);
+                recipe.passes.push_back(std::move(tonemap));
+
+                FrameRecipePassDesc postAA = MakePass(StandardFramePassID::PostAA, StandardFrameExecutorID::PostAA);
+                AddAccess(postAA, StandardFrameResourceID::Tonemapped, FrameRecipeAccessKind::ReadTexture);
+                writeSceneOutput(postAA);
+                recipe.passes.push_back(std::move(postAA));
             }
             else
             {
-                AddAccess(tonemap, StandardFrameResourceID::Backbuffer, FrameRecipeAccessKind::WriteRenderTarget);
-                ConfigureRenderPass(tonemap, StandardFrameResourceID::Backbuffer, p.viewportWidth, p.viewportHeight, true, false);
+                writeSceneOutput(tonemap);
+                recipe.passes.push_back(std::move(tonemap));
             }
-            recipe.passes.push_back(std::move(tonemap));
 
             if (p.uiEnabled)
             {

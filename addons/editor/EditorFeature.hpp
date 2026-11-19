@@ -326,6 +326,7 @@ struct EditorState
     // environment block.
     renderer::addons::forward::TonemapSettings tonemap{};
     uint32_t msaaSamples = 1u;   // 1 = off, 2, 4
+    renderer::addons::forward::PostAAMode postAA = renderer::addons::forward::PostAAMode::Off;
     bool     specularOcclusion = true;
     renderer::addons::forward::ShadingSettings shading{ true, true, true, true };
     // Screen-space reflections (project settings, SSR add-on).

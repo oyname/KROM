@@ -170,6 +170,143 @@ PSOutput main(PSInput IN)
     return o;
 })";
 
+        // FXAA after the tonemap pass (own implementation of the FXAA 3 quality
+        // algorithm: local contrast test, edge direction, search along the edge for
+        // both ends, sub-pixel blend). The input is an sRGB texture, so samples are
+        // linear; luma uses sqrt as a cheap perceptual curve.
+        constexpr const char* kFxaaPsHlsl = R"(
+Texture2D    uInput   : register(t8);
+SamplerState uSampler : register(s1);
+
+struct PSInput
+{
+    float4 pos : SV_POSITION;
+    float2 uv  : TEXCOORD0;
+};
+
+static const float kEdgeThreshold    = 0.125f;
+static const float kEdgeThresholdMin = 0.0312f;
+static const float kSubpixQuality    = 0.75f;
+static const uint  kSearchSteps      = 12u;
+static const float kStepSize[12] = { 1.0f, 1.0f, 1.0f, 1.0f, 1.0f, 1.5f, 2.0f, 2.0f, 2.0f, 2.0f, 4.0f, 8.0f };
+
+float Luma(float3 c)
+{
+    return sqrt(max(dot(c, float3(0.299f, 0.587f, 0.114f)), 0.0f));
+}
+
+float LumaAt(float2 uv)
+{
+    return Luma(uInput.SampleLevel(uSampler, uv, 0.0f).rgb);
+}
+
+float4 main(PSInput IN) : SV_TARGET
+{
+    float w, h;
+    uInput.GetDimensions(w, h);
+    const float2 texel = 1.0f / float2(w, h);
+    // Pixel position instead of the interpolated uv: same on every backend.
+    const float2 uv = IN.pos.xy * texel;
+
+    const float4 center = uInput.SampleLevel(uSampler, uv, 0.0f);
+    const float lumaM = Luma(center.rgb);
+    const float lumaN = LumaAt(uv + float2(0.0f, -texel.y));
+    const float lumaS = LumaAt(uv + float2(0.0f,  texel.y));
+    const float lumaW = LumaAt(uv + float2(-texel.x, 0.0f));
+    const float lumaE = LumaAt(uv + float2( texel.x, 0.0f));
+
+    const float lumaMin = min(lumaM, min(min(lumaN, lumaS), min(lumaW, lumaE)));
+    const float lumaMax = max(lumaM, max(max(lumaN, lumaS), max(lumaW, lumaE)));
+    const float range = lumaMax - lumaMin;
+    if (range < max(kEdgeThresholdMin, lumaMax * kEdgeThreshold))
+        return center;
+
+    const float lumaNW = LumaAt(uv + float2(-texel.x, -texel.y));
+    const float lumaNE = LumaAt(uv + float2( texel.x, -texel.y));
+    const float lumaSW = LumaAt(uv + float2(-texel.x,  texel.y));
+    const float lumaSE = LumaAt(uv + float2( texel.x,  texel.y));
+
+    const float lumaNS = lumaN + lumaS;
+    const float lumaWE = lumaW + lumaE;
+    const float edgeH = abs(-2.0f * lumaW + lumaNW + lumaSW)
+                      + abs(-2.0f * lumaM + lumaNS) * 2.0f
+                      + abs(-2.0f * lumaE + lumaNE + lumaSE);
+    const float edgeV = abs(-2.0f * lumaN + lumaNW + lumaNE)
+                      + abs(-2.0f * lumaM + lumaWE) * 2.0f
+                      + abs(-2.0f * lumaS + lumaSW + lumaSE);
+    const bool horizontal = edgeH >= edgeV;
+
+    // Neighbours across the edge; step towards the one with the larger gradient.
+    const float luma1 = horizontal ? lumaN : lumaW;
+    const float luma2 = horizontal ? lumaS : lumaE;
+    const float grad1 = luma1 - lumaM;
+    const float grad2 = luma2 - lumaM;
+    const bool  side1 = abs(grad1) >= abs(grad2);
+    const float gradScaled = 0.25f * max(abs(grad1), abs(grad2));
+
+    float stepLength = horizontal ? texel.y : texel.x;
+    float lumaLocalAvg;
+    if (side1)
+    {
+        stepLength = -stepLength;
+        lumaLocalAvg = 0.5f * (luma1 + lumaM);
+    }
+    else
+    {
+        lumaLocalAvg = 0.5f * (luma2 + lumaM);
+    }
+
+    // Walk along the edge, half a pixel towards the chosen side.
+    float2 edgeUv = uv;
+    if (horizontal) edgeUv.y += stepLength * 0.5f;
+    else            edgeUv.x += stepLength * 0.5f;
+    const float2 along = horizontal ? float2(texel.x, 0.0f) : float2(0.0f, texel.y);
+
+    float2 uv1 = edgeUv - along * kStepSize[0];
+    float2 uv2 = edgeUv + along * kStepSize[0];
+    float end1 = LumaAt(uv1) - lumaLocalAvg;
+    float end2 = LumaAt(uv2) - lumaLocalAvg;
+    bool reached1 = abs(end1) >= gradScaled;
+    bool reached2 = abs(end2) >= gradScaled;
+    [loop]
+    for (uint i = 1u; i < kSearchSteps && !(reached1 && reached2); ++i)
+    {
+        if (!reached1)
+        {
+            uv1 -= along * kStepSize[i];
+            end1 = LumaAt(uv1) - lumaLocalAvg;
+            reached1 = abs(end1) >= gradScaled;
+        }
+        if (!reached2)
+        {
+            uv2 += along * kStepSize[i];
+            end2 = LumaAt(uv2) - lumaLocalAvg;
+            reached2 = abs(end2) >= gradScaled;
+        }
+    }
+
+    const float dist1 = horizontal ? (uv.x - uv1.x) : (uv.y - uv1.y);
+    const float dist2 = horizontal ? (uv2.x - uv.x) : (uv2.y - uv.y);
+    const bool  nearer1 = dist1 < dist2;
+    const float edgeLength = max(dist1 + dist2, 1e-6f);
+    const float pixelOffset = -min(dist1, dist2) / edgeLength + 0.5f;
+    // Only blend when the luma at the nearer end varies the right way.
+    const bool centerSmaller = lumaM < lumaLocalAvg;
+    const bool correctVariation = ((nearer1 ? end1 : end2) < 0.0f) != centerSmaller;
+    float finalOffset = correctVariation ? pixelOffset : 0.0f;
+
+    // Sub-pixel aliasing (thin lines, single bright pixels).
+    const float lumaAvg = (2.0f * (lumaNS + lumaWE) + lumaNW + lumaNE + lumaSW + lumaSE) / 12.0f;
+    const float sub1 = saturate(abs(lumaAvg - lumaM) / range);
+    const float sub2 = (-2.0f * sub1 + 3.0f) * sub1 * sub1;
+    finalOffset = max(finalOffset, sub2 * sub2 * kSubpixQuality);
+
+    float2 finalUv = uv;
+    if (horizontal) finalUv.y += finalOffset * stepLength;
+    else            finalUv.x += finalOffset * stepLength;
+    return float4(uInput.SampleLevel(uSampler, finalUv, 0.0f).rgb, center.a);
+})";
+
         constexpr const char* kSkyFullscreenVsGlsl = R"(#version 410 core
 
 out vec2 vTexCoord;
@@ -426,6 +563,16 @@ void main()
             bool attempted = false;
         };
 
+        // FXAA pipeline; rebuilt when the output format changes.
+        struct PostAAGpuResources
+        {
+            ShaderHandle vertexShader = ShaderHandle::Invalid();
+            ShaderHandle fxaaShader = ShaderHandle::Invalid();
+            PipelineHandle fxaaPipeline = PipelineHandle::Invalid();
+            Format fxaaFormat = Format::Unknown;
+            bool shadersAttempted = false;
+        };
+
         // Writes the BRDF options into the add-on's frame parameter block
         // (kShadingFrameParameterBlock); the PBR shaders read featureParams[2].
         class ShadingFrameConstantsContributor final : public IFrameConstantsContributor
@@ -455,10 +602,16 @@ void main()
         {
             std::shared_ptr<MsaaSettings> settings;
             bool supported = true;
+            // Post-process AA; off on backends without it (OpenGL).
+            std::shared_ptr<PostAASettings> postAA;
 
             [[nodiscard]] uint32_t EffectiveSamples() const noexcept
             {
                 return (supported && settings) ? NormalizeMsaaSamples(settings->sampleCount) : 1u;
+            }
+            [[nodiscard]] PostAAMode EffectivePostAA() const noexcept
+            {
+                return (supported && postAA) ? postAA->mode : PostAAMode::Off;
             }
         };
 
@@ -787,12 +940,16 @@ void main()
                 , m_tonemapResources(std::move(tonemapResources))
                 , m_msaa(std::move(msaa))
                 , m_resolveResources(std::make_shared<MsaaResolveGpuResources>())
+                , m_postAAResources(std::make_shared<PostAAGpuResources>())
             {
             }
 
             [[nodiscard]] uint64_t GetStructureRevision() const noexcept override
             {
-                return m_msaa ? m_msaa->EffectiveSamples() : 1u;
+                if (!m_msaa)
+                    return 1u;
+                return static_cast<uint64_t>(m_msaa->EffectiveSamples())
+                    | (static_cast<uint64_t>(m_msaa->EffectivePostAA()) << 8u);
             }
 
             std::string_view GetName() const noexcept override
@@ -852,6 +1009,23 @@ void main()
                     msaaSamples = 1u;   // no resolve pipeline: draw without MSAA
                 params.msaaSamples = msaaSamples;
                 const IDevice* buildDevice = context.shaderRuntime.GetDevice();
+                // Post-AA needs the built-in tonemap pass (bakes bring their own).
+                const bool postAAWanted = m_msaa && m_msaa->EffectivePostAA() == PostAAMode::Fxaa
+                    && !context.externalCallbacks.Has(StandardFrameExecutors::Tonemap)
+                    && context.defaultTonemapMaterial.IsValid() && context.tonemapMaterialSystem
+                    && buildDevice;
+                if (postAAWanted)
+                {
+                    // Same format the tonemap material pipeline is built for
+                    // (the swapchain format); the FXAA output uses it as well.
+                    const MaterialRuntimeDesc* tonemapRuntime = MaterialRuntimeBridge::GetRuntimeDesc(
+                        *context.tonemapMaterialSystem, context.defaultTonemapMaterial);
+                    if (tonemapRuntime && tonemapRuntime->colorFormat != Format::Unknown)
+                    {
+                        params.postAAFormat = tonemapRuntime->colorFormat;
+                        params.postAAEnabled = EnsurePostAAResources(context, params.postAAFormat);
+                    }
+                }
                 const bool mrtSupported = buildDevice && buildDevice->SupportsFeature("mrt");
 
                 FramePipelineCallbacks callbacks = context.externalCallbacks;
@@ -1584,6 +1758,26 @@ void main()
                 }
 
 
+                if (params.postAAEnabled && !callbacks.Has(StandardFrameExecutors::PostAA))
+                {
+                    auto state = pipelineState;
+                    auto postAAResources = m_postAAResources;
+                    callbacks.Register(StandardFrameExecutors::PostAA,
+                        [state, postAAResources](const rendergraph::RGExecContext& execCtx)
+                        {
+                            if (!execCtx.cmd || !state->ready || !postAAResources ||
+                                !postAAResources->fxaaPipeline.IsValid())
+                                return;
+                            const TextureHandle sourceTex = execCtx.GetTexture(state->resources.tonemapped);
+                            if (!sourceTex.IsValid())
+                                return;
+                            execCtx.cmd->SetPipeline(postAAResources->fxaaPipeline);
+                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Fragment);
+                            execCtx.cmd->SetSampler(SamplerSlots::LinearClamp, SamplerSlots::LinearClamp, ShaderStageMask::Fragment);
+                            execCtx.cmd->Draw(3u, 1u, 0u, 0u);
+                        });
+                }
+
                 // Contributors tragen Ressourcen, Passes und Executoren ein.
                 // drawObjects kapselt die generische per-Objekt-Zeichenlogik dieser Pipeline.
                 FrameRecipe preContributorRecipe{};
@@ -1688,6 +1882,60 @@ void main()
             }
 
         private:
+            // FXAA pipeline for the given output format. Shaders are compiled once;
+            // the pipeline is rebuilt when the format changes.
+            bool EnsurePostAAResources(const RenderPipelineBuildContext& context, Format format) const
+            {
+                if (!m_postAAResources)
+                    return false;
+                IDevice* device = context.shaderRuntime.GetDevice();
+                if (!device)
+                    return false;
+                PostAAGpuResources& res = *m_postAAResources;
+                if (!res.shadersAttempted)
+                {
+                    res.shadersAttempted = true;
+                    const assets::ShaderTargetProfile target = ShaderCompiler::ResolveTargetProfile(*device);
+                    if (target == assets::ShaderTargetProfile::OpenGL_GLSL450)
+                        return false;
+                    res.vertexShader = CreateSkyShader(*device, target, assets::ShaderStage::Vertex,
+                        assets::ShaderSourceLanguage::HLSL, kSkyFullscreenVsHlsl, "ForwardPostAAVS");
+                    res.fxaaShader = CreateSkyShader(*device, target, assets::ShaderStage::Fragment,
+                        assets::ShaderSourceLanguage::HLSL, kFxaaPsHlsl, "ForwardFxaaPS");
+                    if (!res.vertexShader.IsValid() || !res.fxaaShader.IsValid())
+                        Debug::LogError("ForwardFeature.cpp: FXAA shaders failed, post-AA stays off");
+                }
+                if (!res.vertexShader.IsValid() || !res.fxaaShader.IsValid())
+                    return false;
+                if (res.fxaaPipeline.IsValid() && res.fxaaFormat == format)
+                    return true;
+                if (res.fxaaPipeline.IsValid())
+                {
+                    device->DestroyPipeline(res.fxaaPipeline);
+                    res.fxaaPipeline = PipelineHandle::Invalid();
+                }
+
+                PipelineDesc desc{};
+                desc.shaderStages.push_back({ res.vertexShader, ShaderStageMask::Vertex });
+                desc.shaderStages.push_back({ res.fxaaShader, ShaderStageMask::Fragment });
+                desc.topology = PrimitiveTopology::TriangleList;
+                desc.colorFormat = format;
+                desc.depthFormat = Format::Unknown;
+                desc.sampleCount = 1u;
+                desc.rasterizer.cullMode = CullMode::None;
+                desc.depthStencil.depthEnable = false;
+                desc.depthStencil.depthWrite = false;
+                desc.debugName = "ForwardFxaa_Pipeline";
+                res.fxaaPipeline = device->CreatePipeline(desc);
+                res.fxaaFormat = format;
+                if (!res.fxaaPipeline.IsValid())
+                {
+                    Debug::LogError("ForwardFeature.cpp: FXAA pipeline failed, post-AA stays off");
+                    return false;
+                }
+                return true;
+            }
+
             // Resolve pipeline: colour RGBA16F + D24S8 (written via SV_Depth). Built once.
             bool EnsureMsaaResolveResources(const RenderPipelineBuildContext& context) const
             {
@@ -1770,6 +2018,7 @@ void main()
             std::shared_ptr<TonemapGpuResources> m_tonemapResources;
             std::shared_ptr<MsaaRuntime> m_msaa;
             std::shared_ptr<MsaaResolveGpuResources> m_resolveResources;
+            std::shared_ptr<PostAAGpuResources> m_postAAResources;
             mutable IDevice* m_device = nullptr;
             mutable uint32_t m_metricsLogFrameCounter = 0u;
         };
@@ -1783,7 +2032,7 @@ void main()
                 , m_forwardPlusResources(std::make_shared<ForwardPlusGpuResources>())
                 , m_tonemapResources(std::make_shared<TonemapGpuResources>())
                 , m_pipelineConfig(WithTonemapSettings(std::move(config)))
-                , m_msaa(std::make_shared<MsaaRuntime>(MsaaRuntime{ m_pipelineConfig.msaaSettings, true }))
+                , m_msaa(std::make_shared<MsaaRuntime>(MsaaRuntime{ m_pipelineConfig.msaaSettings, true, m_pipelineConfig.postAASettings }))
                 , m_shadingContributor(std::make_shared<ShadingFrameConstantsContributor>(m_pipelineConfig.shadingSettings))
                 , m_effectiveMode(std::make_shared<ForwardRendererMode>(m_pipelineConfig.mode))
                 , m_effectiveCullingMode(std::make_shared<ForwardPlusCullingMode>(m_pipelineConfig.cullingMode))
@@ -1805,6 +2054,8 @@ void main()
                     config.tonemapSettings = std::make_shared<TonemapSettings>();
                 if (!config.msaaSettings)
                     config.msaaSettings = std::make_shared<MsaaSettings>();
+                if (!config.postAASettings)
+                    config.postAASettings = std::make_shared<PostAASettings>();
                 if (!config.shadingSettings)
                     config.shadingSettings = std::make_shared<ShadingSettings>();
                 return config;

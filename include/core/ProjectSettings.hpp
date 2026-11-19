@@ -49,6 +49,8 @@ struct ProjectRenderSettings
     float    contactShadowThickness = 0.05f;  // world-space metres
     float    contactShadowIntensity = 1.0f;   // 0 = none
     uint32_t contactShadowSteps = 12u;
+    // Post-process AA after tonemapping: off, fxaa (forward add-on, not under OpenGL).
+    std::string postAA = "off";
 };
 
 struct ProjectSettings
@@ -85,6 +87,8 @@ inline void ReadRenderSettingKeys(const serialization::JsonValue& object, Projec
         out.tonemapOperator = op->AsString();
     if (const auto* msaa = object.Get("msaaSamples"); msaa && msaa->IsNumber())
         out.msaaSamples = msaa->numVal >= 4.0 ? 4u : (msaa->numVal >= 2.0 ? 2u : 1u);
+    if (const auto* postAA = object.Get("postAA"); postAA && postAA->IsString())
+        out.postAA = postAA->AsString();
     flag("brdfHeightCorrelated", out.brdfHeightCorrelated);
     flag("brdfPerLightFresnel", out.brdfPerLightFresnel);
     flag("brdfMultiScatter", out.brdfMultiScatter);
@@ -219,6 +223,7 @@ inline void WriteProjectSettings(serialization::JsonWriter& out, const ProjectSe
     out.BeginObject("rendering");
     out.WriteString("tonemapOperator", settings.rendering.tonemapOperator);
     out.WriteUint("msaaSamples", settings.rendering.msaaSamples);
+    out.WriteString("postAA", settings.rendering.postAA);
     out.WriteBool("brdfHeightCorrelated", settings.rendering.brdfHeightCorrelated);
     out.WriteBool("brdfPerLightFresnel", settings.rendering.brdfPerLightFresnel);
     out.WriteBool("brdfMultiScatter", settings.rendering.brdfMultiScatter);

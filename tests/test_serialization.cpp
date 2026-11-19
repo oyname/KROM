@@ -425,6 +425,7 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     settings.actions.push_back({"Jump", platform::Key::Space, platform::GamepadButton::South});
     settings.rendering.tonemapOperator = "pbrNeutral";
     settings.rendering.msaaSamples = 4u;
+    settings.rendering.postAA = "fxaa";
     settings.rendering.brdfPerLightFresnel = false;
     settings.rendering.specularOcclusion = false;
     settings.rendering.gtaoEnabled = false;
@@ -445,6 +446,7 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK(ctx, error.empty());
     CHECK(ctx, oldProject.renderingStored);
     CHECK_EQ(ctx, oldProject.rendering.msaaSamples, 2u);
+    CHECK_EQ(ctx, oldProject.rendering.postAA, std::string("off"));   // missing key: post-AA off
     CHECK(ctx, oldProject.rendering.gtaoEnabled);   // missing key: GTAO stays on
     CHECK_EQ(ctx, oldProject.rendering.gtaoRadius, 0.5f);   // missing key: default radius
     CHECK(ctx, oldProject.rendering.contactShadowsEnabled);   // missing keys: contact shadow defaults
@@ -466,6 +468,7 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK(ctx, result.renderingStored);
     CHECK_EQ(ctx, result.rendering.tonemapOperator, settings.rendering.tonemapOperator);
     CHECK_EQ(ctx, result.rendering.msaaSamples, 4u);
+    CHECK_EQ(ctx, result.rendering.postAA, std::string("fxaa"));
     CHECK(ctx, result.rendering.brdfHeightCorrelated);
     CHECK(ctx, !result.rendering.brdfPerLightFresnel);
     CHECK(ctx, result.rendering.brdfMultiScatter);

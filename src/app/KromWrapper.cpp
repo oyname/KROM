@@ -218,6 +218,9 @@ struct State
         std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
     std::shared_ptr<engine::renderer::addons::forward::MsaaSettings> msaaSettings =
         std::make_shared<engine::renderer::addons::forward::MsaaSettings>();
+    // Post-process AA after tonemapping (project settings, KROM_POST_AA).
+    std::shared_ptr<engine::renderer::addons::forward::PostAASettings> postAASettings =
+        std::make_shared<engine::renderer::addons::forward::PostAASettings>();
     // GTAO add-on resources (settings); null without GTAO (OpenGL, enableGtao off).
     std::shared_ptr<engine::renderer::addons::gtao::GtaoGpuResources> gtaoResources;
     std::shared_ptr<engine::renderer::addons::ssr::SsrGpuResources> ssrResources;
@@ -2256,6 +2259,12 @@ static void ApplyProjectRenderSettings(State& state, const engine::ProjectRender
     if (state.msaaSettings)
         state.msaaSettings->sampleCount =
             engine::renderer::addons::forward::NormalizeMsaaSamples(rendering.msaaSamples);
+    if (state.postAASettings)
+    {
+        state.postAASettings->mode = engine::renderer::addons::forward::PostAAMode::Off;
+        if (!engine::renderer::addons::forward::ParsePostAAMode(rendering.postAA.c_str(), state.postAASettings->mode))
+            engine::Debug::LogWarning("KromWrapper.cpp: unknown post-AA mode '%s'", rendering.postAA.c_str());
+    }
     if (state.shadingSettings)
         *state.shadingSettings = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
                                    rendering.brdfMultiScatter, rendering.specularAntiAliasing };
@@ -2710,6 +2719,7 @@ bool RegisterEngineFeatures(State& state)
     forwardConfig.bloomBlurRadius = 1.0f;
     forwardConfig.tonemapSettings = state.tonemapSettings;
     forwardConfig.msaaSettings = state.msaaSettings;
+    forwardConfig.postAASettings = state.postAASettings;
     forwardConfig.shadingSettings = state.shadingSettings;
     forwardConfig.mode = state.forwardPlusActive
         ? renderer::addons::forward::ForwardRendererMode::ForwardPlus
@@ -2833,6 +2843,8 @@ bool InitializeRenderLoop(State& state)
     if (const char* msaa = std::getenv("KROM_MSAA"); msaa && state.msaaSettings)
         state.msaaSettings->sampleCount = engine::renderer::addons::forward::NormalizeMsaaSamples(
             static_cast<uint32_t>(std::strtoul(msaa, nullptr, 10)));
+    if (const char* postAA = std::getenv("KROM_POST_AA"); postAA && state.postAASettings)
+        (void)engine::renderer::addons::forward::ParsePostAAMode(postAA, state.postAASettings->mode);
 
     engine::renderer::IDevice::DeviceDesc deviceDesc{};
     deviceDesc.enableDebugLayer = state.config.enableDebugLayer;
