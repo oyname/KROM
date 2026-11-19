@@ -359,5 +359,6 @@ GTX 1660, Viewport 1181×709, MSAA wie Projekt, ohne Validierung), ms:
 - Abweichung vom Plan: kein eigener Pass im GPU-Profiler (die Zeit steckt im TonemapPass, siehe oben).
   Die erzeugte GLSL-Variante (`shaders/generated/`, Experiment) ist nicht neu erzeugt; der neue Teil
   von `passthrough.ps.hlsl` ist mit `KROM_OPENGL` ausgeklammert.
-- Offen: Sichtprüfung im Editor durch den Nutzer (Bedienung der Karte, Einfrieren, Anpassung beim
-  Bewegen zwischen hellen und dunklen Bereichen), Release-Messung, Mittengewichtung (bewusst weggelassen).
+- Sichtprüfung im Editor durch den Nutzer nach dem lokalen Merge in `main` (55d4172): „wirkt sehr gut“
+  (2026-11-19).
+- Offen: Release-Messung, Review durch Codex; Mittengewichtung bewusst weggelassen.

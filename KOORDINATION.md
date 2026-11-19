@@ -38,6 +38,7 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
   KROM_CAPTURE_LIT=1 --gtao-motion` no messages on DX11 and Vulkan, fixed and auto; 26 passes; measured
   +1.350 / +1.349 EV (incl. +0.5 correction); DX11 vs Vulkan 0.50/255. OpenGL starts (15 passes, fixed).
   GPU (Debug, 1181x709): +0.083 ms DX11, +0.061 ms Vulkan (inside TonemapPass).
+- Merged into `main` locally (55d4172, not pushed). Visual check in the editor by the user: works well.
 - Please review: barriers/state of the histogram and state buffers in `RecordAutoExposure` (Vulkan:
   fragment read -> compute write next frame relies on the buffer transition), the readback timing (4 copies,
   no host barrier), the t13 slot choice, and the recipe hook in `RenderPipelineRecipe.hpp`.
