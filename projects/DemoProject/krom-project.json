@@ -5,7 +5,7 @@
   "backend": "vulkan",
   "assetRoot": "Assets",
   "shaderCache": "shader-bin",
-  "editorScene": "Assets/Scenes/Room 2.json",
+  "editorScene": "Assets/Scenes/Room 0.json",
   "sceneOrder": [
     "Room 2",
     "car",
@@ -66,15 +66,26 @@
     "rendering": {
       "tonemapOperator": "agx",
       "msaaSamples": 2,
+      "postAA": "smaa",
       "brdfHeightCorrelated": true,
       "brdfPerLightFresnel": true,
       "brdfMultiScatter": true,
+      "specularAntiAliasing": true,
       "specularOcclusion": true,
       "ssrEnabled": true,
-      "ssrIntensity": 0.36,
+      "ssrIntensity": 0.82,
       "ssrMaxRoughness": 0.5,
       "ssrMaxDistance": 10,
-      "ssrThickness": 0.15
+      "ssrThickness": 0.15,
+      "gtaoEnabled": true,
+      "gtaoRadius": 0.12,
+      "gtaoIntensity": 0.6,
+      "gtaoBias": 0.06,
+      "contactShadowsEnabled": true,
+      "contactShadowLength": 0.15,
+      "contactShadowThickness": 0.061,
+      "contactShadowIntensity": 1,
+      "contactShadowSteps": 12
     }
   },
   "version": 1

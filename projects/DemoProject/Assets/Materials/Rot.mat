@@ -21,7 +21,7 @@ metallicRoughnessTexture
 normalTexture 
 occlusionTexture 
 emissiveTexture 
-graphOutputs 0 0 0 0 0 0 0 0 0 1 0 0
+graphOutputs 3 0 6 0 0 0 0 0 0 1 0 0
 graphNode 1 2 0 0 0.201492548 0.0601470284 0.0601470284 -360 -120 "" 0 1 1 0 0 0 0 0 0 0
 graphNode 2 0 0 0 1 1 1 -560 100 "Textures/dust.png" 0 1 1 0 0 0 0 0 0 0
 graphNode 3 5 1 5 1 1 1 -20 -140 "" 4 1 1 0 0 0 0 0 0 0

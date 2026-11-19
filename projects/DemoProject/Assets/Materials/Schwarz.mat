@@ -14,7 +14,7 @@ occlusionStrength 1
 emissiveStrength 1
 uvScale 1 1
 uvOffset 0 0
-uvProjection mesh
+uvProjection box
 boxTileSize 1
 baseColorTexture 
 metallicRoughnessTexture 

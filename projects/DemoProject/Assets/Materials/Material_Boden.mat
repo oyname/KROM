@@ -9,7 +9,7 @@ baseColorFactor 1 1 1 1
 emissiveFactor 0 0 0
 metallicFactor 0.298000008
 roughnessFactor 0.465000004
-normalScale 2.13700008
+normalScale 1.23000002
 occlusionStrength 0
 emissiveStrength 1
 uvScale 5 5
@@ -21,6 +21,8 @@ metallicRoughnessTexture
 normalTexture 
 occlusionTexture 
 emissiveTexture 
-graphOutputs 1 0 2 0 0 0 0 0 0 1 0 0
-graphNode 1 0 0 0 1 1 1 40 -80 "Textures/cobblestone_floor_09_diff_2k.png" 0 1 1 0 0 0 0 0 0 0
-graphNode 2 0 0 0 1 1 1 40 160 "Textures/cobblestone_floor_09_nor_dx_2k.png" 0 1 1 0 0 0 0 0 0 0
+graphOutputs 1 0 4 0 0 0 0 0 0 1 0 0
+graphNode 1 0 0 0 1 1 1 -240 -80 "Textures/cobblestone_floor_09_diff_2k.png" 0 1 1 0 0 0 0 0 0 0
+graphNode 2 0 0 0 1 1 1 -340 160 "Textures/cobblestone_floor_09_nor_dx_2k.png" 0 1 1 0 0 0 0 0 0 0
+graphNode 3 0 0 0 1 1 1 -360 400 "Textures/hoerner_normal.png" 0 1 1 0 0 0 0 0 0 0
+graphNode 4 18 2 3 1 0.300000012 1 80 280 "" 0 1 1 0 0 0 0 0 0 0

@@ -7,8 +7,8 @@ alphaMode opaque
 alphaCutoff 0.5
 baseColorFactor 0.875862062 0.875862062 0.875862062 1
 emissiveFactor 0 0 0
-metallicFactor 0.699999988
-roughnessFactor 0.200000003
+metallicFactor 0.0399999991
+roughnessFactor 0.5
 normalScale 4
 occlusionStrength 0
 emissiveStrength 1

@@ -22,6 +22,6 @@ normalTexture
 occlusionTexture 
 emissiveTexture 
 graphOutputs 1 0 0 0 6 5 0 0 0 1 0 0
-graphNode 5 1 0 0 1 1 1 40 280 "" 0 1 1 0 0 0 0 0 0 0
-graphNode 6 1 0 0 0 1 1 80 160 "" 0 1 1 0 0 0 0 0 0 0
-graphNode 1 0 0 0 1 1 1 140 -100 "Textures/color2.png" 0 1 1 0 0 0 0 0 0 0
+graphNode 5 1 0 0 1 1 1 -140 280 "" 0 1 1 0 0 0 0 0 0 0
+graphNode 6 1 0 0 0 1 1 -220 140 "" 0 1 1 0 0 0 0 0 0 0
+graphNode 1 0 0 0 1 1 1 -280 -80 "Textures/dx.bmp" 0 1 1 0 0 0 0 0 0 0

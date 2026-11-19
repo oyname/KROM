@@ -7,10 +7,10 @@ alphaMode mask
 alphaCutoff 0
 baseColorFactor 1 1 1 1
 emissiveFactor 0 0 0
-metallicFactor 0.189999998
-roughnessFactor 0.694999993
-normalScale 0.643000007
-occlusionStrength 0.97299999
+metallicFactor 1
+roughnessFactor 0.5
+normalScale 0
+occlusionStrength 0
 emissiveStrength 1
 uvScale 1 1
 uvOffset 0 0
@@ -21,8 +21,5 @@ metallicRoughnessTexture
 normalTexture 
 occlusionTexture 
 emissiveTexture 
-graphOutputs 5 0 1 0 0 0 0 0 0
-graphNode 1 0 0 0 1 1 1 120 320 "Textures/normal.png" 0 1 1 0 0 0 0
-graphNode 3 2 0 0 0.50373137 0.338495344 0.146608382 -160 0 "" 0 1 1 0 0 0 0
-graphNode 4 5 0 3 -5.30000019 1 1 140 0 "" 0 1 1 0 0 0 0
-graphNode 5 6 4 0 1 1 1 440 -0 "" 0 1 1 0 0 0 0
+graphOutputs 3 0 0 0 0 0 0 0 0 1 0 0
+graphNode 3 2 0 0 0.897366464 0.848665476 0.792109489 -20 140 "" 0 1 1 0 0 0 0 0 0 0

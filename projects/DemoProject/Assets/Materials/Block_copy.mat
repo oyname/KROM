@@ -5,7 +5,7 @@ instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
-baseColorFactor 1 1 1 1
+baseColorFactor 0 0 0 1
 emissiveFactor 0 0 0
 metallicFactor 0.510999978
 roughnessFactor 0.771000028
@@ -14,10 +14,13 @@ occlusionStrength 1
 emissiveStrength 1
 uvScale 2.5 2.5
 uvOffset 0 0
-uvProjection mesh
+uvProjection box
 boxTileSize 1.51999998
-baseColorTexture Textures/cobblestone_floor_09_diff_2k.png
+baseColorTexture 
 metallicRoughnessTexture 
-normalTexture Textures/cobblestone_floor_09_nor_dx_2k.png
+normalTexture 
 occlusionTexture 
 emissiveTexture 
+graphOutputs 1 0 2 0 0 0 0 0 0 1 0 0
+graphNode 1 0 0 0 1 1 1 -100 -60 "Textures/cobblestone_floor_09_diff_2k.png" 0 1 1 0 0 0 0 0 0 0
+graphNode 2 0 0 0 1 1 1 -240 260 "Textures/cobblestone_floor_09_nor_dx_2k.png" 0 1 1 0 0 0 0 0 0 0

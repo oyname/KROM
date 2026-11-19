@@ -1,7 +1,7 @@
 
 {
   "scene": "car",
-  "entityCount": 19,
+  "entityCount": 25,
   "version": 2,
   "persistent": false,
   "environment": {
@@ -31,11 +31,11 @@
       "components": [
         {
           "type": "NameComponent",
-          "name": "Camera"
+          "name": "Decke"
         },
         {
           "type": "GuidComponent",
-          "guid": "2ff9be30-a736-1498-7fe8-a4635dd73749"
+          "guid": "prefab-51008682747000-2"
         },
         {
           "type": "ActiveComponent",
@@ -43,29 +43,40 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [22.6337, 14.1906, 13.0668],
-          "localRotation": [-0.0727059, 0.731504, 0.0789873, 0.673332],
-          "localScale": [1.00007, 0.999988, 1.00477],
+          "localPosition": [0, 2.52, 1.44],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
           "inheritParentScale": true
         },
         {
-          "type": "CameraComponent",
-          "projection": 0,
-          "fovYDeg": 60,
-          "nearPlane": 0.05,
-          "farPlane": 1000,
-          "orthoSize": 10,
-          "aspectRatio": 1.77778,
-          "renderLayer": 0,
-          "cullingMask": 4294967037,
-          "isMain": true,
-          "backgroundMode": 1,
-          "clearColor": [
-            0,
-            0,
-            0,
-            1
+          "type": "ParentComponent",
+          "parentId": 2305
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [5, 0.5, 5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/plate.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/NewMaterial.mat"
+            }
           ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
         }
       ]
     },
@@ -76,11 +87,11 @@
       "components": [
         {
           "type": "NameComponent",
-          "name": "car"
+          "name": "Spot Light"
         },
         {
           "type": "GuidComponent",
-          "guid": "prefab-8837162749800-6"
+          "guid": "0c349262-91cc-af34-082a-65289dd1a69f"
         },
         {
           "type": "ActiveComponent",
@@ -88,14 +99,31 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [-11.7849, 3.45905, 12.8113],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
+          "localPosition": [-27.28, 18.65, 21],
+          "localRotation": [-0.450879, 0.110536, 0.637751, 0.614625],
+          "localScale": [1.00004, 1.00005, 1],
           "inheritParentScale": true
         },
         {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-0"
+          "type": "LightComponent",
+          "lightType": 2,
+          "color": [1, 0.98, 0.92],
+          "intensity": 2500,
+          "range": 152.31,
+          "spotInnerDeg": 9.75,
+          "spotOuterDeg": 16.25,
+          "castShadows": true,
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 2048,
+          "shadowBias": 0.0001,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 250,
+          "shadowStrength": 1,
+          "shadowCascadeCount": 1,
+          "shadowCascadeLambda": 0.75,
+          "shadowLightSize": 0.1
         }
       ]
     },
@@ -106,11 +134,11 @@
       "components": [
         {
           "type": "NameComponent",
-          "name": "Wand Hinten"
+          "name": "Point Light"
         },
         {
           "type": "GuidComponent",
-          "guid": "prefab-51008682747000-9"
+          "guid": "50534f5c-574d-e99c-4375-48cb1e20483d"
         },
         {
           "type": "ActiveComponent",
@@ -118,158 +146,37 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [-4.52, -1.41027, 1.23583],
-          "localRotation": [0.499921, -0.499919, 0.5001, 0.500059],
-          "localScale": [1.00005, 0.999805, 0.749984],
+          "localPosition": [6.39, 6.7, 5.38],
+          "localRotation": [-0.14515, 0.618081, 0.117486, 0.763613],
+          "localScale": [1, 1, 1],
           "inheritParentScale": true
         },
         {
-          "type": "ParentComponent",
-          "parentId": 3585
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [5, 0.5, 5]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/plate.glb#mesh/0",
-          "visible": true,
+          "type": "LightComponent",
+          "lightType": 1,
+          "color": [1, 0.98, 0.92],
+          "intensity": 234.45,
+          "range": 29.51,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
           "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/NewMaterial.mat"
-            }
-          ]
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-1"
+          "layerMask": 4294967295,
+          "shadowEnabled": true,
+          "shadowFilter": 2,
+          "shadowResolution": 1024,
+          "shadowBias": 0.0015,
+          "shadowNormalBias": 0.001,
+          "shadowMaxDistance": 29.51,
+          "shadowStrength": 1,
+          "shadowCascadeCount": 1,
+          "shadowCascadeLambda": 0.75,
+          "shadowLightSize": 0.1
         }
       ]
     },
     {
       "entityId": 769,
       "entityIndex": 3,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Cube"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-181548400935600-11"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 1.5, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [2, 1, 2],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 2817
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [5, 0.5, 5]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/plate.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/NewMaterial.mat"
-            }
-          ]
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-1"
-        }
-      ]
-    },
-    {
-      "entityId": 1025,
-      "entityIndex": 4,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Tor-Seite"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-55204900587400-1"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [4.94699, 0.806355, 1.42213],
-          "localRotation": [0.609204, -0.358781, 0.609352, 0.358939],
-          "localScale": [1.0001, 0.999864, 0.250005],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 3585
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [5, 0.5, 5]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/plate.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/NewMaterial.mat"
-            }
-          ]
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-1"
-        }
-      ]
-    },
-    {
-      "entityId": 1281,
-      "entityIndex": 5,
       "entityGeneration": 1,
       "components": [
         {
@@ -293,7 +200,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2049
+          "parentId": 3585
         },
         {
           "type": "ReflectionProbeComponent",
@@ -312,17 +219,17 @@
       ]
     },
     {
-      "entityId": 1537,
-      "entityIndex": 6,
+      "entityId": 1025,
+      "entityIndex": 4,
       "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
-          "name": "Decke"
+          "name": "Sphere"
         },
         {
           "type": "GuidComponent",
-          "guid": "prefab-51008682747000-2"
+          "guid": "prefab-51008682747000-11"
         },
         {
           "type": "ActiveComponent",
@@ -330,23 +237,23 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0, 2.52, 1.44],
+          "localPosition": [3.8869, 1.14909, 4.20835],
           "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
+          "localScale": [2, 2, 2],
           "inheritParentScale": true
         },
         {
           "type": "ParentComponent",
-          "parentId": 3585
+          "parentId": 3841
         },
         {
           "type": "BoundsComponent",
           "centerLocal": [0, 0, 0],
-          "extentsLocal": [5, 0.5, 5]
+          "extentsLocal": [1, 1, 1]
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "Models/plate.glb#mesh/0",
+          "meshAssetPath": "Models/sphere.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -357,7 +264,86 @@
           "slots": [
             {
               "submeshIndex": 0,
-              "materialAssetPath": "Materials/NewMaterial.mat"
+              "materialAssetPath": "Materials/Schwarz.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        }
+      ]
+    },
+    {
+      "entityId": 1281,
+      "entityIndex": 5,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Garage"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "7e5887fe-0c6e-687c-865f-2660d35099fa"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "FolderComponent"
+        }
+      ]
+    },
+    {
+      "entityId": 1537,
+      "entityIndex": 6,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Circle.005"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-8837162749800-7"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-0.738576, -0.86476, 0.619458],
+          "localRotation": [0, 0.725374, 0, 0.688355],
+          "localScale": [1.6875, 1.6875, 1.6875],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 4353
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0.1827, 0.417559],
+          "extentsLocal": [3.00486, 1.72006, 5.96111]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/car.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "materialAssetPath": "Materials/Schwarz.mat",
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Rot.mat"
             }
           ]
         },
@@ -393,7 +379,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 3585
+          "parentId": 2305
         },
         {
           "type": "BoundsComponent",
@@ -426,114 +412,6 @@
     {
       "entityId": 2049,
       "entityIndex": 8,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Folder 2"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "fe614c09-1812-cab7-12c6-bb9d20ba0e01"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "FolderComponent"
-        }
-      ]
-    },
-    {
-      "entityId": 2305,
-      "entityIndex": 9,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Sphere"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-51008682747000-11"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [-1.80764, 1.14909, 0.0192601],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [2, 2, 2],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 2561
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [1, 1, 1]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/sphere.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Schwarz.mat"
-            }
-          ]
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-1"
-        }
-      ]
-    },
-    {
-      "entityId": 2561,
-      "entityIndex": 10,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "sphere"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-51008682747000-10"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [-4.11895, 3.03, 11.847],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [2.75, 2.75, 2.75],
-          "inheritParentScale": true
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-0"
-        }
-      ]
-    },
-    {
-      "entityId": 2817,
-      "entityIndex": 11,
       "entityGeneration": 1,
       "components": [
         {
@@ -586,111 +464,8 @@
       ]
     },
     {
-      "entityId": 3073,
-      "entityIndex": 12,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Wand links"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-51008682747000-3"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, -1.41008, 5.92],
-          "localRotation": [0.707107, 0, 0, 0.707107],
-          "localScale": [1, 0.999887, 0.749984],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 3585
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [5, 0.5, 5]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/plate.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/NewMaterial.mat"
-            }
-          ]
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-1"
-        }
-      ]
-    },
-    {
-      "entityId": 3329,
-      "entityIndex": 13,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Spot Light"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "0c349262-91cc-af34-082a-65289dd1a69f"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [-27.28, 18.65, 21],
-          "localRotation": [-0.450879, 0.110536, 0.637751, 0.614625],
-          "localScale": [1.00004, 1.00005, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "LightComponent",
-          "lightType": 2,
-          "color": [1, 0.98, 0.92],
-          "intensity": 2500,
-          "range": 152.31,
-          "spotInnerDeg": 9.75,
-          "spotOuterDeg": 16.25,
-          "castShadows": true,
-          "layerMask": 4294967295,
-          "shadowEnabled": true,
-          "shadowFilter": 2,
-          "shadowResolution": 2048,
-          "shadowBias": 0.0001,
-          "shadowNormalBias": 0.001,
-          "shadowMaxDistance": 250,
-          "shadowStrength": 1,
-          "shadowCascadeCount": 1,
-          "shadowCascadeLambda": 0.75,
-          "shadowLightSize": 0.1
-        }
-      ]
-    },
-    {
-      "entityId": 3585,
-      "entityIndex": 14,
+      "entityId": 2305,
+      "entityIndex": 9,
       "entityGeneration": 1,
       "components": [
         {
@@ -714,7 +489,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 4097
+          "parentId": 1281
         },
         {
           "type": "PrefabInstanceComponent",
@@ -734,8 +509,8 @@
               "recordId": "legacy-1",
               "entityGuid": "prefab-51008682747000-2",
               "overrides": [
-                "/name",
-                "/localPosition"
+                "/localPosition",
+                "/name"
               ]
             }
           ]
@@ -747,77 +522,8 @@
       ]
     },
     {
-      "entityId": 3841,
-      "entityIndex": 15,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Point Light"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "50534f5c-574d-e99c-4375-48cb1e20483d"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [6.39, 6.7, 5.38],
-          "localRotation": [-0.14515, 0.618081, 0.117486, 0.763613],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "LightComponent",
-          "lightType": 1,
-          "color": [1, 0.98, 0.92],
-          "intensity": 234.45,
-          "range": 29.51,
-          "spotInnerDeg": 18,
-          "spotOuterDeg": 35,
-          "castShadows": true,
-          "layerMask": 4294967295,
-          "shadowEnabled": true,
-          "shadowFilter": 2,
-          "shadowResolution": 1024,
-          "shadowBias": 0.0015,
-          "shadowNormalBias": 0.001,
-          "shadowMaxDistance": 29.51,
-          "shadowStrength": 1,
-          "shadowCascadeCount": 1,
-          "shadowCascadeLambda": 0.75,
-          "shadowLightSize": 0.1
-        }
-      ]
-    },
-    {
-      "entityId": 4097,
-      "entityIndex": 16,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Garage"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "7e5887fe-0c6e-687c-865f-2660d35099fa"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "FolderComponent"
-        }
-      ]
-    },
-    {
-      "entityId": 4353,
-      "entityIndex": 17,
+      "entityId": 2561,
+      "entityIndex": 10,
       "entityGeneration": 1,
       "components": [
         {
@@ -863,17 +569,17 @@
       ]
     },
     {
-      "entityId": 4609,
-      "entityIndex": 18,
+      "entityId": 2817,
+      "entityIndex": 11,
       "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
-          "name": "Circle.005"
+          "name": "Tor-Seite"
         },
         {
           "type": "GuidComponent",
-          "guid": "prefab-8837162749800-7"
+          "guid": "prefab-55204900587400-1"
         },
         {
           "type": "ActiveComponent",
@@ -881,23 +587,23 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [7.08618, -0.86476, -19.5577],
-          "localRotation": [0, 0.725374, 0, 0.688355],
-          "localScale": [1.6875, 1.6875, 1.6875],
+          "localPosition": [4.94699, 0.806355, 1.42213],
+          "localRotation": [0.609204, -0.358781, 0.609352, 0.358939],
+          "localScale": [1.0001, 0.999864, 0.250005],
           "inheritParentScale": true
         },
         {
           "type": "ParentComponent",
-          "parentId": 257
+          "parentId": 2305
         },
         {
           "type": "BoundsComponent",
-          "centerLocal": [0, 0.1827, 0.417559],
-          "extentsLocal": [3.00486, 1.72006, 5.96111]
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [5, 0.5, 5]
         },
         {
           "type": "MeshComponent",
-          "meshAssetPath": "Models/car.glb#mesh/0",
+          "meshAssetPath": "Models/plate.glb#mesh/0",
           "visible": true,
           "castShadows": true,
           "layerMask": 1
@@ -905,11 +611,632 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Materials/Schwarz.mat",
           "slots": [
             {
               "submeshIndex": 0,
-              "materialAssetPath": "Materials/Rot.mat"
+              "materialAssetPath": "Materials/NewMaterial.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        }
+      ]
+    },
+    {
+      "entityId": 3073,
+      "entityIndex": 12,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Wand links"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-51008682747000-3"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, -1.41008, 5.92],
+          "localRotation": [0.707107, 0, 0, 0.707107],
+          "localScale": [1, 0.999887, 0.749984],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 2305
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [5, 0.5, 5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/plate.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/NewMaterial.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        }
+      ]
+    },
+    {
+      "entityId": 3329,
+      "entityIndex": 13,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-181548400935600-11"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 1.5, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [2, 1, 2],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 2049
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [5, 0.5, 5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/plate.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/NewMaterial.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        }
+      ]
+    },
+    {
+      "entityId": 3585,
+      "entityIndex": 14,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Folder 2"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "fe614c09-1812-cab7-12c6-bb9d20ba0e01"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "FolderComponent"
+        }
+      ]
+    },
+    {
+      "entityId": 3841,
+      "entityIndex": 15,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "sphere"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-51008682747000-10"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-4.11895, 3.03, 11.847],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [2.75, 2.75, 2.75],
+          "inheritParentScale": true
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-0"
+        }
+      ]
+    },
+    {
+      "entityId": 4097,
+      "entityIndex": 16,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Wand Hinten"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-51008682747000-9"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-4.52, -1.41027, 1.23583],
+          "localRotation": [0.499921, -0.499919, 0.5001, 0.500059],
+          "localScale": [1.00005, 0.999805, 0.749984],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 2305
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [5, 0.5, 5]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/plate.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/NewMaterial.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        }
+      ]
+    },
+    {
+      "entityId": 4353,
+      "entityIndex": 17,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "car"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-8837162749800-6"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-11.7849, 3.45905, 12.8113],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-0"
+        }
+      ]
+    },
+    {
+      "entityId": 4609,
+      "entityIndex": 18,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Camera"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "2ff9be30-a736-1498-7fe8-a4635dd73749"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [22.6337, 14.1906, 13.0668],
+          "localRotation": [-0.0727059, 0.731504, 0.0789873, 0.673332],
+          "localScale": [1.00007, 0.999988, 1.00477],
+          "inheritParentScale": true
+        },
+        {
+          "type": "CameraComponent",
+          "projection": 0,
+          "fovYDeg": 60,
+          "nearPlane": 0.05,
+          "farPlane": 1000,
+          "orthoSize": 10,
+          "aspectRatio": 1.77778,
+          "renderLayer": 0,
+          "cullingMask": 4294967037,
+          "isMain": true,
+          "backgroundMode": 1,
+          "clearColor": [
+            0,
+            0,
+            0,
+            1
+          ]
+        }
+      ]
+    },
+    {
+      "entityId": 4865,
+      "entityIndex": 19,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "cubue2"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-1219236775500-1"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [14.4885, 1.69, 13.5173],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "PrefabInstanceComponent",
+          "prefabAssetPath": "Prefabs/cubue2.prefab",
+          "overrideTransform": true,
+          "baselinePrefabJson": "\n{\n  \"type\": \"KromPrefab\",\n  \"version\": 2,\n  \"name\": \"cubue2\",\n  \"rootIndex\": 0,\n  \"records\": [\n    {\n      \"id\": \"legacy-0\",\n      \"sourceGuid\": \"prefab-77565446168100-27\",\n      \"name\": \"cubue2\",\n      \"parentIndex\": -1,\n      \"localPosition\": [0, 0, 0],\n      \"localRotation\": [0, 0, 0, 1],\n      \"localScale\": [1, 1, 1],\n      \"inheritParentScale\": true,\n      \"meshVisible\": true,\n      \"castShadows\": true,\n      \"receiveShadows\": true,\n      \"layerMask\": 1,\n      \"materialSubmeshIndex\": 0,\n      \"active\": true,\n      \"addBounds\": false,\n      \"addObb\": false,\n      \"playAnimation\": false,\n      \"loopAnimation\": true\n    },\n    {\n      \"id\": \"legacy-1\",\n      \"sourceGuid\": \"prefab-77565446168100-28\",\n      \"name\": \"Cube\",\n      \"parentIndex\": 0,\n      \"localPosition\": [0, 0, 0],\n      \"localRotation\": [0, 0, 0, 1],\n      \"localScale\": [0.4, 0.4, 0.4],\n      \"inheritParentScale\": true,\n      \"meshVisible\": true,\n      \"castShadows\": true,\n      \"receiveShadows\": true,\n      \"layerMask\": 1,\n      \"materialSubmeshIndex\": 0,\n      \"meshAssetPath\": \"Models/cubue2.glb#mesh/0\",\n      \"slotOverrides\": [\n        {\n          \"submeshIndex\": 0,\n          \"materialAssetPath\": \"Materials/Testraum/Rampe.mat\"\n        }\n      ],\n      \"active\": true,\n      \"addBounds\": true,\n      \"boundsCenterLocal\": [0, 0, 0],\n      \"boundsExtentsLocal\": [1, 1, 1],\n      \"addObb\": false,\n      \"playAnimation\": false,\n      \"loopAnimation\": true\n    }\n  ]\n}",
+          "bindings": [
+            {
+              "recordId": "legacy-0",
+              "entityGuid": "prefab-1219236775500-1",
+              "overrides": [
+                "/localPosition"
+              ]
+            },
+            {
+              "recordId": "legacy-1",
+              "entityGuid": "prefab-1219236775500-2",
+              "overrides": [
+                "/localPosition",
+                "/localScale"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-0"
+        }
+      ]
+    },
+    {
+      "entityId": 5121,
+      "entityIndex": 20,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-1219236775500-2"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, -0.69, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 4865
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [1, 1, 1]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/cubue2.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Testraum/Rampe.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        }
+      ]
+    },
+    {
+      "entityId": 5377,
+      "entityIndex": 21,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "cubue Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-1219236775500-3"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [12.7293, 0.51, 9.9528],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.999956, 1, 0.999956],
+          "inheritParentScale": true
+        },
+        {
+          "type": "PrefabInstanceComponent",
+          "prefabAssetPath": "Prefabs/cubue_Kopie.prefab",
+          "overrideTransform": true,
+          "baselinePrefabJson": "\n{\n  \"type\": \"KromPrefab\",\n  \"version\": 2,\n  \"name\": \"cubue Kopie\",\n  \"rootIndex\": 0,\n  \"records\": [\n    {\n      \"id\": \"legacy-0\",\n      \"sourceGuid\": \"prefab-195640949920900-35\",\n      \"name\": \"cubue Kopie\",\n      \"parentIndex\": -1,\n      \"localPosition\": [0, 0, 0],\n      \"localRotation\": [0, 0, 0, 1],\n      \"localScale\": [0.999956, 1, 0.999956],\n      \"inheritParentScale\": true,\n      \"meshVisible\": true,\n      \"castShadows\": true,\n      \"receiveShadows\": true,\n      \"layerMask\": 1,\n      \"materialSubmeshIndex\": 0,\n      \"active\": true,\n      \"addBounds\": false,\n      \"addObb\": false,\n      \"playAnimation\": false,\n      \"loopAnimation\": true\n    },\n    {\n      \"id\": \"legacy-1\",\n      \"sourceGuid\": \"prefab-195640949920900-36\",\n      \"name\": \"Cube Kopie\",\n      \"parentIndex\": 0,\n      \"localPosition\": [8.94109e-08, 0, 0],\n      \"localRotation\": [0, 0, 0, 1],\n      \"localScale\": [0.399995, 0.4, 0.399995],\n      \"inheritParentScale\": true,\n      \"meshVisible\": true,\n      \"castShadows\": true,\n      \"receiveShadows\": true,\n      \"layerMask\": 1,\n      \"materialSubmeshIndex\": 0,\n      \"meshAssetPath\": \"Models/edge.glb#mesh/0\",\n      \"materialAssetPath\": \"Models/cubue.glb#material/0\",\n      \"slotOverrides\": [\n        {\n          \"submeshIndex\": 0,\n          \"materialAssetPath\": \"Materials/Testraum/Schalter.mat\"\n        }\n      ],\n      \"active\": true,\n      \"addBounds\": true,\n      \"boundsCenterLocal\": [0, 0, 0],\n      \"boundsExtentsLocal\": [1, 1, 1],\n      \"addObb\": false,\n      \"playAnimation\": false,\n      \"loopAnimation\": true\n    }\n  ]\n}",
+          "bindings": [
+            {
+              "recordId": "legacy-0",
+              "entityGuid": "prefab-1219236775500-3",
+              "overrides": [
+                "/localPosition"
+              ]
+            },
+            {
+              "recordId": "legacy-1",
+              "entityGuid": "prefab-1219236775500-4",
+              "overrides": [
+                "/localPosition",
+                "/localScale"
+              ]
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-0"
+        }
+      ]
+    },
+    {
+      "entityId": 5633,
+      "entityIndex": 22,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube Kopie"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-1219236775500-4"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0.49, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [0.999987, 1, 0.999987],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 5377
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [1, 1, 1]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/edge.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "materialAssetPath": "Models/cubue.glb#material/0",
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Testraum/Schalter.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        }
+      ]
+    },
+    {
+      "entityId": 5889,
+      "entityIndex": 23,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "edge (2)"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-1219236775500-5"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [11.7465, 3.97, -6.1278],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "PrefabInstanceComponent",
+          "prefabAssetPath": "Prefabs/edge__2_.prefab",
+          "overrideTransform": true,
+          "baselinePrefabJson": "\n{\n  \"type\": \"KromPrefab\",\n  \"version\": 2,\n  \"name\": \"edge (2)\",\n  \"rootIndex\": 0,\n  \"records\": [\n    {\n      \"id\": \"legacy-0\",\n      \"sourceGuid\": \"prefab-158272126863900-3\",\n      \"name\": \"edge (2)\",\n      \"parentIndex\": -1,\n      \"localPosition\": [0, 0, 0],\n      \"localRotation\": [0, 0, 0, 1],\n      \"localScale\": [1, 1, 1],\n      \"inheritParentScale\": true,\n      \"meshVisible\": true,\n      \"castShadows\": true,\n      \"receiveShadows\": true,\n      \"layerMask\": 1,\n      \"materialSubmeshIndex\": 0,\n      \"active\": true,\n      \"addBounds\": false,\n      \"addObb\": false,\n      \"playAnimation\": false,\n      \"loopAnimation\": true\n    },\n    {\n      \"id\": \"legacy-1\",\n      \"sourceGuid\": \"prefab-158272126863900-4\",\n      \"name\": \"Cube\",\n      \"parentIndex\": 0,\n      \"localPosition\": [0, 0, 0],\n      \"localRotation\": [0, 0, 0, 1],\n      \"localScale\": [1, 1, 1],\n      \"inheritParentScale\": true,\n      \"meshVisible\": true,\n      \"castShadows\": true,\n      \"receiveShadows\": true,\n      \"layerMask\": 1,\n      \"materialSubmeshIndex\": 0,\n      \"meshAssetPath\": \"Models/edge (2).glb#mesh/0\",\n      \"materialAssetPath\": \"Models/edge (2).glb#material/0\",\n      \"slotOverrides\": [\n        {\n          \"submeshIndex\": 0,\n          \"materialAssetPath\": \"Materials/Testraum/Spieler.mat\"\n        }\n      ],\n      \"active\": true,\n      \"addBounds\": true,\n      \"boundsCenterLocal\": [0, 0, 0],\n      \"boundsExtentsLocal\": [1, 1, 1],\n      \"addObb\": false,\n      \"playAnimation\": false,\n      \"loopAnimation\": true\n    }\n  ]\n}",
+          "bindings": [
+            {
+              "recordId": "legacy-0",
+              "entityGuid": "prefab-1219236775500-5",
+              "overrides": [
+                "/localPosition"
+              ]
+            },
+            {
+              "recordId": "legacy-1",
+              "entityGuid": "prefab-1219236775500-6",
+              "overrides": [
+              ]
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-0"
+        }
+      ]
+    },
+    {
+      "entityId": 6145,
+      "entityIndex": 24,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Cube"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-1219236775500-6"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 5889
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [1, 1, 1]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/edge (2).glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "materialAssetPath": "Models/edge (2).glb#material/0",
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Testraum/Spieler.mat"
             }
           ]
         },
