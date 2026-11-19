@@ -69,8 +69,9 @@ inline void SetMaterialGraph(MaterialSystem& materials, MaterialHandle material,
         materials.SetVec4(material, kGraphInstructionParams[i], graph.instructions[i]);
     for (const auto& parameter : graph.parameters)
         materials.SetParameterAlias(material, parameter.name, kGraphInstructionParams[parameter.instruction]);
-    // Spare components carry the direct UV links and the non-PBR fallbacks.
-    const std::array directUV{graph.directUVLinks, uvScale, uvOffset, math::Vec2{0.f, 0.f}};
+    // Spare components carry direct UV links, non-PBR fallbacks and the normal output (+1).
+    const std::array directUV{graph.directUVLinks, uvScale, uvOffset,
+                             math::Vec2{static_cast<float>(graph.normalOutput + 1), 0.f}};
     for (size_t i = 0; i < textures.size(); ++i)
     {
         materials.SetVec4(material, kGraphUVParams[i * 2], graph.textureUV[i]);

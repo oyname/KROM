@@ -1686,6 +1686,7 @@ void UpdateRuntimeMaterialParameters(EditorFrameContext& ctx,
     {
         for (size_t i = 0; i < binding.graphTextures.size(); ++i)
             UpdateCachedTexture(ctx, graph.textures[i], binding.graphTexturePaths[i], binding.graphTextures[i],
+                                graph.textureNormal[i] ? TextureLoadRole::NormalMap :
                                 graph.textureLinear[i] ? TextureLoadRole::LinearData : TextureLoadRole::Auto);
         SetMaterialGraph(ctx.materials, runtimeMaterial, graph, binding.graphTextures, asset.uvScale, asset.uvOffset);
     }

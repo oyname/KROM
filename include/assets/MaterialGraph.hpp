@@ -27,9 +27,9 @@ enum class MaterialNodeType
 {
     Texture, Value, Color, Add, Multiply, Mix, Separate,
     Subtract, Power, Invert, Clamp, Remap, Sine, Time, Parameter,
-    UV, Position, Vector2
+    UV, Position, Vector2, NormalBlend
 };
-inline constexpr MaterialNodeType kLastMaterialNodeType = MaterialNodeType::Vector2;
+inline constexpr MaterialNodeType kLastMaterialNodeType = MaterialNodeType::NormalBlend;
 
 [[nodiscard]] constexpr int MaterialNodeInputCount(MaterialNodeType type) noexcept
 {
@@ -41,6 +41,7 @@ inline constexpr MaterialNodeType kLastMaterialNodeType = MaterialNodeType::Vect
     case MaterialNodeType::Multiply:
     case MaterialNodeType::Subtract:
     case MaterialNodeType::Power:
+    case MaterialNodeType::NormalBlend:
         return 2;
     case MaterialNodeType::Separate:
     case MaterialNodeType::Invert:
@@ -281,6 +282,7 @@ inline MaterialValueType MaterialGraphValueType(const MaterialGraph& graph, uint
         return Type::Pair; // UV consumers use the first two parameter components.
     case MaterialNodeType::Texture:
     case MaterialNodeType::Color:
+    case MaterialNodeType::NormalBlend:
         return Type::Color;
     default:
         const auto a = MaterialGraphValueType(graph, node->a, remaining - 1);
@@ -310,6 +312,8 @@ struct CompiledMaterialGraph
     std::array<math::Vec4, kMaterialGraphMaxNodes> instructions{};
     std::array<std::string, kMaterialGraphMaxTextures> textures{};
     std::array<bool, kMaterialGraphMaxTextures> textureLinear{}; // Used only as data, not as color.
+    std::array<bool, kMaterialGraphMaxTextures> textureNormal{}; // Linear normal import, including DX green conversion.
+    int normalOutput = -1; // Encoded tangent-space RGB; -1 keeps the direct normal texture.
     std::array<math::Vec4, kMaterialGraphMaxTextures> textureUV{
         math::Vec4{1.f, 1.f, 0.f, 0.f}, math::Vec4{1.f, 1.f, 0.f, 0.f},
         math::Vec4{1.f, 1.f, 0.f, 0.f}, math::Vec4{1.f, 1.f, 0.f, 0.f}}; // scale.xy, offset.xy
@@ -348,16 +352,21 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
 
     std::array<int, kMaterialGraphMaxNodes> indices;
     indices.fill(-1);
+    // Normal samples decode/reorient before math, so a node also used as color needs its own instruction.
+    std::array<int, kMaterialGraphMaxNodes> normalIndices;
+    normalIndices.fill(-1);
     int count = 0;
     size_t textureCount = 0;
     bool visitingData = false;
+    bool visitingNormal = false;
     std::array<bool, kMaterialGraphMaxTextures> linkedSlots{};
     // The UV transform belongs to the slot: the same file with other UVs needs its own.
     // -1 when all slots are taken.
     const auto slotFor = [&](const std::string& path, const math::Vec4& uv, const math::Vec2& scroll, bool linked) -> int {
         size_t slot = 0;
         while (slot < textureCount &&
-               (linked || linkedSlots[slot] || result.textures[slot] != path || result.textureUV[slot].x != uv.x ||
+               (linked || linkedSlots[slot] || result.textureNormal[slot] != visitingNormal ||
+                result.textures[slot] != path || result.textureUV[slot].x != uv.x ||
                 result.textureUV[slot].y != uv.y || result.textureUV[slot].z != uv.z ||
                 result.textureUV[slot].w != uv.w || result.textureScroll[slot].x != scroll.x ||
                 result.textureScroll[slot].y != scroll.y))
@@ -370,7 +379,8 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
                 return -1;
             }
             linkedSlots[slot] = linked;
-            result.textureLinear[slot] = visitingData;
+            result.textureLinear[slot] = visitingData || visitingNormal;
+            result.textureNormal[slot] = visitingNormal;
             result.textureUV[slot] = uv;
             result.textureScroll[slot] = scroll;
             result.textures[slot] = path;
@@ -387,16 +397,19 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
         result.instructions[count] = instruction;
         return count++;
     };
-    // Op 1 (sample) and op 15 (UV only) share this encoding: slot, UV index + 1,
+    // Ops 1 (color/data sample), 17 (normal sample) and 15 (UV only) share this encoding: slot, UV index + 1,
     // and three 5-bit transform indices (+1 each). A missing link uses the slot constant.
     const auto textureInstruction = [&](auto&& visit, const MaterialGraphNode& node, bool sample, math::Vec4& out) {
         const bool wasData = visitingData;
+        const bool wasNormal = visitingNormal;
         visitingData = true;
+        visitingNormal = false; // UV controls are data, never normal samples.
         const int uv = visit(visit, node.a);
         const int scale = visit(visit, node.uvScaleLink);
         const int offset = visit(visit, node.uvOffsetLink);
         const int scroll = visit(visit, node.uvScrollLink);
         visitingData = wasData;
+        visitingNormal = wasNormal;
         if (uv < -1 || scale < -1 || offset < -1 || scroll < -1)
             return false;
 
@@ -413,7 +426,8 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
             {localScale.x, localScale.y, localOffset.x, localOffset.y}, localScroll, uv >= 0 || inputs != 0);
         if (slot < 0)
             return false;
-        out = {static_cast<float>(slot), static_cast<float>(uv + 1), static_cast<float>(inputs), sample ? 1.f : 15.f};
+        out = {static_cast<float>(slot), static_cast<float>(uv + 1), static_cast<float>(inputs),
+               sample ? (visitingNormal ? 17.f : 1.f) : 15.f};
         return true;
     };
     const auto visit = [&](auto&& self, uint32_t id) -> int {
@@ -423,7 +437,13 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
         if (!node)
             return -2;
 
-        auto& index = indices[static_cast<size_t>(node - graph.nodes.data())];
+        // Constants, UV sources and NormalBlend itself are independent of the
+        // sampling context. In particular, a script Parameter must keep one alias.
+        const bool contextIndependent = node->type == MaterialNodeType::Value || node->type == MaterialNodeType::Color ||
+            node->type == MaterialNodeType::Parameter || node->type == MaterialNodeType::Time ||
+            node->type == MaterialNodeType::UV || node->type == MaterialNodeType::Position ||
+            node->type == MaterialNodeType::Vector2 || node->type == MaterialNodeType::NormalBlend;
+        auto& index = (visitingNormal && !contextIndependent ? normalIndices : indices)[static_cast<size_t>(node - graph.nodes.data())];
         if (index != -1)
             return index;
         index = -2; // A dependency that reaches this node again is a cycle.
@@ -445,12 +465,25 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
         {
             if (node->texturePath.empty())
             {
-                // A texture node without a texture stays linkable and acts as white.
-                instruction = {1.f, 1.f, 1.f, 0.f};
+                // An empty texture is white for colors/data and flat for normals.
+                instruction = visitingNormal ? math::Vec4{0.5f, 0.5f, 1.f, 0.f} : math::Vec4{1.f, 1.f, 1.f, 0.f};
                 break;
             }
             if (!textureInstruction(self, *node, true, instruction))
                 return -2;
+            break;
+        }
+        case MaterialNodeType::NormalBlend:
+        {
+            const bool wasNormal = visitingNormal;
+            visitingNormal = true;
+            const int a = self(self, node->a);
+            const int b = self(self, node->b);
+            visitingNormal = wasNormal;
+            if (a < -1 || b < -1)
+                return -2;
+            instruction = {static_cast<float>((a + 1) | ((b + 1) << 5)),
+                           std::clamp(node->value.x, 0.f, 4.f), std::clamp(node->value.y, 0.f, 4.f), 16.f};
             break;
         }
         case MaterialNodeType::Add:
@@ -468,7 +501,17 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
             const bool mix = node->type == MaterialNodeType::Mix;
             const int a = self(self, node->a);
             const int b = inputCount >= 2 ? self(self, node->b) : -1;
+            // A Mix mask is scalar data, even when mixing normal-map values.
+            const bool wasNormal = visitingNormal;
+            const bool wasData = visitingData;
+            if (mix)
+            {
+                visitingNormal = false;
+                visitingData = true;
+            }
             const int c = mix ? self(self, node->c) : -1;
+            visitingNormal = wasNormal;
+            visitingData = wasData;
             if (a < -1 || b < -1 || c < -1)
                 return -2;
             const float inputs = static_cast<float>((a + 1) | ((b + 1) << 5) | ((c + 1) << 10));
@@ -557,13 +600,20 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
         math::Vec4 instruction;
         return textureInstruction(visit, *node, false, instruction) ? emit(instruction) : -2;
     };
-    const int normalUV = linkedUV(graph.normal);
+    const auto* normalNode = graph.Find(graph.normal);
+    // Keep old single-texture materials on their original binding/UV path.
+    const bool computedNormal = normalNode && normalNode->type != MaterialNodeType::Texture;
+    visitingNormal = true;
+    const int normalOutput = computedNormal ? visit(visit, graph.normal) : -1;
+    visitingNormal = false;
+    result.normalOutput = normalOutput;
+    const int normalUV = computedNormal ? -1 : linkedUV(graph.normal);
     const int ormUV = linkedUV(graph.orm);
     const int directScale = visit(visit, graph.uvScaleLink);
     const int directOffset = visit(visit, graph.uvOffsetLink);
     result.directUVLinks = {static_cast<float>(directScale + 1), static_cast<float>(directOffset + 1)};
     result.valid = base >= -1 && emission >= -1 && metallic >= -1 && roughness >= -1 &&
-        normalUV >= -1 && ormUV >= -1 && directScale >= -1 && directOffset >= -1;
+        normalOutput >= -1 && normalUV >= -1 && ormUV >= -1 && directScale >= -1 && directOffset >= -1;
     if (!result.valid && result.error == MaterialGraphError::None)
         result.error = MaterialGraphError::InvalidLink;
     if (result.valid)

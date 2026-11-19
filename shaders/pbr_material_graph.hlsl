@@ -20,6 +20,58 @@ cbuffer PerFrame : register(b0)
 #endif
 
 static float4 gKromGraphValues[16];
+static float2 gKromGraphMeshUV;
+
+float3 KromGraphSafeNormal(float3 n)
+{
+    float len2 = dot(n, n);
+    return len2 > 1e-12f ? n * rsqrt(len2) : float3(0.0f, 0.0f, 1.0f);
+}
+
+float3 KromGraphNormalStrength(float3 n, float strength)
+{
+    n = KromGraphSafeNormal(n);
+    // Slope scaling preserves the direction at strength one, including steep RNM results.
+    return KromGraphSafeNormal(float3(n.xy * strength, max(n.z, 1e-5f)));
+}
+
+// Build two UV frames on the same geometric plane. This rotates/mirrors each
+// normal sample into the mesh UV frame before layers with different UVs combine.
+bool KromGraphUVFrame(float2 uv, float3 dp1, float3 dp2, float3 n, out float3 t, out float3 b)
+{
+    float2 duv1 = ddx(uv), duv2 = ddy(uv);
+    float3 p2 = cross(dp2, n), p1 = cross(n, dp1);
+    float3 rawT = p2 * duv1.x + p1 * duv2.x;
+    float3 rawB = p2 * duv1.y + p1 * duv2.y;
+    float refLen2 = max(dot(dp1, dp1), dot(dp2, dp2)) * max(dot(duv1, duv1), dot(duv2, duv2));
+    t = KromGraphSafeNormal(rawT);
+    b = cross(n, t) * (dot(cross(n, t), rawB) < 0.0f ? -1.0f : 1.0f);
+    return refLen2 > 0.0f && dot(rawT, rawT) > refLen2 * 1e-6f;
+}
+
+float3 KromGraphReorientSample(float3 mapN, float2 sampleUV, float2 meshUV, float3 positionWS)
+{
+    float3 dp1 = ddx(positionWS), dp2 = ddy(positionWS);
+    float3 n = KromGraphSafeNormal(cross(dp1, dp2));
+    float3 meshT, meshB, sampleT, sampleB;
+    bool meshValid = KromGraphUVFrame(meshUV, dp1, dp2, n, meshT, meshB);
+    bool sampleValid = KromGraphUVFrame(sampleUV, dp1, dp2, n, sampleT, sampleB);
+    if (!meshValid || !sampleValid)
+        return mapN;
+    float3 worldXY = sampleT * mapN.x + sampleB * mapN.y;
+    return KromGraphSafeNormal(float3(dot(worldXY, meshT), dot(worldXY, meshB), mapN.z));
+}
+
+// Inputs and output use encoded RGB (0..1), so Mix and Math can also feed Normal.
+float3 KromGraphBlendNormals(float3 encodedA, float3 encodedB, float strengthA, float strengthB)
+{
+    float3 a = KromGraphNormalStrength(encodedA * 2.0f - 1.0f, strengthA);
+    float3 b = KromGraphNormalStrength(encodedB * 2.0f - 1.0f, strengthB);
+    float3 t = a + float3(0.0f, 0.0f, 1.0f);
+    float3 u = b * float3(-1.0f, -1.0f, 1.0f);
+    float3 blended = KromGraphSafeNormal(t * dot(t, u) / max(t.z, 1e-5f) - u);
+    return blended * 0.5f + 0.5f;
+}
 
 // Linked indices are stored as index + 1; zero selects the local value.
 float2 KromGraphUVValue(int link, float2 fallback)
@@ -57,6 +109,7 @@ float4 KromGraphSample(int slot, float2 transformed)
 // Op 13: mesh UV times tiling. Op 14: world position projected to a plane.
 void EvaluateMaterialGraph(float2 uv, float3 positionWS)
 {
+    gKromGraphMeshUV = uv;
     [loop]
     for (int i = 0; i < (int)graphOutputs.z; ++i)
     {
@@ -66,6 +119,15 @@ void EvaluateMaterialGraph(float2 uv, float3 positionWS)
             gKromGraphValues[i] = float4(node.rgb, 1.0f);
         else if (op == 1)
             gKromGraphValues[i] = KromGraphSample((int)(node.x), KromGraphTextureUV(node, uv));
+        else if (op == 17)
+        {
+            float2 sampleUV = KromGraphTextureUV(node, uv);
+            float2 xy = KromGraphSample((int)(node.x), sampleUV).rg * 2.0f - 1.0f;
+            // Both RGB and BC5 normal textures describe the upper tangent hemisphere.
+            float3 mapN = KromGraphSafeNormal(float3(xy, sqrt(saturate(1.0f - dot(xy, xy)))));
+            mapN = KromGraphReorientSample(mapN, sampleUV, uv, positionWS);
+            gKromGraphValues[i] = float4(mapN * 0.5f + 0.5f, 1.0f);
+        }
         else if (op == 12)
             gKromGraphValues[i] = float4((timeData.x * node.y).xxx, 1.0f);
         else if (op == 13)
@@ -90,7 +152,13 @@ void EvaluateMaterialGraph(float2 uv, float3 positionWS)
             const float4 lhs = float4(node.yyy, 1.0f) * inputA;
             const float4 rhs = float4(node.zzz, 1.0f) * inputB;
             float4 result;
-            if (op == 2)
+            if (op == 16)
+            {
+                float3 normalA = a >= 0 ? inputA.rgb : float3(0.5f, 0.5f, 1.0f);
+                float3 normalB = b >= 0 ? inputB.rgb : float3(0.5f, 0.5f, 1.0f);
+                result = float4(KromGraphBlendNormals(normalA, normalB, node.y, node.z), 1.0f);
+            }
+            else if (op == 2)
                 result = float4(lhs.rgb + rhs.rgb, lhs.a * rhs.a);
             else if (op == 3)
                 result = float4(lhs.rgb * rhs.rgb, lhs.a * rhs.a);
@@ -158,13 +226,28 @@ int KromGraphNormalUVIndex()
     return (((int)(graphOutputs.w) >> 10) & 31) - 1;
 }
 
+bool KromGraphHasNormal()
+{
+    return graphUV[7].z > 0.0f;
+}
+
+float3 KromGraphNormal()
+{
+    int index = max((int)graphUV[7].z - 1, 0);
+    return KromGraphSafeNormal(gKromGraphValues[index].rgb * 2.0f - 1.0f);
+}
+
 float2 KromGraphNormalUV(float2 uv)
 {
+    if (KromGraphHasNormal())
+        return gKromGraphMeshUV;
     return KromGraphLinkedUV(KromGraphNormalUVIndex(), uv);
 }
 
 bool KromGraphNormalUsesDerivedFrame()
 {
+    if (KromGraphHasNormal())
+        return false; // Each graph sample is already expressed in the mesh UV frame.
     int index = KromGraphNormalUVIndex();
     if (index < 0)
         return graphUV[1].z > 0.0f || graphUV[1].w > 0.0f;

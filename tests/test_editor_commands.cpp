@@ -2841,6 +2841,106 @@ static void TestSceneHdrPreviewAndRemove(test::TestContext& ctx)
     std::filesystem::remove(hdr, ec);
 }
 
+static void TestMaterialGraphNormalBlend(test::TestContext& ctx)
+{
+    using Node = assets::MaterialNodeType;
+    assets::MaterialAsset material;
+    auto& graph = material.graph;
+    graph.nodes = {
+        {1, Node::Texture, 0, 0, {}, {}, "Textures/base_nor_dx.png"},
+        {2, Node::Texture, 0, 0, {}, {}, "Textures/detail.png"},
+        {3, Node::NormalBlend, 1, 2, {0.75f, 0.4f, 1.f}},
+    };
+    graph.nodes[1].uvScale = {8.f, 8.f};
+    graph.normal = 3;
+    auto compiled = assets::CompileMaterialGraph(graph);
+    CHECK(ctx, compiled.Active()); // A normal-only graph must activate the shader variant.
+    CHECK_EQ(ctx, compiled.normalOutput, 2);
+    CHECK_EQ(ctx, compiled.instructions[0].w, 17.f);
+    CHECK_EQ(ctx, compiled.instructions[1].w, 17.f);
+    CHECK_EQ(ctx, compiled.instructions[2].w, 16.f);
+    CHECK_EQ(ctx, compiled.instructions[2].x, 65.f);
+    CHECK_EQ(ctx, compiled.instructions[2].y, 0.75f);
+    CHECK_EQ(ctx, compiled.instructions[2].z, 0.4f);
+    CHECK(ctx, compiled.textureNormal[0] && compiled.textureNormal[1]);
+    CHECK_EQ(ctx, compiled.textureUV[1].x, 8.f);
+    CHECK(ctx, !assets::IsMaterialUVSource(graph, 3));
+
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry);
+    const auto handle = pipeline.LoadMaterialSource(assets::SerializeMaterialProperties(material));
+    const auto* loaded = registry.materials.Get(handle);
+    CHECK(ctx, loaded != nullptr);
+    if (loaded)
+    {
+        CHECK_EQ(ctx, loaded->graph.normal, 3u);
+        const auto* blend = loaded->graph.Find(3);
+        CHECK(ctx, blend && blend->type == Node::NormalBlend && blend->a == 1 && blend->b == 2);
+        CHECK(ctx, blend && blend->value.y == 0.4f);
+        CHECK_EQ(ctx, assets::CompileMaterialGraph(loaded->graph).normalOutput, 2);
+    }
+
+    // Reusing a texture as color must not reuse its sRGB sampling for normals.
+    graph.baseColor = 1;
+    compiled = assets::CompileMaterialGraph(graph);
+    CHECK(ctx, compiled.Active());
+    CHECK_EQ(ctx, compiled.normalOutput, 3);
+    CHECK(ctx, !compiled.textureNormal[0] && compiled.textureNormal[1] && compiled.textureNormal[2]);
+    CHECK_EQ(ctx, compiled.textures[0], compiled.textures[1]);
+    CHECK_EQ(ctx, compiled.instructions[0].w, 1.f);
+    CHECK_EQ(ctx, compiled.instructions[1].w, 17.f);
+
+    MaterialSystem materials;
+    renderer::lit::LitMaterialCreateInfo info{};
+    info.materialGraph = true;
+    const auto runtimeMaterial = renderer::lit::LitMaterial::Register(materials, info);
+    renderer::SetMaterialGraph(materials, runtimeMaterial, compiled, std::array<TextureHandle, assets::kMaterialGraphMaxTextures>{});
+    const auto& cb = materials.GetCBData(runtimeMaterial);
+    math::Vec4 normalBinding{};
+    const auto offset = materials.GetCBLayout(runtimeMaterial).GetOffset("graphUV7");
+    CHECK(ctx, offset + sizeof(normalBinding) <= cb.size());
+    if (offset + sizeof(normalBinding) <= cb.size())
+        std::memcpy(&normalBinding, cb.data() + offset, sizeof(normalBinding));
+    CHECK_EQ(ctx, normalBinding.z, 4.f); // index + 1, without changing the CB layout.
+
+    // Mix/Math outputs can feed Normal too; masks still sample linear data.
+    graph.baseColor = 0;
+    graph.Find(3)->type = Node::Mix;
+    graph.nodes.push_back({4, Node::Texture, 0, 0, {}, {}, "Textures/mask.png"});
+    graph.Find(3)->c = 4;
+    compiled = assets::CompileMaterialGraph(graph);
+    CHECK(ctx, compiled.Active());
+    CHECK(ctx, !compiled.textureNormal[2] && compiled.textureLinear[2]);
+    graph.Find(3)->type = Node::NormalBlend;
+    graph.Find(3)->a = 3;
+    CHECK(ctx, !assets::CompileMaterialGraph(graph).valid);
+    graph.Find(3)->a = 99;
+    CHECK(ctx, !assets::CompileMaterialGraph(graph).valid);
+    graph.Find(3)->a = graph.Find(3)->b = 0;
+    CHECK(ctx, assets::CompileMaterialGraph(graph).Active()); // Unconnected layers are flat.
+    graph.Find(3)->a = 1;
+    graph.Find(1)->texturePath.clear();
+    compiled = assets::CompileMaterialGraph(graph);
+    CHECK(ctx, compiled.Active());
+    CHECK(ctx, compiled.instructions[0].x == 0.5f && compiled.instructions[0].z == 1.f);
+
+    // Existing single-map materials keep their dedicated texture/UV path.
+    graph.normal = 2;
+    compiled = assets::CompileMaterialGraph(graph);
+    CHECK(ctx, compiled.Active() && compiled.normalOutput == -1);
+    CHECK_EQ(ctx, compiled.instructions[0].w, 15.f);
+
+    assets::MaterialGraph sharedParameter;
+    sharedParameter.nodes = {{1, Node::Parameter, 0, 0, {0.5f, 0.5f, 1.f}, {}, "NormalColor"},
+                             {2, Node::NormalBlend, 1}};
+    sharedParameter.baseColor = 1;
+    sharedParameter.normal = 2;
+    compiled = assets::CompileMaterialGraph(sharedParameter);
+    CHECK(ctx, compiled.Active());
+    CHECK_EQ(ctx, compiled.normalOutput, 1);
+    CHECK_EQ(ctx, compiled.parameters.size(), size_t(1)); // A single script alias drives both outputs.
+}
+
 static void TestMaterialGraphRoundTrip(test::TestContext& ctx)
 {
     using Node = assets::MaterialNodeType;
@@ -3510,6 +3610,15 @@ static void TestMaterialGraphSockets(test::TestContext& ctx)
         frame("Textures/replacement.png");
         CHECK_EQ(ctx, material.normalTexture.path, std::string("Textures/replacement.png"));
         CHECK_EQ(ctx, graph.nodes.size(), size_t(1));
+
+        graph.nodes[0].type = assets::MaterialNodeType::NormalBlend;
+        link(cardY + step);
+        CHECK_EQ(ctx, graph.normal, 1u);
+        CHECK(ctx, assets::CompileMaterialGraph(graph).normalOutput >= 0);
+        rightClick(inputX, cardY + step);
+        CHECK_EQ(ctx, graph.normal, 0u);
+        CHECK(ctx, gui->OpenPopupStack.empty());
+        graph.nodes[0].type = assets::MaterialNodeType::Value;
 
         link(cardY + 5.f * step);
         CHECK_EQ(ctx, graph.metallic, 1u);
@@ -5937,6 +6046,7 @@ int RunEditorCommandTests()
     suite.Add("Material, animation and controller windows maximize and restore", TestEditorWindowMaximize);
     suite.Add("Material graph edits undo as one step", TestMaterialGraphUndo);
     suite.Add("Material graph compiles and round-trips", TestMaterialGraphRoundTrip);
+    suite.Add("Material graph normal blending, color reuse and file compatibility", TestMaterialGraphNormalBlend);
     suite.Add("Material graph UV, Position and Vector2 nodes", TestMaterialGraphUVNodes);
     suite.Add("Material graph UV transform inputs and file compatibility", TestMaterialGraphUVTransforms);
     suite.Add("Material graph UV sockets accept pairs and display the source", TestMaterialGraphUVSockets);

@@ -37,6 +37,7 @@
 #include "renderer/RenderPipelineRecipe.hpp"
 #include "assets/VertexLayoutBridge.hpp"
 #include "renderer/MaterialSystem.hpp"
+#include "renderer/MaterialGraphBinding.hpp"
 #include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "renderer/MaterialCBLayout.hpp"
 #include "renderer/ShaderCompiler.hpp"
@@ -83,6 +84,16 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+#if defined(_WIN32) && defined(KROM_DX11_BACKEND)
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <d3d11.h>
+#include <wrl/client.h>
+#undef CreateMutex
+#undef CreateWindow
+#endif
 
 using namespace engine;
 using namespace engine::renderer;
@@ -6407,6 +6418,296 @@ static void TestGtaoDepthPipelineStates(test::TestContext& ctx)
     runtime.Shutdown();
 }
 
+static void TestNormalGraphShaders(test::TestContext& ctx)
+{
+    const auto root = PathFromUtf8(KROM_SOURCE_DIR) / "shaders";
+    const bool haveDxc = !FindShaderTool(ShaderTool::Dxc).path.empty();
+    for (const char* file : {"pbr_lit.ps.hlsl", "pbr_forward_plus.ps.hlsl", "lit.ps.hlsl"})
+    {
+        assets::ShaderAsset ps{};
+        ps.debugName = file;
+        ps.stage = assets::ShaderStage::Fragment;
+        ps.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+        ps.resolvedPath = PathToUtf8(root / file);
+        for (const auto target : {assets::ShaderTargetProfile::DirectX11_SM5, assets::ShaderTargetProfile::Vulkan_SPIRV})
+        {
+            if (target == assets::ShaderTargetProfile::Vulkan_SPIRV && !haveDxc)
+                continue;
+            // Graph-only normals must work without the legacy NormalMap permutation.
+            for (const auto extra : {ShaderVariantFlag::None, ShaderVariantFlag::NormalMap | ShaderVariantFlag::NormalMapBC5})
+            {
+                assets::CompiledShaderArtifact artifact{};
+                std::string error;
+                const bool ok = ShaderCompiler::CompileVariant(ps, target, ShaderVariantFlag::MaterialGraph | extra, artifact, &error);
+                if (!ok)
+                    std::fprintf(stderr, "Normal graph %s (%s): %s\n", file, ShaderCompiler::ToString(target), error.c_str());
+                CHECK(ctx, ok);
+            }
+        }
+    }
+
+#if defined(_WIN32) && defined(KROM_DX11_BACKEND)
+    // Execute the production HLSL on WARP and check invariants, rather than
+    // reproducing the RNM implementation in a CPU test.
+    assets::ShaderAsset cs{};
+    cs.debugName = "NormalBlendMath";
+    cs.stage = assets::ShaderStage::Compute;
+    cs.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    cs.sourceCode = "#define KROM_MATERIAL_GRAPH\n"
+        "float4 graphOutputs, baseColorFactor, timeData; float4 graphNodes[16], graphUV[8];\n"
+        "SamplerState sLinear;\n#include \"" + PathToUtf8(root / "pbr_material_graph.hlsl") + "\"\n" + R"(
+RWStructuredBuffer<float4> results : register(u0);
+[numthreads(1, 1, 1)]
+void main(uint3 tid : SV_DispatchThreadID)
+{
+    float3 flat = float3(0.5, 0.5, 1.0);
+    float3 a = float3(0.8, 0.5, 0.9); // (0.6, 0, 0.8)
+    float3 b = float3(0.5, 0.8, 0.9); // (0, 0.6, 0.8)
+    results[0] = float4(KromGraphBlendNormals(flat, flat, 1, 1), 1);
+    results[1] = float4(KromGraphBlendNormals(a, flat, 1, 1), 1);
+    results[2] = float4(KromGraphBlendNormals(flat, b, 1, 1), 1);
+    results[3] = float4(KromGraphBlendNormals(a, b, 1, 1), 1);
+    results[4] = float4(KromGraphBlendNormals(a, b, 1, 0), 1);
+    results[5] = float4(KromGraphBlendNormals(a, b, 0, 1), 1);
+    results[6] = float4(KromGraphBlendNormals(a, b, 0, 0), 1);
+    results[7] = float4(KromGraphBlendNormals(float3(0.5, 0.5, 0.5), flat, 1, 1), 1);
+}
+)";
+    assets::CompiledShaderArtifact artifact{};
+    std::string error;
+    const bool compiled = ShaderCompiler::CompileForTarget(cs, assets::ShaderTargetProfile::DirectX11_SM5, artifact, &error);
+    if (!compiled)
+        std::fprintf(stderr, "Normal blend math: %s\n", error.c_str());
+    CHECK(ctx, compiled);
+    if (!compiled)
+        return;
+
+    using Microsoft::WRL::ComPtr;
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> command;
+    const HRESULT created = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+        D3D11_SDK_VERSION, &device, nullptr, &command);
+    CHECK(ctx, SUCCEEDED(created));
+    if (FAILED(created))
+        return;
+    ComPtr<ID3D11ComputeShader> shader;
+    HRESULT hr = device->CreateComputeShader(artifact.bytecode.data(), artifact.bytecode.size(), nullptr, &shader);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+    D3D11_BUFFER_DESC desc{};
+    desc.ByteWidth = 8 * sizeof(math::Vec4);
+    desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+    desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    desc.StructureByteStride = sizeof(math::Vec4);
+    ComPtr<ID3D11Buffer> output, staging;
+    hr = device->CreateBuffer(&desc, nullptr, &output);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+    ComPtr<ID3D11UnorderedAccessView> uav;
+    hr = device->CreateUnorderedAccessView(output.Get(), nullptr, &uav);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = desc.MiscFlags = desc.StructureByteStride = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    hr = device->CreateBuffer(&desc, nullptr, &staging);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+    command->CSSetShader(shader.Get(), nullptr, 0);
+    ID3D11UnorderedAccessView* view = uav.Get();
+    command->CSSetUnorderedAccessViews(0, 1, &view, nullptr);
+    command->Dispatch(1, 1, 1);
+    view = nullptr;
+    command->CSSetUnorderedAccessViews(0, 1, &view, nullptr);
+    command->CopyResource(staging.Get(), output.Get());
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    hr = command->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+    const math::Vec3 expected[] = {
+        {0, 0, 1}, {0.6f, 0, 0.8f}, {0, 0.6f, 0.8f}, {0.48f, 0.6f, 0.64f},
+        {0.6f, 0, 0.8f}, {0, 0.6f, 0.8f}, {0, 0, 1}, {0, 0, 1},
+    };
+    const auto* values = static_cast<const math::Vec4*>(mapped.pData);
+    for (size_t i = 0; i < std::size(expected); ++i)
+    {
+        CHECK(ctx, std::abs(values[i].x * 2.f - 1.f - expected[i].x) < 1e-5f);
+        CHECK(ctx, std::abs(values[i].y * 2.f - 1.f - expected[i].y) < 1e-5f);
+        CHECK(ctx, std::abs(values[i].z * 2.f - 1.f - expected[i].z) < 1e-5f);
+    }
+    command->Unmap(staging.Get(), 0);
+
+    // Exercise the graph compiler, normal texture decoding and independent UV
+    // frames together in a real fragment shader, including mirrored tiling.
+    assets::ShaderAsset vsAsset{};
+    vsAsset.debugName = "NormalGraphFullscreenVS";
+    vsAsset.stage = assets::ShaderStage::Vertex;
+    vsAsset.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    vsAsset.sourceCode = "float4 main(uint id : SV_VertexID) : SV_POSITION { return float4(id == 2 ? 3 : -1, id == 1 ? 3 : -1, 0, 1); }";
+    assets::ShaderAsset psAsset{};
+    psAsset.debugName = "NormalGraphReadbackPS";
+    psAsset.stage = assets::ShaderStage::Fragment;
+    psAsset.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    psAsset.sourceCode = "#define KROM_MATERIAL_GRAPH\n"
+        "static const float4 baseColorFactor = 1; static const float4 timeData = 0;\n"
+        "cbuffer PerMaterial : register(b2) { float4 graphOutputs; float4 graphNodes[16]; float4 graphUV[8]; };\n"
+        "SamplerState sLinear : register(s0);\n#include \"" + PathToUtf8(root / "pbr_material_graph.hlsl") + "\"\n" + R"(
+float4 main(float4 pixel : SV_Position) : SV_Target
+{
+    float2 uv = pixel.xy / 4.0;
+    EvaluateMaterialGraph(uv, float3(uv, 0));
+    return float4(KromGraphNormal() * 0.5 + 0.5, 1);
+}
+)";
+    assets::CompiledShaderArtifact vsCode{}, psCode{};
+    const bool vertexOk = ShaderCompiler::CompileForTarget(vsAsset, assets::ShaderTargetProfile::DirectX11_SM5, vsCode, &error);
+    CHECK(ctx, vertexOk);
+    const bool pixelOk = ShaderCompiler::CompileForTarget(psAsset, assets::ShaderTargetProfile::DirectX11_SM5, psCode, &error);
+    if (!pixelOk)
+        std::fprintf(stderr, "Normal graph readback: %s\n", error.c_str());
+    CHECK(ctx, pixelOk);
+    if (!vertexOk || !pixelOk)
+        return;
+    ComPtr<ID3D11VertexShader> vertex;
+    ComPtr<ID3D11PixelShader> pixel;
+    hr = device->CreateVertexShader(vsCode.bytecode.data(), vsCode.bytecode.size(), nullptr, &vertex);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+    hr = device->CreatePixelShader(psCode.bytecode.data(), psCode.bytecode.size(), nullptr, &pixel);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+
+    D3D11_TEXTURE2D_DESC texDesc{};
+    texDesc.Width = texDesc.Height = texDesc.MipLevels = texDesc.ArraySize = texDesc.SampleDesc.Count = 1;
+    texDesc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    texDesc.Usage = D3D11_USAGE_IMMUTABLE;
+    texDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    ComPtr<ID3D11ShaderResourceView> maps[2];
+    const math::Vec4 texels[] = {{0.8f, 0.5f, 0.f, 1.f}, {0.5f, 0.8f, 0.f, 1.f}}; // Blue deliberately unused (BC5).
+    for (size_t i = 0; i < std::size(maps); ++i)
+    {
+        D3D11_SUBRESOURCE_DATA data{&texels[i], sizeof(math::Vec4), 0};
+        ComPtr<ID3D11Texture2D> texture;
+        hr = device->CreateTexture2D(&texDesc, &data, &texture);
+        CHECK(ctx, SUCCEEDED(hr));
+        if (FAILED(hr))
+            return;
+        hr = device->CreateShaderResourceView(texture.Get(), nullptr, &maps[i]);
+        CHECK(ctx, SUCCEEDED(hr));
+        if (FAILED(hr))
+            return;
+    }
+    texDesc.Width = texDesc.Height = 4;
+    texDesc.Usage = D3D11_USAGE_DEFAULT;
+    texDesc.BindFlags = D3D11_BIND_RENDER_TARGET;
+    ComPtr<ID3D11Texture2D> target, readback;
+    ComPtr<ID3D11RenderTargetView> rtv;
+    hr = device->CreateTexture2D(&texDesc, nullptr, &target);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+    hr = device->CreateRenderTargetView(target.Get(), nullptr, &rtv);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+    texDesc.Usage = D3D11_USAGE_STAGING;
+    texDesc.BindFlags = 0;
+    texDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    hr = device->CreateTexture2D(&texDesc, nullptr, &readback);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+    D3D11_SAMPLER_DESC samplerDesc{};
+    samplerDesc.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+    samplerDesc.AddressU = samplerDesc.AddressV = samplerDesc.AddressW = D3D11_TEXTURE_ADDRESS_WRAP;
+    samplerDesc.MaxLOD = D3D11_FLOAT32_MAX;
+    ComPtr<ID3D11SamplerState> sampler;
+    hr = device->CreateSamplerState(&samplerDesc, &sampler);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+    D3D11_RASTERIZER_DESC rasterDesc{};
+    rasterDesc.FillMode = D3D11_FILL_SOLID;
+    rasterDesc.CullMode = D3D11_CULL_NONE;
+    rasterDesc.DepthClipEnable = TRUE;
+    ComPtr<ID3D11RasterizerState> raster;
+    hr = device->CreateRasterizerState(&rasterDesc, &raster);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+
+    MaterialDesc materialDesc{};
+    materialDesc.name = "NormalGraphReadback";
+    AddMaterialGraphParameters(materialDesc, false);
+    MaterialSystem materialSystem;
+    const auto material = materialSystem.RegisterMaterial(materialDesc);
+    desc = {};
+    desc.ByteWidth = 25 * sizeof(math::Vec4);
+    desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    ComPtr<ID3D11Buffer> constants;
+    hr = device->CreateBuffer(&desc, nullptr, &constants);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+    using Node = assets::MaterialNodeType;
+    assets::MaterialGraph graph;
+    graph.nodes = {{1, Node::Texture, 0, 0, {}, {}, "base"},
+                   {2, Node::Texture, 0, 0, {}, {}, "detail"},
+                   {3, Node::NormalBlend, 1, 2}};
+    graph.normal = 3;
+    graph.nodes[1].uvScale = {8.f, 8.f};
+    const math::Vec3 frameExpected[] = {{0.48f, 0.6f, 0.64f}, {0.48f, -0.6f, 0.64f}, {-0.48f, -0.6f, 0.64f}};
+    for (size_t i = 0; i < std::size(frameExpected); ++i)
+    {
+        if (i == 1) graph.nodes[1].uvScale.y = -8.f;
+        if (i == 2) graph.nodes[0].uvScale.x = -2.f;
+        const auto compiledGraph = assets::CompileMaterialGraph(graph);
+        CHECK(ctx, compiledGraph.Active());
+        SetMaterialGraph(materialSystem, material, compiledGraph, std::array<TextureHandle, assets::kMaterialGraphMaxTextures>{});
+        const auto& cb = materialSystem.GetCBData(material);
+        CHECK_EQ(ctx, cb.size(), size_t(desc.ByteWidth));
+        if (cb.size() != desc.ByteWidth)
+            return;
+        command->UpdateSubresource(constants.Get(), 0, nullptr, cb.data(), 0, 0);
+        ID3D11Buffer* constantBuffer = constants.Get();
+        command->PSSetConstantBuffers(2, 1, &constantBuffer);
+        ID3D11SamplerState* samplerState = sampler.Get();
+        command->PSSetSamplers(0, 1, &samplerState);
+        ID3D11ShaderResourceView* resource = maps[0].Get();
+        command->PSSetShaderResources(13, 1, &resource);
+        resource = maps[1].Get();
+        command->PSSetShaderResources(9, 1, &resource);
+        command->VSSetShader(vertex.Get(), nullptr, 0);
+        command->PSSetShader(pixel.Get(), nullptr, 0);
+        command->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        command->RSSetState(raster.Get());
+        D3D11_VIEWPORT viewport{0, 0, 4, 4, 0, 1};
+        command->RSSetViewports(1, &viewport);
+        ID3D11RenderTargetView* renderTarget = rtv.Get();
+        command->OMSetRenderTargets(1, &renderTarget, nullptr);
+        command->Draw(3, 0);
+        command->OMSetRenderTargets(0, nullptr, nullptr);
+        command->CopyResource(readback.Get(), target.Get());
+        hr = command->Map(readback.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+        CHECK(ctx, SUCCEEDED(hr));
+        if (FAILED(hr))
+            return;
+        const auto value = *static_cast<const math::Vec4*>(mapped.pData);
+        CHECK(ctx, std::abs(value.x * 2.f - 1.f - frameExpected[i].x) < 1e-4f);
+        CHECK(ctx, std::abs(value.y * 2.f - 1.f - frameExpected[i].y) < 1e-4f);
+        CHECK(ctx, std::abs(value.z * 2.f - 1.f - frameExpected[i].z) < 1e-4f);
+        command->Unmap(readback.Get(), 0);
+    }
+#endif
+}
+
 static void TestDepthMaskShadersCompile(test::TestContext& ctx)
 {
     const auto root = PathFromUtf8(KROM_SOURCE_DIR) / "shaders";
@@ -6482,6 +6783,7 @@ int RunRendererTests()
     engine::Debug::MinLevel = engine::LogLevel::Fatal;
 
     test::TestSuite suite("Renderer");
+    suite.Add("Normal graph shaders and normal blend math on WARP", TestNormalGraphShaders);
     suite.Add("Inherited mesh activation and visibility", TestInheritedMeshState);
     suite
         .Add("Skinning uploads only changed palettes", TestSkinningUploadsOnlyChangedPalettes)

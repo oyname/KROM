@@ -17,6 +17,31 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Normal Blend im Materialgraphen (Codex, 2026-11-19)
+
+- Auf ausdrücklichen Nutzerauftrag direkt von Codex implementiert: zwei Normal-Maps im
+  Materialgraphen kombinieren, entsprechend Unreal/Unity. Anleitung: `doc/material_graph_normals.md`.
+- Neuer angehängter Knotentyp `NormalBlend` (RNM), Basis-/Detail-Stärke 0..4, de/en.
+  Normal akzeptiert auch Mix/Math-Ergebnisse; einzelne Textur-Knoten behalten ihren alten Pfad.
+- Graph-Compiler: separate Normal-Samples (Op 17), Normal-Blend (Op 16), Normal-Importrolle,
+  getrennte Farb-/Normal-Nutzung derselben Datei, lineare Mix-Masken und UV-Steuertexturen.
+  Kontextunabhängige Knoten behalten eine Instruktion und damit eindeutige Script-Aliase.
+- Berechnete Normalen sind kodiertes Tangentenraum-RGB. Das Ergebnis (+1) liegt in der zuvor
+  freien Komponente `graphUV[7].z`; keine Änderung des Constant-Buffer-Layouts. HLSL-/GLSL-
+  Interpreter und PBR/Forward+/Legacy-Lit verwenden es auch ohne direkte Normal-Textur.
+  Samples rekonstruieren Z aus XY (RGB/BC5) und gleichen ihre UV-Rahmen vor dem Mischen ab.
+- Editor und krom.h-Runtime laden die Graph-Normalen als `NormalMap`; Runtime setzt die
+  Gesamt-Normalstärke auch ohne direkte Textur. Das bestehende Limit von 16 Instruktionen und
+  vier Textur-/UV-Slots bleibt erhalten.
+- Geprüft: Debug-Build `out/build/normal-blend` für `krom_tests`, Editor DX11/Vulkan/OpenGL
+  sowie `engine_krom_wrapper_win32`; vollständiger Testlauf auch nach den abschließenden
+  Script-Alias-/Runtime-Stärke-Korrekturen erfolgreich. Neue Tests
+  prüfen Dateirundlauf, Editor-Verbindungen, CB-Bindung, Farb-/Normal-Wiederverwendung,
+  Masken, Script-Aliase und Zyklen. WARP führt die echten HLSL-Funktionen sowie einen
+  Fragmentshader mit Texturen aus (flache/abgeschaltete Ebenen, RNM, unabhängige und
+  gespiegelte UVs). DX11-/Vulkan-Shader-Varianten und fünf GLSL-Fragmentshader kompilieren.
+- Nicht manuell geprüft: Bedienung/Bild im geöffneten Editor und ein exportiertes Spiel.
+
 ## Render quality levels (Claude, 2026-11-19)
 
 - Branch `claude/admiring-cannon-fdd311`, fast-forwarded to `main` (909900d) first. Step 7 of

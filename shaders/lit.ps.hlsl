@@ -95,15 +95,28 @@ float3 SafeNormalize(float3 v)
     return (len2 > 1e-12f) ? (v * rsqrt(len2)) : float3(0.0f, 0.0f, 1.0f);
 }
 
+#include "pbr_material_graph.hlsl"
+
 float3 SampleNormal(float2 uv, float3 baseNormalWS, float4 tangentWS, float3 positionWS)
 {
     float3 result = baseNormalWS;
+#if defined(KROM_NORMAL_MAP) || defined(KROM_MATERIAL_GRAPH)
+    float3 mapN;
+#ifdef KROM_MATERIAL_GRAPH
+    if (KromGraphHasNormal())
+        mapN = KromGraphNormalStrength(KromGraphNormal(), normalStrength);
+    else
+#endif
+    {
 #ifdef KROM_NORMAL_MAP
-    float3 mapN = normalMap.Sample(sLinear, uv).xyz * 2.0f - 1.0f;
-    mapN = SafeNormalize(mapN);
-    mapN.xy *= normalStrength;
-    mapN.z = sqrt(saturate(1.0f - dot(mapN.xy, mapN.xy)));
-    mapN = SafeNormalize(mapN);
+        mapN = SafeNormalize(normalMap.Sample(sLinear, uv).xyz * 2.0f - 1.0f);
+        mapN.xy *= normalStrength;
+        mapN.z = sqrt(saturate(1.0f - dot(mapN.xy, mapN.xy)));
+        mapN = SafeNormalize(mapN);
+#else
+        return baseNormalWS;
+#endif
+    }
 
     float3 T = tangentWS.xyz;
     float tLen2 = dot(T, T);
@@ -302,7 +315,6 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
     return result;
 }
 
-#include "pbr_material_graph.hlsl"
 
 #ifdef KROM_DEPTH_PREPASS
 void main(PSInput IN)

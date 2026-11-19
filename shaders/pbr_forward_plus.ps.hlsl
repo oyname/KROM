@@ -226,14 +226,28 @@ float3 SampleDecodedNormal(Texture2D normalTex, SamplerState samp, float2 uv)
 #endif
 }
 
+#include "pbr_material_graph.hlsl"
+
 float3 SampleNormal(float2 uv, float3 baseNormalWS, float4 tangentWS, float3 positionWS)
 {
     float3 result = baseNormalWS;
+#if defined(KROM_NORMAL_MAP) || defined(KROM_MATERIAL_GRAPH)
+    float3 mapN;
+#ifdef KROM_MATERIAL_GRAPH
+    if (KromGraphHasNormal())
+        mapN = KromGraphNormalStrength(KromGraphNormal(), normalStrength);
+    else
+#endif
+    {
 #ifdef KROM_NORMAL_MAP
-    float3 mapN = SafeNormalize(SampleDecodedNormal(normal, sLinear, uv));
-    mapN.xy *= normalStrength;
-    mapN.z = sqrt(saturate(1.0f - dot(mapN.xy, mapN.xy)));
-    mapN = SafeNormalize(mapN);
+        mapN = SafeNormalize(SampleDecodedNormal(normal, sLinear, uv));
+        mapN.xy *= normalStrength;
+        mapN.z = sqrt(saturate(1.0f - dot(mapN.xy, mapN.xy)));
+        mapN = SafeNormalize(mapN);
+#else
+        return baseNormalWS;
+#endif
+    }
 
     float3 T = tangentWS.xyz;
     float tLen2 = dot(T, T);
@@ -544,7 +558,6 @@ uint2 ComputeTileCoord(float2 pixelPos)
 
 #include "pbr_local_probe.hlsl"
 
-#include "pbr_material_graph.hlsl"
 #include "pbr_ssr_output.hlsl"
 
 // GTAO multi-bounce fit (Jimenez et al. 2016): visibility and albedo to the

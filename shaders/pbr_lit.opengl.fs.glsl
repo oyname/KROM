@@ -190,13 +190,27 @@ vec3 SampleDecodedNormal(sampler2D normalTex, vec2 uv)
 #endif
 }
 
+#include "pbr_material_graph.opengl.glsl"
+
 vec3 SampleNormal(vec2 uv, vec3 baseNormalWS, vec4 tangentWS, vec3 positionWS)
 {
+#if defined(KROM_NORMAL_MAP) || defined(KROM_MATERIAL_GRAPH)
+    vec3 mapN;
+#ifdef KROM_MATERIAL_GRAPH
+    if (KromGraphHasNormal())
+        mapN = KromGraphNormalStrength(KromGraphNormal(), normalStrength);
+    else
+#endif
+    {
 #ifdef KROM_NORMAL_MAP
-    vec3 mapN = SafeNormalize(SampleDecodedNormal(normal, uv));
-    mapN.xy *= normalStrength;
-    mapN.z = sqrt(clamp(1.0 - dot(mapN.xy, mapN.xy), 0.0, 1.0));
-    mapN = SafeNormalize(mapN);
+        mapN = SafeNormalize(SampleDecodedNormal(normal, uv));
+        mapN.xy *= normalStrength;
+        mapN.z = sqrt(clamp(1.0 - dot(mapN.xy, mapN.xy), 0.0, 1.0));
+        mapN = SafeNormalize(mapN);
+#else
+        return baseNormalWS;
+#endif
+    }
 
     vec3 T = tangentWS.xyz;
     float tLen2 = dot(T, T);
@@ -499,7 +513,6 @@ vec3 SamplePrefilteredIBL(vec3 R, float roughness)
 #include "pbr_local_probe.opengl.glsl"
 #endif
 
-#include "pbr_material_graph.opengl.glsl"
 
 void main()
 {

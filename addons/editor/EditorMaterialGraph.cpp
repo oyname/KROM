@@ -53,7 +53,7 @@ struct MaterialInput
 
 constexpr MaterialInput kMaterialInputs[] = {
     {&MaterialGraph::baseColor, "material.base_color", {}, &MaterialAsset::baseColorTexture},
-    {&MaterialGraph::normal, "material.graph_normal", MaterialNodeType::Texture, &MaterialAsset::normalTexture},
+    {&MaterialGraph::normal, "material.graph_normal", {}, &MaterialAsset::normalTexture},
     {&MaterialGraph::orm, "material.graph_orm", MaterialNodeType::Texture, &MaterialAsset::metallicRoughnessTexture},
     {&MaterialGraph::emissive, "material.emissive", {}, &MaterialAsset::emissiveTexture},
     {&MaterialGraph::emissiveStrength, "material.emissive_strength", MaterialNodeType::Value, nullptr,
@@ -194,6 +194,7 @@ const char* NodeLabel(MaterialNodeType type)
     case MaterialNodeType::Value: return Translate("material.graph_value");
     case MaterialNodeType::Color: return Translate("material.graph_color");
     case MaterialNodeType::Mix: return Translate("material.graph_mix");
+    case MaterialNodeType::NormalBlend: return Translate("material.graph_normal_blend");
     case MaterialNodeType::Separate: return Translate("material.graph_separate");
     case MaterialNodeType::Time: return Translate("material.graph_time");
     case MaterialNodeType::UV: return Translate("material.graph_uv");
@@ -705,7 +706,7 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
                 (IsMath(node.type) && InputCount(node.type) == 1 && node.type != MaterialNodeType::Remap);
             const float height = step * (oneInputRow || node.type == MaterialNodeType::Parameter ||
                                          node.type == MaterialNodeType::Position ? 3.15f
-                : IsMath(node.type) || node.type == MaterialNodeType::Mix ? 4.15f
+                : IsMath(node.type) || node.type == MaterialNodeType::Mix || node.type == MaterialNodeType::NormalBlend ? 4.15f
                 : node.type == MaterialNodeType::Texture ? (custom ? 2.9f : 5.85f) : 2.15f);
             cardHovered |= ImGui::IsMouseHoveringRect(At(pos, -Z(5.f), 0.f), At(pos, kNodeWidth + Z(5.f), height));
             DrawFrame(pos, height);
@@ -875,6 +876,16 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
                     float& ownValue = i == 0 ? node.value.x : i == 1 ? node.value.y : node.value.z;
                     if (input != previousInput && input != 0)
                         ownValue = 1.f; // A new link starts at full strength.
+                    if (node.type == MaterialNodeType::NormalBlend)
+                    {
+                        ImGui::SetCursorScreenPos(field);
+                        ImGui::SetNextItemWidth(kNodeWidth - 5.f * kInset);
+                        changed = ImGui::DragFloat(Translate(i == 0 ? "material.graph_normal_base" : "material.graph_normal_detail"),
+                            &ownValue, 0.01f, 0.f, 4.f, "%.3f", ImGuiSliderFlags_AlwaysClamp) || changed;
+                        ImGui::SetItemTooltip("%s", Translate("material.graph_normal_blend_tip"));
+                        ImGui::PopID();
+                        continue;
+                    }
                     const bool mask = i == 2;
                     const char* name = mask ? Translate("material.graph_mix_factor") : i == 0 ? "A" : "B";
                     ImGui::SetCursorScreenPos(field);
@@ -1054,7 +1065,7 @@ bool DrawMaterialGraph(EditorFrameContext& ctx, MaterialAsset& asset,
             constexpr MaterialNodeType types[] = {
                 MaterialNodeType::Texture, MaterialNodeType::Value, MaterialNodeType::Color, MaterialNodeType::Multiply,
                 MaterialNodeType::Mix, MaterialNodeType::Separate, MaterialNodeType::Time, MaterialNodeType::Parameter,
-                MaterialNodeType::UV, MaterialNodeType::Position, MaterialNodeType::Vector2,
+                MaterialNodeType::UV, MaterialNodeType::Position, MaterialNodeType::Vector2, MaterialNodeType::NormalBlend,
             };
             const char* labels[IM_ARRAYSIZE(types)];
             for (int i = 0; i < IM_ARRAYSIZE(types); ++i)

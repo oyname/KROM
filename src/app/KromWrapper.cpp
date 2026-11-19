@@ -582,6 +582,7 @@ void ApplyRuntimeMaterialGraph(State& state, engine::MaterialHandle material,
     std::array<engine::TextureHandle, engine::assets::kMaterialGraphMaxTextures> textures{};
     for (size_t i = 0; i < textures.size(); ++i)
         textures[i] = LoadRuntimeTexture(state, graph.textures[i],
+                                         graph.textureNormal[i] ? engine::assets::TextureLoadRole::NormalMap :
                                          graph.textureLinear[i] ? engine::assets::TextureLoadRole::LinearData
                                                                 : engine::assets::TextureLoadRole::Auto);
     engine::renderer::SetMaterialGraph(state.materialSystem, material, graph, textures, asset.uvScale, asset.uvOffset);
@@ -1132,6 +1133,8 @@ engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(State& state,
         state.materialSystem.SetVec4(material, "emissiveFactor", {emissiveFactor.x, emissiveFactor.y, emissiveFactor.z, 0.f});
         state.materialSystem.SetVec2(material, "uvScale", asset.uvScale);
         state.materialSystem.SetVec2(material, "uvOffset", asset.uvOffset);
+        // Computed graph normals have no direct normal texture for the builder to set this from.
+        state.materialSystem.SetFloat(material, "normalStrength", asset.PbrNormalStrength());
         state.materialSystem.SetFloat(material, "boxTileSize", asset.BoxProjectionTileSize());
         if (graph.Active())
         {

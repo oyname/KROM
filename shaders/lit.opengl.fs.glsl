@@ -85,13 +85,27 @@ vec3 SafeNormalize(vec3 v)
     return (len2 > 1e-12) ? (v * inversesqrt(len2)) : vec3(0.0, 0.0, 1.0);
 }
 
+#include "pbr_material_graph.opengl.glsl"
+
 vec3 SampleNormal(vec2 uv, vec3 baseNormalWS, vec4 tangentWS, vec3 positionWS)
 {
+#if defined(KROM_NORMAL_MAP) || defined(KROM_MATERIAL_GRAPH)
+    vec3 mapN;
+#ifdef KROM_MATERIAL_GRAPH
+    if (KromGraphHasNormal())
+        mapN = KromGraphNormalStrength(KromGraphNormal(), normalStrength);
+    else
+#endif
+    {
 #ifdef KROM_NORMAL_MAP
-    vec3 mapN = SafeNormalize(texture(normalMap, uv).xyz * 2.0 - 1.0);
-    mapN.xy *= normalStrength;
-    mapN.z = sqrt(clamp(1.0 - dot(mapN.xy, mapN.xy), 0.0, 1.0));
-    mapN = SafeNormalize(mapN);
+        mapN = SafeNormalize(texture(normalMap, uv).xyz * 2.0 - 1.0);
+        mapN.xy *= normalStrength;
+        mapN.z = sqrt(clamp(1.0 - dot(mapN.xy, mapN.xy), 0.0, 1.0));
+        mapN = SafeNormalize(mapN);
+#else
+        return baseNormalWS;
+#endif
+    }
 
     vec3 T = tangentWS.xyz;
     float tLen2 = dot(T, T);
@@ -245,7 +259,6 @@ float SampleShadowAtlas(vec4 positionLightCS, float biasValue, float strengthVal
     return mix(1.0, visibility, clamp(strengthValue, 0.0, 1.0));
 }
 
-#include "pbr_material_graph.opengl.glsl"
 
 void main()
 {
