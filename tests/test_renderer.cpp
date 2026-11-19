@@ -25,6 +25,7 @@
 #include "addons/outline/OutlinePass.hpp"
 #include "addons/forward/ForwardTonemap.hpp"
 #include "addons/forward/ForwardShading.hpp"
+#include "addons/forward/ForwardSmaa.hpp"
 #include "addons/gtao/GtaoPass.hpp"
 #include "addons/contact_shadow/ContactShadowFeature.hpp"
 #include "addons/shadow/ShadowFeature.hpp"
@@ -1092,6 +1093,185 @@ static void TestStandardFrameRecipe(test::TestContext& ctx)
     CHECK(ctx, present != nullptr);
     CHECK_EQ(ctx, present->executorName, std::string(StandardFrameExecutors::Present));
     CHECK(ctx, !present->renderPass.enabled);
+}
+
+// Post-AA: the tonemap pass writes "Tonemapped", the PostAA pass reads it and
+// takes over the former tonemap target (backbuffer or editor scene view).
+static void TestPostAARecipe(test::TestContext& ctx)
+{
+    using namespace engine::renderer::addons::forward;
+    PostAAMode mode = PostAAMode::Off;
+    CHECK(ctx, ParsePostAAMode("fxaa", mode));
+    CHECK_EQ(ctx, mode, PostAAMode::Fxaa);
+    CHECK(ctx, ParsePostAAMode("smaa", mode));
+    CHECK_EQ(ctx, mode, PostAAMode::Smaa);
+    CHECK(ctx, !ParsePostAAMode("taa", mode));
+    CHECK_EQ(ctx, mode, PostAAMode::Smaa);   // unknown name leaves the value alone
+    CHECK_EQ(ctx, std::string(PostAAModeName(PostAAMode::Off)), std::string("off"));
+    CHECK_EQ(ctx, std::string(PostAAModeName(PostAAMode::Smaa)), std::string("smaa"));
+
+    for (const bool sceneOutput : { false, true })
+    {
+        StandardFrameRecipeBuilder::BuildParams params{};
+        params.viewportWidth = 800u;
+        params.viewportHeight = 600u;
+        params.uiEnabled = true;
+        if (sceneOutput)
+        {
+            params.sceneOutputRT = RenderTargetHandle::Make(7u, 1u);
+            params.backbufferWidth = 1024u;
+            params.backbufferHeight = 768u;
+        }
+        const FrameRecipe plain = StandardFrameRecipeBuilder::BuildRecipe(params);
+        params.postAAEnabled = true;
+        params.postAAFormat = Format::BGRA8_UNORM_SRGB;
+        const FrameRecipe recipe = StandardFrameRecipeBuilder::BuildRecipe(params);
+        CHECK_EQ(ctx, recipe.passes.size(), plain.passes.size() + 1u);
+        CHECK_EQ(ctx, recipe.resources.size(), plain.resources.size() + 1u);
+
+        const std::string target = sceneOutput ? std::string(StandardFrameRecipeBuilder::kEditorSceneViewResource)
+                                               : std::string("Backbuffer");
+        const FrameRecipePassDesc* plainTonemap = FindRecipePass(plain, "TonemapPass");
+        CHECK(ctx, plainTonemap != nullptr && plainTonemap->renderPass.targetResourceName == target);
+
+        const FrameRecipePassDesc* tonemap = FindRecipePass(recipe, "TonemapPass");
+        const FrameRecipePassDesc* postAA = FindRecipePass(recipe, "PostAAPass");
+        CHECK(ctx, tonemap != nullptr);
+        CHECK(ctx, postAA != nullptr);
+        if (!tonemap || !postAA)
+            continue;
+        CHECK_EQ(ctx, tonemap->renderPass.targetResourceName, std::string("Tonemapped"));
+        CHECK_EQ(ctx, postAA->executorName, std::string(StandardFrameExecutors::PostAA));
+        CHECK_EQ(ctx, postAA->renderPass.targetResourceName, target);
+        CHECK_EQ(ctx, postAA->renderPass.viewportWidth, 800u);
+        CHECK(ctx, postAA->renderPass.clearColor);
+        bool readsTonemapped = false;
+        for (const FrameRecipeResourceAccess& access : postAA->accesses)
+            readsTonemapped |= access.resourceName == "Tonemapped" && access.access == FrameRecipeAccessKind::ReadTexture;
+        CHECK(ctx, readsTonemapped);
+
+        const FrameRecipeResourceDesc* tonemapped = nullptr;
+        for (const FrameRecipeResourceDesc& res : recipe.resources)
+            if (res.name == "Tonemapped")
+                tonemapped = &res;
+        CHECK(ctx, tonemapped != nullptr);
+        if (tonemapped)
+        {
+            CHECK_EQ(ctx, tonemapped->format, Format::BGRA8_UNORM_SRGB);
+            CHECK_EQ(ctx, tonemapped->width, 800u);
+            CHECK_EQ(ctx, tonemapped->height, 600u);
+        }
+
+        // Tonemap before PostAA before UI.
+        size_t tonemapIndex = 0u, postAAIndex = 0u, uiIndex = 0u;
+        for (size_t i = 0; i < recipe.passes.size(); ++i)
+        {
+            if (recipe.passes[i].name == "TonemapPass") tonemapIndex = i;
+            if (recipe.passes[i].name == "PostAAPass")  postAAIndex = i;
+            if (recipe.passes[i].name == "UIPass")      uiIndex = i;
+        }
+        CHECK(ctx, tonemapIndex < postAAIndex);
+        CHECK(ctx, postAAIndex < uiIndex);
+
+        // SMAA: edge and weight passes between tonemap and PostAA (neighborhood blending).
+        params.postAASmaa = true;
+        const FrameRecipe smaa = StandardFrameRecipeBuilder::BuildRecipe(params);
+        CHECK_EQ(ctx, smaa.passes.size(), plain.passes.size() + 3u);
+        CHECK_EQ(ctx, smaa.resources.size(), plain.resources.size() + 3u);
+        const auto findResource = [&smaa](const char* name) -> const FrameRecipeResourceDesc* {
+            for (const FrameRecipeResourceDesc& res : smaa.resources)
+                if (res.name == name)
+                    return &res;
+            return nullptr;
+        };
+        const FrameRecipeResourceDesc* edgesRes = findResource("SmaaEdges");
+        const FrameRecipeResourceDesc* weightsRes = findResource("SmaaWeights");
+        CHECK(ctx, edgesRes != nullptr && edgesRes->format == Format::RG8_UNORM && edgesRes->width == 800u);
+        CHECK(ctx, weightsRes != nullptr && weightsRes->format == Format::RGBA8_UNORM && weightsRes->height == 600u);
+        CHECK(ctx, findResource("Tonemapped") != nullptr);
+
+        const auto accesses = [](const FrameRecipePassDesc* pass, const char* resource, FrameRecipeAccessKind kind) {
+            if (!pass)
+                return false;
+            for (const FrameRecipeResourceAccess& access : pass->accesses)
+                if (access.resourceName == resource && access.access == kind)
+                    return true;
+            return false;
+        };
+        const FrameRecipePassDesc* edgePass = FindRecipePass(smaa, "SmaaEdgePass");
+        const FrameRecipePassDesc* weightPass = FindRecipePass(smaa, "SmaaWeightPass");
+        const FrameRecipePassDesc* blendPass = FindRecipePass(smaa, "PostAAPass");
+        CHECK(ctx, edgePass != nullptr && weightPass != nullptr && blendPass != nullptr);
+        if (!edgePass || !weightPass || !blendPass)
+            continue;
+        CHECK_EQ(ctx, edgePass->executorName, std::string(StandardFrameExecutors::SmaaEdges));
+        CHECK_EQ(ctx, weightPass->executorName, std::string(StandardFrameExecutors::SmaaWeights));
+        CHECK_EQ(ctx, blendPass->executorName, std::string(StandardFrameExecutors::PostAA));
+        CHECK(ctx, accesses(edgePass, "Tonemapped", FrameRecipeAccessKind::ReadTexture));
+        CHECK_EQ(ctx, edgePass->renderPass.targetResourceName, std::string("SmaaEdges"));
+        CHECK(ctx, edgePass->renderPass.clearColor);
+        CHECK(ctx, edgePass->renderPass.clearColorValue == (std::array<float, 4>{ 0.f, 0.f, 0.f, 0.f }));
+        CHECK(ctx, accesses(weightPass, "SmaaEdges", FrameRecipeAccessKind::ReadTexture));
+        CHECK_EQ(ctx, weightPass->renderPass.targetResourceName, std::string("SmaaWeights"));
+        CHECK(ctx, weightPass->renderPass.clearColor);
+        CHECK(ctx, accesses(blendPass, "Tonemapped", FrameRecipeAccessKind::ReadTexture));
+        CHECK(ctx, accesses(blendPass, "SmaaWeights", FrameRecipeAccessKind::ReadTexture));
+        CHECK_EQ(ctx, blendPass->renderPass.targetResourceName, target);
+        const FrameRecipePassDesc* smaaTonemap = FindRecipePass(smaa, "TonemapPass");
+        CHECK(ctx, smaaTonemap != nullptr && smaaTonemap->renderPass.targetResourceName == "Tonemapped");
+
+        size_t order[5] = {};
+        const char* names[5] = { "TonemapPass", "SmaaEdgePass", "SmaaWeightPass", "PostAAPass", "UIPass" };
+        for (size_t i = 0; i < smaa.passes.size(); ++i)
+            for (size_t n = 0; n < 5u; ++n)
+                if (smaa.passes[i].name == names[n])
+                    order[n] = i;
+        for (size_t n = 1; n < 5u; ++n)
+            CHECK(ctx, order[n - 1u] < order[n]);
+    }
+}
+
+// SMAA 1x: the three pixel shaders compile for DX11 (FXC) and Vulkan (SPIR-V),
+// and the lookup textures have the sizes of the official data.
+static void TestSmaaShadersAndLookupTextures(test::TestContext& ctx)
+{
+    namespace smaa = engine::renderer::addons::forward::smaa;
+    CHECK_EQ(ctx, smaa::AreaTexSize(), static_cast<size_t>(smaa::kAreaTexWidth * smaa::kAreaTexHeight * 2u));
+    CHECK_EQ(ctx, smaa::SearchTexSize(), static_cast<size_t>(smaa::kSearchTexWidth * smaa::kSearchTexHeight));
+    CHECK(ctx, smaa::AreaTexData() != nullptr && smaa::SearchTexData() != nullptr);
+
+    const struct { const char* name; const char* source; } shaders[] = {
+        { "SmaaEdgePS", smaa::kEdgeDetectionPsHlsl },
+        { "SmaaWeightPS", smaa::kBlendingWeightPsHlsl },
+        { "SmaaBlendPS", smaa::kNeighborhoodBlendingPsHlsl },
+    };
+    for (const auto& shader : shaders)
+    {
+        assets::ShaderAsset ps{};
+        ps.debugName = shader.name;
+        ps.stage = assets::ShaderStage::Fragment;
+        ps.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+        ps.entryPoint = "main";
+        ps.sourceCode = shader.source;
+        for (const assets::ShaderTargetProfile target : { assets::ShaderTargetProfile::DirectX11_SM5,
+                                                          assets::ShaderTargetProfile::Vulkan_SPIRV })
+        {
+            assets::CompiledShaderArtifact artifact{};
+            std::string error;
+            const bool compiled = ShaderCompiler::CompileForTarget(ps, target, artifact, &error);
+            if (!compiled && target == assets::ShaderTargetProfile::Vulkan_SPIRV
+                && error.find("dxc") != std::string::npos)
+            {
+                Debug::LogWarning("SMAA shader test: %s skipped for %s (%s)", shader.name,
+                                  ShaderCompiler::ToString(target), error.c_str());
+                continue;
+            }
+            if (!compiled)
+                Debug::LogError("SMAA shader test: %s (%s): %s", shader.name, ShaderCompiler::ToString(target), error.c_str());
+            CHECK(ctx, compiled);
+            CHECK(ctx, !artifact.bytecode.empty());
+        }
+    }
 }
 
 static void TestGtaoDepthPrepassRecipe(test::TestContext& ctx)
@@ -6109,6 +6289,8 @@ int RunRendererTests()
         .Add("PlatformRenderLoop",        TestPlatformRenderLoop)
         .Add("Recipe extra colour targets (MRT)", TestRecipeExtraColorTargets)
         .Add("GTAO depth prepass recipe", TestGtaoDepthPrepassRecipe)
+        .Add("Post-AA recipe", TestPostAARecipe)
+        .Add("SMAA shaders and lookup textures", TestSmaaShadersAndLookupTextures)
         .Add("Forward pipeline: opaque input enables depth prepass", TestForwardPipelineOpaqueInputEnablesDepthPrepass)
         .Add("Contact shadow pass recipe", TestContactShadowPassRecipe)
         .Add("GTAO depth pipeline states", TestGtaoDepthPipelineStates)

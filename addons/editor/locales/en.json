@@ -360,6 +360,8 @@
   "msaa.title": "Anti-Aliasing",
   "msaa.level": "MSAA",
   "msaa.off": "Off",
+  "msaa.post_aa": "Post-AA",
+  "msaa.post_aa_tip": "Anti-aliasing after tonemapping, in addition to MSAA. Also smooths edges inside textures and alpha-tested surfaces. FXAA is the cheapest but softens the image slightly. SMAA follows edge shapes more precisely and stays sharper at a slightly higher cost.",
   "settings.opengl_unavailable": "Not available under OpenGL. The setting is kept and applies under DX11 and Vulkan.",
   "ssr.title": "Screen-space reflections (SSR)",
   "ssr.enabled": "Enabled",

@@ -347,6 +347,9 @@ private:
         std::make_shared<renderer::addons::forward::TonemapSettings>();
     std::shared_ptr<renderer::addons::forward::MsaaSettings>     m_msaaSettings =
         std::make_shared<renderer::addons::forward::MsaaSettings>();
+    // Post-process AA after tonemapping; filled from EditorState::postAA.
+    std::shared_ptr<renderer::addons::forward::PostAASettings>   m_postAASettings =
+        std::make_shared<renderer::addons::forward::PostAASettings>();
     // BRDF options of the PBR shaders; filled from EditorState::shading.
     std::shared_ptr<renderer::addons::forward::ShadingSettings>  m_shadingSettings =
         std::make_shared<renderer::addons::forward::ShadingSettings>();
