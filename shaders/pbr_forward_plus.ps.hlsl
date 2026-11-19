@@ -271,6 +271,12 @@ float3 SampleNormal(float2 uv, float3 baseNormalWS, float4 tangentWS, float3 pos
         float3 T_raw = dp2perp * duv1.x + dp1perp * duv2.x;
         float3 B_raw = dp2perp * duv1.y + dp1perp * duv2.y;
 
+        // Remove the screen-derivative orientation before constructing the UV frame.
+        // Otherwise both axes can point backwards and turn bumps into cavities.
+        const float frameOrientation = dot(cross(dp1, dp2), baseNormalWS) < 0.0f ? -1.0f : 1.0f;
+        T_raw *= frameOrientation;
+        B_raw *= frameOrientation;
+
         const float derivTLen2 = dot(T_raw, T_raw);
         const float dpLen2 = max(dot(dp1, dp1), dot(dp2, dp2));
         const float uvLen2 = max(dot(duv1, duv1), dot(duv2, duv2));

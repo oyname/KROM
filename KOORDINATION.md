@@ -985,6 +985,46 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ## Befunde (Codex)
 
+### Korrektur: eingedrückte Normalmap bei Box-Projektion (2026-11-19)
+
+- **[P2, behoben] Abgeleitete Tangentenbasis kehrte beide Normalmap-Achsen um.**
+  Nutzer nennt `Block_copy` nach Umschalten auf Box-Projektion. Die aktuelle
+  Main-Datei verwendet `uvProjection box`, die Cobblestone-`_nor_dx_`-Textur
+  im Normal-Eingang des Graphen und Normal Strength 1,512.
+- Box-Projektion erzwingt die Ableitungsbasis (`pbr_lit.ps.hlsl:633`,
+  `pbr_forward_plus.ps.hlsl:618`). Deren `T_raw`/`B_raw`-Berechnung
+  (`pbr_lit.ps.hlsl:253` ff., `pbr_forward_plus.ps.hlsl:268` ff.) enthält
+  das Vorzeichen der Bildschirmorientierung
+  `dot(cross(ddx(positionWS), ddy(positionWS)), baseNormalWS)`, korrigiert es
+  aber nicht. Im kontrollierten frontseitigen DX11-Fall sind dadurch beide
+  Tangentenachsen gegenüber der UV-Richtung invertiert. Die spätere
+  Handedness-Korrektur korrigiert diese gemeinsame Umkehr nicht.
+- **GPU-Nachweis:** Die unveränderten echten `SampleNormal`-Funktionen beider
+  HLSL-PBR-Shader plus `pbr_box_projection.hlsl` wurden in einem isolierten
+  DX11-Pixelshader ausgeführt. Lineare konstante Normalmap, Stärke 1, dieselbe
+  UV-Ausrichtung; Vergleich Mesh-Tangenten gegen Box-Ableitungsbasis auf allen
+  sechs Achsenseiten. Beispiel +Z: Mesh `(0,512316; 0,256158; 0,819705)`,
+  Box `(-0,512316; -0,256158; 0,819705)`. Maximale Komponentendifferenz
+  1,02463 auf jeder Seite, in beiden Shadern. Damit unabhängig von Import,
+  Farbtextur und der erhöhten Stärke des Nutzermaterials reproduziert.
+- **Korrektur:** Beide Rohachsen werden vor der Normalisierung mit dem
+  Vorzeichen des obigen Skalarprodukts multipliziert, jetzt in den produktiven
+  Shadern `pbr_lit.ps.hlsl` und `pbr_forward_plus.ps.hlsl`. Mesh-Tangenten und
+  Normalmap-Import bleiben unverändert. OpenGL-Shader gemäß Freeze unverändert.
+- **GPU-Regression der produktiven Shader:** 72 Vergleiche (beide Shader,
+  sechs Achsenseiten, jeweils normale UVs, U/V/beide gespiegelt, nichtuniforme
+  Skalierung und umgekehrte Bildschirmorientierung). Alle bestanden; maximale
+  Mesh/Box-Abweichung 0, unter nichtuniformer Skalierung 5,96e-8. Gegenprobe
+  vor Korrektur 1,02463. Logs: `out/box-normal-*-fixed.log`.
+- **Weitere Validierung:** Alle 460 regulären Tests bestanden, einschließlich
+  Kompilierung der betroffenen Normalmap-/Graph-/SSR-Varianten für DX11 und
+  Vulkan/SPIR-V. Debug-Konfiguration ohne optionale Physik-/Audiomodule.
+  Log: `out/box-normal-fix-tests.log`. Kein Austausch der Nutzermaterialien
+  oder Normalmap-Texturen erforderlich.
+- Reproduktion: `out/box_normal_probe.cpp`, `out/*.probe.hlsl`;
+  Ergebnisse `out/box-normal-{current,candidate}.log` und
+  `out/box-normal-forward-plus-{current,candidate}.log`.
+
 ### Korrektur: Materialeditor beeinflusste Auto-Exposure der Szene (2026-11-19)
 
 - Nutzer meldet „Car“ dauerhaft zu dunkel und bestätigt die Kopplung an den
