@@ -158,7 +158,8 @@ bool FrameConstantStage::PrepareFrameData(const FrameConstantStageContext& conte
     std::memset(fc.featureParams, 0, sizeof(fc.featureParams));
     fc.nearPlane          = context.view.nearPlane;
     fc.farPlane           = context.view.farPlane;
-    fc.iblPrefilterLevels = static_cast<float>(kIBLPrefilterMipCount) - 1.0f;
+    // Pass the count; PBR shaders subtract one when mapping roughness to a mip index.
+    fc.iblPrefilterLevels = static_cast<float>(kIBLPrefilterMipCount);
     fc.shadowBias         = 0.f;
     fc.shadowNormalBias   = 0.f;
     fc.shadowStrength     = 1.f;

@@ -33,6 +33,7 @@
 #include "addons/shadow/ShadowFeature.hpp"
 #include "renderer/GpuPassProfiler.hpp"
 #include "renderer/FrameGraphStage.hpp"
+#include "renderer/IBLBaker.hpp"
 #include "renderer/RenderPipelineRecipe.hpp"
 #include "assets/VertexLayoutBridge.hpp"
 #include "renderer/MaterialSystem.hpp"
@@ -4063,6 +4064,8 @@ static void TestShadowFeatureExtractionAndFrameConstants(test::TestContext& ctx)
     CHECK(ctx, constantStage.PrepareFrameData(constantContext, frameResult));
 
     const FrameConstants& fc = frameResult.frameConstants;
+    // The shaders map roughness to [0, count - 1]; match the baker's mip count.
+    CHECK_EQ(ctx, fc.iblPrefilterLevels, static_cast<float>(IBLBakeParams{}.prefilterMipCount));
     CHECK_EQ(ctx, fc.featureCount0, 1u);
     CHECK_EQ(ctx, fc.shadowCascadeCount, 1u);
     CHECK(ctx, NearlyEqual(fc.shadowBias, shadowLight.shadowSettings.bias));

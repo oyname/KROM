@@ -985,6 +985,67 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ## Befunde (Codex)
 
+### Prüfung und Korrektur: Skybox-Reflexion bei Metallic = 0 (2026-11-19)
+
+- **[P2, behoben] Globale IBL-Roughness wählte eine zu scharfe Filterstufe.**
+  `src/renderer/FrameConstantStage.cpp:161` schrieb vor der Korrektur bereits
+  `kIBLPrefilterMipCount - 1` in `iblPrefilterLevels`. Die Verbraucher ziehen
+  nochmals 1 ab: `shaders/pbr_lit.ps.hlsl:542`,
+  `shaders/pbr_forward_plus.ps.hlsl:524` und
+  `shaders/pbr_lit.opengl.fs.glsl:493`. Bei sechs Mips und verschwindendem
+  Ableitungs-Bias erreicht Roughness = 1 daher nur Mip 4 statt Mip 5.
+  Der Baker ordnet Mips über `mip / (prefilterMipCount - 1)` zu
+  (`src/renderer/IBLBaker.cpp:695`); Mip 4 ist für Roughness = 0,8 gebacken.
+  Das lässt besonders raue Materialien die globale Skybox zu deutlich spiegeln.
+  Der Fehler betrifft die Filterbreite; eine pauschal zu hohe Lichtenergie ist
+  damit nicht nachgewiesen. Lokale Probes erhalten die tatsächliche Mip-Anzahl
+  separat und haben diese doppelte Subtraktion nicht.
+- **Konkrekte Korrektur:** In `FrameConstantStage.cpp` die tatsächliche Anzahl
+  `static_cast<float>(kIBLPrefilterMipCount)` übergeben; die Shader rechnen
+  bereits selbst in den höchsten Mip-Index um. Dazu den Frame-Konstantenpfad
+  gegen die tatsächliche Mip-Anzahl absichern und DX11/Vulkan visuell prüfen.
+  Kein neuer Intensitätsregler und keine Änderung des dielektrischen F0 nötig.
+- **Validierung:** Statische Prüfung aller drei Shader-Verbraucher und des
+  Bakers; aus den aktuellen Quellen abgeleitete Rechnung reproduziert für
+  Roughness 0 / 0,25 / 0,5 / 0,75 / 1 die gebackenen Filterrauheiten
+  0 / 0,2 / 0,4 / 0,6 / 0,8 (Ableitungs-Bias = 0). Noch kein Build oder
+  Bildvergleich; die betroffene Szene ist noch unbekannt.
+  Nutzer nennt Material `Weiss` und bestätigt die Beobachtung bei Roughness = 1.
+  Die hier gespeicherte `projects/DemoProject/Assets/Materials/Weiss.mat`
+  enthält noch Metallic = 0,19 und Roughness = 0,695, ohne Graph-Verbindungen
+  an diesen beiden Eingängen. Das belegt nicht die aktuellen Live-Werte im
+  Editor; die gespeicherte Datei reproduziert den beschriebenen 0/1-Test nicht.
+  Nachgereichte Screenshots bestätigen im Materialeditor Metallic = 0,
+  Roughness = 1, Normal Strength = 0 und ausschließlich einen Base-Color-Knoten;
+  auf der Vorschaukugel sind deutliche unregelmäßige Strukturen sichtbar.
+  `app/KromEditorApp.cpp:5015` ff. schaltet SSR und AO für diese Vorschau aus.
+  Der geprüfte Bindungspfad in `ShaderRuntimeMaterials.cpp` ordnet Irradiance
+  und Prefilter den vorgesehenen Texturen zu; kein zweiter Bindungsfehler
+  nachgewiesen. Das Bild allein trennt diffuse IBL-Artefakte, Probes und
+  spekulare Reflexion nicht. Der bestätigte Mip-Fehler ist daher noch kein
+  Nachweis der vollständigen Ursache dieses Bildes; nach seiner Korrektur
+  sind Diffuse/Specular/Probes getrennt zu vergleichen. Insbesondere tastet
+  `IBLBaker.cpp:465` ff. für diffuse Irradiance standardmäßig nur 64 Richtungen
+  aus der ungefilterten Umgebung ab (mögliche Unterabtastung, noch unbestätigt).
+- **Umsetzung auf ausdrücklichen Nutzerauftrag „korrgiere den Fehler“:**
+  `FrameConstantStage.cpp` übergibt jetzt die Mip-Anzahl ohne Subtraktion.
+  Der Vertrag ist an `FrameConstants::iblPrefilterLevels` dokumentiert.
+  `TestShadowFeatureExtractionAndFrameConstants` prüft die gepackte Anzahl
+  gegen `IBLBakeParams{}.prefilterMipCount` und deckt damit die ursprüngliche
+  Abweichung 5 statt 6 ab. F0, Materialdateien und Shaderformeln unverändert.
+  Ein visueller Nachweis für sämtliche Strukturen im Screenshot liegt noch
+  nicht vor.
+- **Validierung der Korrektur:** Eigenständiger MSVC-Debug-x64-Build unter
+  `out/ibl-build` mit `-j 4`, optionale Physik-/Audiomodule ausgeschaltet.
+  `krom_tests` und die Editoren `editor_scene_runtime_dx11`,
+  `editor_scene_runtime_vulkan`, `editor_scene_runtime_opengl` erfolgreich
+  gebaut. Alle 459 Tests in 19 Suiten bestanden, darunter Renderer 103/103
+  einschließlich der neuen Mip-Anzahl-Prüfung und DX11/SPIR-V-Shaderprüfungen.
+  Log: `out/ibl-tests-shortpath.log`. Der erste Lauf scheiterte in vier
+  Renderer-Tests am temporären DXC-Pfad mit Leerzeichen; mit dem kurzen
+  Windows-Pfad desselben Temp-Verzeichnisses komplett grün. `git diff --check`
+  ebenfalls ohne Befund. Kein Editor-Bildvergleich durchgeführt.
+
 ### Review: Qualitätsstufen (2026-11-19)
 
 Geprüft gegen `976021c`: der neueste Übergabepunkt „Render quality levels“,

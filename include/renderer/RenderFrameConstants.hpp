@@ -58,7 +58,7 @@ struct alignas(16) FrameConstants
     float    nearPlane;
     float    farPlane;
     std::byte featurePayload[kFrameFeaturePayloadBytes];
-    float    iblPrefilterLevels;
+    float    iblPrefilterLevels; // Prefilter mip count, not the highest mip index.
     float    shadowBias;
     float    shadowNormalBias;
     float    shadowStrength;
