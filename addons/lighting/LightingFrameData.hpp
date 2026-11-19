@@ -30,6 +30,7 @@ struct ExtractedLight
     float spotInner   = 0.f;
     float spotOuter   = 0.f;
     bool castShadows  = false;
+    bool contactShadows = false; // castShadows and ShadowSettings::contactShadows
 };
 
 struct LightingFrameData

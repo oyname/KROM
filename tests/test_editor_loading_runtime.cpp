@@ -1350,7 +1350,9 @@ struct EditorLoadingSmokeTest final : IAppScene
             camera.pitchDeg = std::asin(direction.y) * math::RAD_TO_DEG;
             gtaoOrbitCamera = camera;
             // KROM_CAPTURE_LIT=1: capture the lit view (e.g. specular AA) instead of the GTAO view.
-            state.editorDebugFlags = std::getenv("KROM_CAPTURE_LIT") ? 0u : renderer::DBG_VIEW_GTAO;
+            // KROM_CAPTURE_CONTACT=1: capture the contact shadow view (Shift+F3).
+            state.editorDebugFlags = std::getenv("KROM_CAPTURE_CONTACT") ? renderer::DBG_VIEW_CONTACT_SHADOW
+                                   : std::getenv("KROM_CAPTURE_LIT")     ? 0u : renderer::DBG_VIEW_GTAO;
         }
 
         const auto capture = [&](const char* file)
@@ -1851,6 +1853,7 @@ struct EditorLoadingSmokeTest final : IAppScene
         config.enableDebugLayer = perfProject.empty() || std::getenv("KROM_VALIDATION") != nullptr;
         config.enableForwardPlus = true;
         config.enableGtao = std::getenv("KROM_PERF_GTAO_OFF") == nullptr;
+        config.enableContactShadows = true;
         if (settingsUi) Debug::MinLevel = LogLevel::Error;
         Check(app.Initialize(config), "editor initialized");
         if (failures == 0)

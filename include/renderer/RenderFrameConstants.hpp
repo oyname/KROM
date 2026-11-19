@@ -38,6 +38,8 @@ enum DebugFlags : uint32_t
     DBG_VIEW_LINEAR_DEPTH  = 1u << 19,
     DBG_VIEW_GTAO          = 1u << 20,
     DBG_DISABLE_GTAO       = 1u << 21,
+    DBG_VIEW_CONTACT_SHADOW    = 1u << 22,
+    DBG_DISABLE_CONTACT_SHADOW = 1u << 23,
 };
 
 struct alignas(16) FrameConstants

@@ -47,6 +47,7 @@
 #include "addons/shadow/ShadowFeature.hpp"
 #include "addons/gtao/GtaoFeature.hpp"
 #include "addons/ssr/SsrFeature.hpp"
+#include "addons/contact_shadow/ContactShadowFeature.hpp"
 #include "addons/probes/ProbeComponents.hpp"
 #include "addons/probes/ProbeData.hpp"
 #include "addons/probes/ProbeFeature.hpp"
@@ -1796,6 +1797,14 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 return false;
             }
         }
+        if (config.enableContactShadows &&
+            config.backend != renderer::DeviceFactory::BackendType::OpenGL &&
+            !renderSystem.RegisterFeature(
+                renderer::addons::contact_shadow::CreateContactShadowFeature(&m_contactShadowResources)))
+        {
+            Debug::LogError("KromEditorApp: failed to register contact shadow feature");
+            return false;
+        }
         // SSR after GTAO: it adds to the scene composite GTAO creates.
         if (config.backend != renderer::DeviceFactory::BackendType::OpenGL &&
             !renderSystem.RegisterFeature(renderer::addons::ssr::CreateSsrFeature(&m_ssrResources)))
@@ -3177,8 +3186,10 @@ int KromEditorApp::Run(IAppScene& scene)
             {
                 if (input->KeyHit(platform::Key::F1))  setDebugView(0u);
                 if (input->KeyHit(platform::Key::F2))  setDebugView(renderer::DBG_VIEW_LINEAR_DEPTH);
-                if (input->KeyHit(platform::Key::F3))  setDebugView(renderer::DBG_VIEW_GTAO);
-                if (input->KeyHit(platform::Key::F4))  setDebugView(renderer::DBG_DISABLE_GTAO);
+                const bool shiftDown = input->KeyDown(platform::Key::LeftShift) || input->KeyDown(platform::Key::RightShift);
+                // Shift+F3/F4: the same for the contact shadows.
+                if (input->KeyHit(platform::Key::F3))  setDebugView(shiftDown ? renderer::DBG_VIEW_CONTACT_SHADOW : renderer::DBG_VIEW_GTAO);
+                if (input->KeyHit(platform::Key::F4))  setDebugView(shiftDown ? renderer::DBG_DISABLE_CONTACT_SHADOW : renderer::DBG_DISABLE_GTAO);
                 if (input->KeyHit(platform::Key::F5))  setDebugView(renderer::DBG_VIEW_NORMALS);
                 if (input->KeyHit(platform::Key::F6))  setDebugView(renderer::DBG_VIEW_AO);
                 if (input->KeyHit(platform::Key::F7))  setDebugView(renderer::DBG_VIEW_ROUGHNESS);
@@ -3755,6 +3766,7 @@ int KromEditorApp::Run(IAppScene& scene)
                     msaaDevice->GetShaderTargetProfile() != assets::ShaderTargetProfile::OpenGL_GLSL450;
             m_editorFrameCtx->gtaoAvailable = m_gtaoResources != nullptr;
             m_editorFrameCtx->ssrAvailable = m_ssrResources != nullptr;
+            m_editorFrameCtx->contactShadowAvailable = m_contactShadowResources != nullptr;
             m_editorFrameCtx->gpuPassTimings = m_renderLoop.GetRenderSystem().GetGpuPassTimings();
             m_editorFrameCtx->frameData =
                 m_renderLoop.GetRenderSystem().GetRenderSnapshot().GetFrameDataView();
@@ -6098,6 +6110,16 @@ void KromEditorApp::ApplyProjectRenderSettings()
     m_editorState.gtaoSettings.radius = rendering.gtaoRadius;
     m_editorState.gtaoSettings.intensity = rendering.gtaoIntensity;
     m_editorState.gtaoSettings.bias = rendering.gtaoBias;
+    // Contact shadows have no script API yet; the add-on takes the project values directly.
+    if (m_contactShadowResources)
+    {
+        renderer::addons::contact_shadow::ContactShadowSettings& cs = m_contactShadowResources->settings;
+        cs.enabled   = rendering.contactShadowsEnabled;
+        cs.length    = rendering.contactShadowLength;
+        cs.thickness = rendering.contactShadowThickness;
+        cs.intensity = rendering.contactShadowIntensity;
+        cs.steps     = rendering.contactShadowSteps;
+    }
 }
 
 namespace {

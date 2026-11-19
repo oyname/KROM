@@ -81,6 +81,7 @@ void ExtractLights(const ecs::World& world, renderer::RenderExtractionView extra
             light.spotInner = std::cos(lc.spotInnerDeg * math::DEG_TO_RAD);
             light.spotOuter = std::cos(lc.spotOuterDeg * math::DEG_TO_RAD);
             light.castShadows = lc.castShadows && lc.shadowSettings.enabled;
+            light.contactShadows = light.castShadows && lc.shadowSettings.contactShadows;
             lighting.lights.push_back(light);
         });
 
@@ -138,6 +139,7 @@ void ExtractLights(const renderer::SceneExtractionContext& context)
             light.spotInner = std::cos(lc.spotInnerDeg * math::DEG_TO_RAD);
             light.spotOuter = std::cos(lc.spotOuterDeg * math::DEG_TO_RAD);
             light.castShadows = lc.castShadows && lc.shadowSettings.enabled;
+            light.contactShadows = light.castShadows && lc.shadowSettings.contactShadows;
             lighting.lights.push_back(light);
         });
 

@@ -39,6 +39,9 @@ struct ShadowSettings
     // world units; directional lights: tangent of the angular size. Larger =
     // softer shadows away from the contact.
     float        lightSize    = 0.1f;
+    // Screen-space contact shadows (contact shadow add-on). Only the first
+    // directional light with shadows and this flag gets them.
+    bool         contactShadows = true;
 };
 
 namespace ShadowPresets {

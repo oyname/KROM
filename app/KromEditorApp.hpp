@@ -8,6 +8,7 @@
 #include "addons/particles/ParticleSystem.hpp"
 #include "addons/probes/ProbeBake.hpp"
 #include "addons/ssr/SsrPass.hpp"
+#include "addons/contact_shadow/ContactShadowPass.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/mesh_renderer/MeshBounds.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
@@ -60,6 +61,7 @@ struct KromEditorAppConfig
     std::array<float, 4> clearColor       = { 0.3f, 0.3f, 0.3f, 1.f };
     bool                 enableForwardPlus = false;
     bool                 enableGtao        = false;
+    bool                 enableContactShadows = false;
     uint32_t             maxShadowLights   = 16u;
     uint32_t             maxShadowViews    = 64u;
 
@@ -333,6 +335,7 @@ private:
     std::unique_ptr<renderer::addons::editor::EditorFrameContext> m_editorFrameCtx;
     std::shared_ptr<renderer::addons::gtao::GtaoGpuResources>    m_gtaoResources;
     std::shared_ptr<renderer::addons::ssr::SsrGpuResources>      m_ssrResources;
+    std::shared_ptr<renderer::addons::contact_shadow::ContactShadowGpuResources> m_contactShadowResources;
     // Reflection probes: runtime of the probe feature and the capture in flight.
     std::shared_ptr<engine::addons::probes::ProbeRuntime> m_probeRuntime;
     std::unique_ptr<engine::addons::probes::ProbeCapture> m_probeCapture;

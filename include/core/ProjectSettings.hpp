@@ -42,6 +42,13 @@ struct ProjectRenderSettings
     float gtaoRadius = 0.50f;      // world-space metres
     float gtaoIntensity = 0.65f;   // 0 = no AO
     float gtaoBias = 0.05f;        // horizon angle bias against self-occlusion
+    // Screen-space contact shadows of the main directional light (contact shadow
+    // add-on, not under OpenGL); defaults = ContactShadowSettings.
+    bool     contactShadowsEnabled = true;
+    float    contactShadowLength = 0.30f;     // world-space metres
+    float    contactShadowThickness = 0.05f;  // world-space metres
+    float    contactShadowIntensity = 1.0f;   // 0 = none
+    uint32_t contactShadowSteps = 12u;
 };
 
 struct ProjectSettings
@@ -96,6 +103,12 @@ inline void ReadRenderSettingKeys(const serialization::JsonValue& object, Projec
     number("gtaoRadius", out.gtaoRadius, 0.01f, 2.0f);
     number("gtaoIntensity", out.gtaoIntensity, 0.0f, 1.0f);
     number("gtaoBias", out.gtaoBias, 0.0f, 0.5f);
+    flag("contactShadowsEnabled", out.contactShadowsEnabled);
+    number("contactShadowLength", out.contactShadowLength, 0.02f, 2.0f);
+    number("contactShadowThickness", out.contactShadowThickness, 0.005f, 0.5f);
+    number("contactShadowIntensity", out.contactShadowIntensity, 0.0f, 1.0f);
+    if (const auto* v = object.Get("contactShadowSteps"); v && v->IsNumber() && std::isfinite(v->numVal))
+        out.contactShadowSteps = static_cast<uint32_t>(std::clamp(v->numVal, 4.0, 32.0));
 }
 
 // Render options from the "environment" block of a scene file written before
@@ -220,6 +233,11 @@ inline void WriteProjectSettings(serialization::JsonWriter& out, const ProjectSe
     out.WriteFloat("gtaoRadius", settings.rendering.gtaoRadius);
     out.WriteFloat("gtaoIntensity", settings.rendering.gtaoIntensity);
     out.WriteFloat("gtaoBias", settings.rendering.gtaoBias);
+    out.WriteBool("contactShadowsEnabled", settings.rendering.contactShadowsEnabled);
+    out.WriteFloat("contactShadowLength", settings.rendering.contactShadowLength);
+    out.WriteFloat("contactShadowThickness", settings.rendering.contactShadowThickness);
+    out.WriteFloat("contactShadowIntensity", settings.rendering.contactShadowIntensity);
+    out.WriteUint("contactShadowSteps", settings.rendering.contactShadowSteps);
     out.EndObject();
     out.EndObject();
 }

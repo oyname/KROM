@@ -153,6 +153,8 @@ struct GraphicsConfig
     bool enableDebugLayer = false;
     bool enableForwardPlus = true;
     bool enableGtao = true;
+    // Screen-space contact shadows of the main directional light (not under OpenGL).
+    bool enableContactShadows = true;
     uint32_t maxShadowLights = 16u;
     uint32_t maxShadowViews = 64u;
     bool resizable = true;

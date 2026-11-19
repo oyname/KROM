@@ -26,6 +26,7 @@
 #include "addons/forward/ForwardTonemap.hpp"
 #include "addons/forward/ForwardShading.hpp"
 #include "addons/gtao/GtaoPass.hpp"
+#include "addons/contact_shadow/ContactShadowFeature.hpp"
 #include "addons/shadow/ShadowFeature.hpp"
 #include "renderer/GpuPassProfiler.hpp"
 #include "renderer/FrameGraphStage.hpp"
@@ -1301,6 +1302,107 @@ static void TestForwardPipelineOpaqueInputEnablesDepthPrepass(test::TestContext&
                 return access.resource == input->id && access.mode == rendergraph::RGAccessMode::Read;
             });
         CHECK_EQ(ctx, opaqueReadsInput, c.expectPrepass);
+    }
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+// Contact shadows: main light selection, parameter block and the recipe the pass adds.
+static void TestContactShadowPassRecipe(test::TestContext& ctx)
+{
+    namespace cs = engine::renderer::addons::contact_shadow;
+    using engine::addons::lighting::ExtractedLight;
+    using engine::addons::lighting::ExtractedLightType;
+
+    // First directional light with shadows and the contact flag; its index = lights[] index.
+    std::vector<ExtractedLight> lights(4);
+    lights[0].type = ExtractedLightType::Point;       lights[0].castShadows = true; lights[0].contactShadows = true;
+    lights[1].type = ExtractedLightType::Directional; lights[1].castShadows = true; lights[1].contactShadows = false;
+    lights[2].type = ExtractedLightType::Directional; lights[2].castShadows = true; lights[2].contactShadows = true;
+    lights[3].type = ExtractedLightType::Directional; lights[3].castShadows = true; lights[3].contactShadows = true;
+    CHECK_EQ(ctx, cs::SelectContactShadowLight(lights), 2);
+    lights[2].contactShadows = false;
+    lights[3].contactShadows = false;
+    CHECK_EQ(ctx, cs::SelectContactShadowLight(lights), -1);
+    CHECK_EQ(ctx, cs::SelectContactShadowLight({}), -1);
+
+    // Slots 3 and 4 (pbr_lit/pbr_forward_plus read featureParams[3].w).
+    CHECK(ctx, IsFrameParameterBlockInRange(cs::kContactShadowFrameParameterBlock));
+    CHECK_EQ(ctx, cs::kContactShadowFrameParameterBlock.firstSlot, 3u);
+    CHECK_EQ(ctx, cs::kContactShadowFrameParameterBlock.slotCount, 2u);
+    CHECK_EQ(ctx, TexSlots::ContactShadow, 20u);
+    CHECK(ctx, TexSlots::ContactShadow < TexSlots::COUNT);
+    CHECK(ctx, BindingRegisterRanges::SRV(TexSlots::ContactShadow) < BindingRegisterRanges::SamplerBase);
+    {
+        FrameConstants fc{};
+        cs::ContactShadowFrameParams params{};
+        params.lightIndexPlusOne = 3u;
+        params.steps = 12u;
+        CHECK(ctx, WriteFrameParameterBlock(fc, cs::kContactShadowFrameParameterBlock, params));
+        uint32_t index = 0u, steps = 0u;
+        std::memcpy(&index, &fc.featureParams[3][3], sizeof(index));
+        std::memcpy(&steps, &fc.featureParams[4][3], sizeof(steps));
+        CHECK_EQ(ctx, index, 3u);
+        CHECK_EQ(ctx, steps, 12u);
+    }
+
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::renderer::addons::forward::CreateForwardFeature()));
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+    const IRenderPipeline* pipeline = registry.GetActiveRenderPipeline();
+    CHECK(ctx, pipeline != nullptr);
+    if (!pipeline)
+        return;
+
+    // Shaders are not compiled here; the recipe only needs the pass to be active.
+    auto resources = std::make_shared<cs::ContactShadowGpuResources>();
+    resources->initialized = true;
+    cs::ContactShadowPass pass(0xC057u, resources);
+
+    struct Case { bool enabled; bool prepassAllowed; bool expectPasses; };
+    for (const Case& c : { Case{ true, true, true }, Case{ true, false, false }, Case{ false, true, false } })
+    {
+        resources->settings.enabled = c.enabled;
+        rendergraph::RenderGraph renderGraph;
+        RenderQueue renderQueue{};
+        MaterialSystem materials;
+        FramePipelineCallbacks callbacks{};
+        auto runtimeBindings = std::make_shared<FrameGraphRuntimeBindings>();
+        const std::vector<const IPassContributor*> contributors{ &pass };
+        RenderPipelineBuildContext buildContext{
+            renderGraph, 800u, 600u,
+            RenderTargetHandle::Make(3u, 1u), TextureHandle::Make(3u, 1u), true,
+            renderQueue, shaderRuntime, materials,
+            BufferHandle::Invalid(), MaterialHandle::Invalid(), nullptr, nullptr,
+            callbacks, runtimeBindings, BackgroundMode::Skybox, true,
+            {0.3f, 0.3f, 0.3f, 1.f}, contributors
+        };
+        buildContext.enableDepthPrepass = c.prepassAllowed;
+        RenderPipelineBuildResult buildResult{};
+        CHECK(ctx, pipeline->Build(buildContext, buildResult));
+
+        const rendergraph::RGPass* depth = FindGraphPass(renderGraph, "DepthPrepass");
+        const rendergraph::RGPass* trace = FindGraphPass(renderGraph, "ContactShadowTrace");
+        const rendergraph::RGPass* blur = FindGraphPass(renderGraph, "ContactShadowBlur");
+        const rendergraph::RGPass* opaque = FindGraphPass(renderGraph, "MainOpaquePass");
+        CHECK_EQ(ctx, trace != nullptr, c.expectPasses);
+        CHECK_EQ(ctx, blur != nullptr, c.expectPasses);
+        CHECK_EQ(ctx, depth != nullptr, c.expectPasses);
+        CHECK(ctx, opaque != nullptr);
+        if (!opaque)
+            continue;
+        const rendergraph::RGResourceDesc* output = FindGraphResource(renderGraph, "ContactShadowOutput");
+        const bool opaqueReads = output && std::any_of(opaque->accesses.begin(), opaque->accesses.end(),
+            [output](const rendergraph::RGResourceAccess& access) {
+                return access.resource == output->id && access.mode == rendergraph::RGAccessMode::Read;
+            });
+        CHECK_EQ(ctx, opaqueReads, c.expectPasses);
     }
 
     registry.ShutdownAll(FeatureShutdownContext{});
@@ -6008,6 +6110,7 @@ int RunRendererTests()
         .Add("Recipe extra colour targets (MRT)", TestRecipeExtraColorTargets)
         .Add("GTAO depth prepass recipe", TestGtaoDepthPrepassRecipe)
         .Add("Forward pipeline: opaque input enables depth prepass", TestForwardPipelineOpaqueInputEnablesDepthPrepass)
+        .Add("Contact shadow pass recipe", TestContactShadowPassRecipe)
         .Add("GTAO depth pipeline states", TestGtaoDepthPipelineStates)
         .Add("Depth mask shader variants", TestDepthMaskShadersCompile)
         .Add("PBR shaders compile SSR output", TestPbrShadersCompileSsrOutput);
@@ -6762,7 +6865,7 @@ uniform sampler2D tAlbedo;
 layout(binding = 13) uniform sampler2D detailMap; // eigene Textur
 layout(location = 0, binding=14) uniform highp sampler2D secondMap;
 /* layout(binding = 15) uniform sampler2D commented; */
-layout(binding = 20) uniform sampler2D outOfRange;
+layout(binding = 21) uniform sampler2D outOfRange; // = TexSlots::COUNT
 void main() {}
 )";
     ReflectedTextureBindings glslBindings;

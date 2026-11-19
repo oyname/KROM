@@ -56,6 +56,7 @@ void WriteLightingFields(serialization::JsonWriter& w, const LightComponent& c)
     w.WriteUint("shadowCascadeCount", c.shadowSettings.cascadeCount);
     w.WriteFloat("shadowCascadeLambda", c.shadowSettings.cascadeLambda);
     w.WriteFloat("shadowLightSize", c.shadowSettings.lightSize);
+    w.WriteBool("contactShadows", c.shadowSettings.contactShadows);
 }
 
 LightComponent ReadLightingFields(const serialization::JsonValue& v)
@@ -81,6 +82,7 @@ LightComponent ReadLightingFields(const serialization::JsonValue& v)
     if (const auto* scl = v.Get("shadowCascadeLambda")) lc.shadowSettings.cascadeLambda = scl->AsFloat();
     if (const auto* sls = v.Get("shadowLightSize"))
         lc.shadowSettings.lightSize = std::clamp(sls->AsFloat(), kShadowLightSizeMin, kShadowLightSizeMax);
+    if (const auto* cs = v.Get("contactShadows")) lc.shadowSettings.contactShadows = cs->AsBool();
     SanitizeShadowSettings(lc);
     return lc;
 }

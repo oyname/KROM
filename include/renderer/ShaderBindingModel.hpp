@@ -88,7 +88,12 @@ struct TexSlots
     static constexpr uint32_t FeatureCubeArray = 18u;
     static constexpr uint32_t FeatureTexture   = 19u;
 
-    static constexpr uint32_t COUNT           = 20u;
+    // Screen-space contact shadows of the main light (contact shadow add-on,
+    // opaque pass only). t14/t15 are taken by the shadow buffers (BufSRVSlots)
+    // in Forward+, so this is the first free register.
+    static constexpr uint32_t ContactShadow    = 20u;
+
+    static constexpr uint32_t COUNT           = 21u;
 };
 
 // ---------------------------------------------------------------------------
@@ -155,7 +160,7 @@ struct BindingRegisterRanges
 
     static constexpr uint32_t ConstantBufferBase = 0u;
     static constexpr uint32_t ShaderResourceBase = 16u;
-    static constexpr uint32_t SamplerBase        = 40u; // Behind the 20 + 4 reserved texture bindings.
+    static constexpr uint32_t SamplerBase        = 40u; // Behind the 21 + 3 reserved texture bindings.
     static constexpr uint32_t UnorderedAccessBase= 48u;
     static constexpr uint32_t BufferSRVBase      = 64u;
 
