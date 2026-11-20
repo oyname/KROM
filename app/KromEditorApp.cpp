@@ -1445,6 +1445,7 @@ std::string BuildEditorEnvironmentJson(const renderer::addons::editor::EditorSta
     out += "  \"environment\":{\n";
     out += "    \"texturePath\":\"" + EscapeJsonString(state.environmentTexturePath) + "\",\n";
     out += "    \"enableIBL\":" + std::string(state.environmentEnableIBL ? "true" : "false") + ",\n";
+    out += "    \"removeSunFromLighting\":" + std::string(state.environmentRemoveSunFromLighting ? "true" : "false") + ",\n";
     out += "    \"showSkybox\":" + std::string(state.showSkyboxBackground ? "true" : "false") + ",\n";
     out += "    \"iblIntensity\":" + FloatJson(state.environmentIntensity) + ",\n";
     out += "    \"backgroundColor\":[" +
@@ -1543,6 +1544,7 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
         auto& state = ctx->state;
         state.environmentTexturePath.clear();
         state.environmentEnableIBL = false;
+        state.environmentRemoveSunFromLighting = true;
         state.showSkyboxBackground = false;
         state.backgroundColor = {0.f, 0.f, 0.f, 1.f};
         using EditorState = renderer::addons::editor::EditorState;
@@ -1561,6 +1563,7 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     ctx->state.tonemap.autoExposure = {};
     ctx->state.tonemap.grading = {};
     ctx->state.probeBakePasses = 2u;
+    ctx->state.environmentRemoveSunFromLighting = true;
     if (!env || !env->IsObject())
     {
         clearEnvironment();
@@ -1587,6 +1590,8 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
             ? EditorState::AmbientSource::Skybox
             : EditorState::AmbientSource::Color;
     }
+    if (const auto* removeSun = env->Get("removeSunFromLighting"); removeSun && removeSun->IsBool())
+        state.environmentRemoveSunFromLighting = removeSun->AsBool();
     if (const serialization::JsonValue* sky = env->Get("showSkybox");
         sky && sky->IsBool())
         state.showSkyboxBackground = sky->AsBool();
@@ -1619,7 +1624,8 @@ void ApplyEditorEnvironmentFromSceneJson(renderer::addons::editor::EditorFrameCo
     {
         (void)ctx->setEditorEnvironment(state.environmentTexturePath,
                                         state.environmentIntensity,
-                                        state.environmentEnableIBL);
+                                        state.environmentEnableIBL,
+                                        state.environmentRemoveSunFromLighting);
     }
     else if (ctx->clearEditorEnvironment)
     {
@@ -2562,7 +2568,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     m_editorFrameCtx->stopPlay = [this]() { StopEditorPlay(); };
     m_editorFrameCtx->setEditorEnvironment = [this](const std::string& path,
                                                     float intensity,
-                                                    bool enableIBL) {
+                                                    bool enableIBL, bool removeSunFromLighting) {
         if (!m_assetPipeline)
             return false;
 
@@ -2577,6 +2583,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         env.sourceTexture = sourceTexture;
         env.intensity = intensity;
         env.enableIBL = enableIBL;
+        env.removeSunFromLighting = removeSunFromLighting;
 
         renderer::RenderSystem& renderSystem = m_renderLoop.GetRenderSystem();
         const renderer::EnvironmentHandle nextEnvironment = renderSystem.CreateEnvironment(env);
@@ -6574,6 +6581,7 @@ void KromEditorApp::ApplyDefaultProjectEnvironment(const std::filesystem::path& 
     // Environment des vorherigen Projekts nicht in das neue übernehmen.
     state.environmentTexturePath.clear();
     state.environmentEnableIBL = false;
+    state.environmentRemoveSunFromLighting = true;
     state.showSkyboxBackground = false;
     state.ambientSource        = EditorState::AmbientSource::Color;
 
@@ -6601,7 +6609,8 @@ void KromEditorApp::ApplyDefaultProjectEnvironment(const std::filesystem::path& 
     if (m_editorFrameCtx->setEditorEnvironment)
         (void)m_editorFrameCtx->setEditorEnvironment(state.environmentTexturePath,
                                                      state.environmentIntensity,
-                                                     state.environmentEnableIBL);
+                                                     state.environmentEnableIBL,
+                                                     state.environmentRemoveSunFromLighting);
 }
 
 void KromEditorApp::RefreshSceneList()
@@ -7146,6 +7155,7 @@ struct KsceneEnvironment
 {
     std::string          texturePath;
     bool                 enableIBL = false;
+    bool                 removeSunFromLighting = true;
     float                iblIntensity = 1.f;
     std::array<float, 4> backgroundColor{0.f, 0.f, 0.f, 1.f};
     math::Vec3           ambientColor{0.06f, 0.06f, 0.08f};
@@ -7162,6 +7172,7 @@ static KsceneEnvironment EnvironmentFromEditorState(const renderer::addons::edit
     KsceneEnvironment env;
     env.texturePath      = state.environmentTexturePath;
     env.enableIBL        = state.environmentEnableIBL;
+    env.removeSunFromLighting = state.environmentRemoveSunFromLighting;
     env.iblIntensity     = state.environmentIntensity;
     for (size_t i = 0; i < 4; ++i) env.backgroundColor[i] = state.backgroundColor[i];
     env.ambientColor     = state.ambientColor;
@@ -7185,6 +7196,8 @@ static bool EnvironmentFromSceneJson(const serialization::JsonValue& root, Kscen
         out.texturePath = path->AsString();
     if (const auto* enable = env->Get("enableIBL"); enable && enable->IsBool())
         out.enableIBL = enable->AsBool();
+    if (const auto* removeSun = env->Get("removeSunFromLighting"); removeSun && removeSun->IsBool())
+        out.removeSunFromLighting = removeSun->AsBool();
     if (const auto* intensity = env->Get("iblIntensity"); intensity && intensity->IsNumber())
         out.iblIntensity = intensity->AsFloat();
     if (const auto* bg = env->Get("backgroundColor"); bg && bg->IsArray() && bg->arrayVal.size() >= 3u)
@@ -7208,6 +7221,7 @@ static void WriteKsceneEnvironment(serialization::JsonWriter& w, const KsceneEnv
     w.BeginObject("environment");
     w.WriteString("texturePath",  env.texturePath);
     w.WriteBool  ("enableIBL",    env.enableIBL);
+    w.WriteBool  ("removeSunFromLighting", env.removeSunFromLighting);
     w.WriteFloat ("iblIntensity", env.iblIntensity);
     w.BeginArray ("backgroundColor");
     for (float v : env.backgroundColor) w.WriteFloat("", v);

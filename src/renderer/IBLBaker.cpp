@@ -2,6 +2,8 @@
 #include "FloatConvert.hpp"
 #include "jobs/JobSystem.hpp"
 #include <algorithm>
+#include <array>
+#include <utility>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -320,66 +322,109 @@ namespace engine::renderer {
             return result;
         }
 
-        static void RemoveDominantSunHotspotForIBL(FloatImage& img) noexcept
+        // Exact solid angle of one equirectangular texel; unlike pixel counts,
+        // this also handles discs near the pole and sources of different sizes.
+        [[nodiscard]] static float SourceTexelSolidAngle(const FloatImage& image, uint32_t y) noexcept
         {
-            if (img.pixels.empty() || img.width == 0u || img.height == 0u)
-                return;
+            return (std::cos(kPi * static_cast<float>(y) / image.height)
+                  - std::cos(kPi * static_cast<float>(y + 1u) / image.height)) * kTwoPi / image.width;
+        }
 
-            float avgLum = 0.0f;
-            float maxLum = 0.0f;
-            for (const Float3& px : img.pixels)
+        static void RemoveDominantSunHotspotForIBL(FloatImage& image, const FloatImage& original,
+                                                  IBLBakeDiagnostics* diagnostics)
+        {
+            if (original.width < 2u || original.height < 2u || original.pixels.empty())
+                return;
+            // Median of the upper hemisphere, weighted by represented sky area.
+            // Detect on the original HDR: highlight compression can hide the peak.
+            std::vector<std::pair<float, float>> sky;
+            double skyArea = 0.0;
+            for (uint32_t y = 0u; y < original.height / 2u; ++y)
             {
-                const float lum = Luminance(px);
-                avgLum += lum;
-                maxLum = std::max(maxLum, lum);
+                const float area = SourceTexelSolidAngle(original, y);
+                for (uint32_t x = 0u; x < original.width; ++x)
+                    sky.emplace_back(Luminance(original.pixels[static_cast<size_t>(y) * original.width + x]), area);
+                skyArea += static_cast<double>(area) * original.width;
             }
-
-            avgLum /= static_cast<float>(img.pixels.size());
-            if (!(avgLum > 1e-6f) || maxLum <= avgLum * 8.0f)
-                return;
-
-            const float hotspotThreshold = std::max(avgLum * 4.0f, 1.0f);
-            std::vector<Float3> filtered = img.pixels;
-
-            for (uint32_t y = 0u; y < img.height; ++y)
+            std::sort(sky.begin(), sky.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
+            double cumulative = 0.0;
+            float median = 0.f;
+            for (const auto& [value, area] : sky)
             {
-                for (uint32_t x = 0u; x < img.width; ++x)
+                cumulative += area;
+                if (cumulative >= skyArea * .5) { median = value; break; }
+            }
+            const float threshold = std::max(median * 4.f, 1e-6f);
+            if (diagnostics)
+                diagnostics->skyMedianLuminance = median;
+            const float requiredPeak = std::max(median * 16.f, threshold * 2.f);
+            // At most a roughly 4.6-degree radius. Broad clouds/windows survive.
+            constexpr double maxSunSolidAngle = .02;
+            std::vector<uint8_t> visited(original.pixels.size(), 0u);
+            std::vector<size_t> best, component;
+            float bestPeak = requiredPeak;
+            double bestArea = 0.0;
+            auto neighbors = [&](size_t index) {
+                const size_t y = index / original.width, x = index % original.width;
+                return std::array<size_t, 4>{
+                    y * original.width + (x + original.width - 1u) % original.width,
+                    y * original.width + (x + 1u) % original.width,
+                    y ? index - original.width : (x + original.width / 2u) % original.width,
+                    y + 1u < original.height ? index + original.width
+                        : y * original.width + (x + original.width / 2u) % original.width};
+            };
+            for (size_t start = 0u; start < original.pixels.size(); ++start)
+            {
+                if (visited[start] || Luminance(original.pixels[start]) <= threshold)
+                    continue;
+                component.clear();
+                component.push_back(start);
+                visited[start] = 1u;
+                double area = 0.0;
+                float peak = 0.f;
+                size_t peakIndex = start;
+                for (size_t cursor = 0u; cursor < component.size(); ++cursor)
                 {
-                    const size_t idx = static_cast<size_t>(y) * img.width + x;
-                    const float lum = Luminance(img.pixels[idx]);
-                    if (lum <= hotspotThreshold)
-                        continue;
-
-                    Float3 localAvg{};
-                    uint32_t localCount = 0u;
-                    for (int oy = -4; oy <= 4; ++oy)
-                    {
-                        const uint32_t sy = static_cast<uint32_t>(std::clamp<int>(static_cast<int>(y) + oy, 0, static_cast<int>(img.height) - 1));
-                        for (int ox = -4; ox <= 4; ++ox)
+                    const size_t index = component[cursor];
+                    area += SourceTexelSolidAngle(original, static_cast<uint32_t>(index / original.width));
+                    const float lum = Luminance(original.pixels[index]);
+                    if (lum > peak) { peak = lum; peakIndex = index; }
+                    for (size_t neighbor : neighbors(index))
+                        if (!visited[neighbor] && Luminance(original.pixels[neighbor]) > threshold)
                         {
-                            const uint32_t sx = static_cast<uint32_t>((static_cast<int>(x) + ox + static_cast<int>(img.width)) % static_cast<int>(img.width));
-                            const Float3 sample = img.pixels[static_cast<size_t>(sy) * img.width + sx];
-                            if (Luminance(sample) > hotspotThreshold)
-                                continue;
-                            localAvg += sample;
-                            ++localCount;
+                            visited[neighbor] = 1u;
+                            component.push_back(neighbor);
                         }
-                    }
-
-                    Float3 replacement = img.pixels[idx];
-                    if (localCount > 0u)
-                        replacement = localAvg / static_cast<float>(localCount);
-
-                    const float targetLum = std::min(hotspotThreshold, lum);
-                    const float replacementLum = std::max(Luminance(replacement), 1e-6f);
-                    replacement *= targetLum / replacementLum;
-
-                    const float blend = std::clamp((lum - hotspotThreshold) / std::max(maxLum - hotspotThreshold, 1e-6f), 0.65f, 1.0f);
-                    filtered[idx] = Lerp(img.pixels[idx], replacement, blend);
+                }
+                if (peak >= bestPeak && area <= maxSunSolidAngle && peakIndex / original.width < original.height / 2u)
+                {
+                    bestPeak = peak;
+                    bestArea = area;
+                    best = component;
                 }
             }
-
-            img.pixels = std::move(filtered);
+            if (best.empty())
+                return;
+            Float3 boundary{};
+            double boundaryWeight = 0.0;
+            for (size_t index : best)
+                for (size_t neighbor : neighbors(index))
+                    if (Luminance(original.pixels[neighbor]) <= threshold)
+                    {
+                        const float weight = SourceTexelSolidAngle(original, static_cast<uint32_t>(neighbor / original.width));
+                        boundary += image.pixels[neighbor] * weight;
+                        boundaryWeight += weight;
+                    }
+            if (boundaryWeight <= 0.0)
+                return;
+            const Float3 replacement = boundary / static_cast<float>(boundaryWeight);
+            for (size_t index : best)
+                image.pixels[index] = replacement;
+            if (diagnostics)
+            {
+                diagnostics->removedSunPeakLuminance = bestPeak;
+                diagnostics->removedSunSolidAngle = bestArea;
+            }
         }
 
         // =====================================================================
@@ -747,7 +792,7 @@ namespace engine::renderer {
     // IBLBaker — public API
     // =========================================================================
 
-    uint64_t IBLBaker::HashTextureSource(const assets::TextureAsset& asset, float intensity) noexcept
+    uint64_t IBLBaker::HashTextureSource(const assets::TextureAsset& asset, float intensity, bool removeSunFromLighting) noexcept
     {
         uint64_t h = FNV1a(asset.pixelData.data(), asset.pixelData.size());
         h = FNV1a(&intensity,     sizeof(intensity),     h);
@@ -755,6 +800,8 @@ namespace engine::renderer {
         h = FNV1a(&asset.height,  sizeof(asset.height),  h);
         const auto fmt = static_cast<uint32_t>(asset.format);
         h = FNV1a(&fmt,           sizeof(fmt),           h);
+        const uint8_t removeSun = removeSunFromLighting ? 1u : 0u;
+        h = FNV1a(&removeSun, sizeof(removeSun), h);
         return h;
     }
 
@@ -764,6 +811,10 @@ namespace engine::renderer {
         // Never hashes raw struct bytes — padding-safe, layout-stable.
         constexpr uint64_t kSeed = 14695981039346656037ull;
         uint64_t h = kSeed;
+        // Distinguish sunless lighting from an intermediate version-8 bake that
+        // still used the visible sun disc for both cubes.
+        constexpr uint8_t kSunlessLightingRevision = 1u;
+        h = FNV1a(&kSunlessLightingRevision, sizeof(kSunlessLightingRevision), h);
 
         // Sky gradient colors
         h = FNV1aFloat(sky.zenithColor.x,  h); h = FNV1aFloat(sky.zenithColor.y,  h); h = FNV1aFloat(sky.zenithColor.z,  h);
@@ -798,6 +849,8 @@ namespace engine::renderer {
     {
         if (asset.pixelData.empty() || asset.width == 0u || asset.height == 0u)
             return {};
+        if (params.diagnostics)
+            *params.diagnostics = {};
         FloatImage source = DecodeAsset(asset);
         if (intensity != 1.f)
             for (Float3& px : source.pixels) px *= intensity;
@@ -807,9 +860,15 @@ namespace engine::renderer {
         CompressDominantHighlightsForIBL(source);
         if (params.diagnostics)
             params.diagnostics->compressed = MeasureSource(source, original);
-        RemoveDominantSunHotspotForIBL(source);
+        if (params.removeSunFromLighting)
+            RemoveDominantSunHotspotForIBL(source, original, params.diagnostics);
         if (params.diagnostics)
+        {
             params.diagnostics->lighting = MeasureSource(source, original);
+            const auto peak = std::max_element(original.pixels.begin(), original.pixels.end(),
+                [](const auto& a, const auto& b) { return Luminance(a) < Luminance(b); });
+            params.diagnostics->sourcePeakAfterFiltering = Luminance(source.pixels[peak - original.pixels.begin()]);
+        }
         return BakeFromSource(original, source, params);
     }
 

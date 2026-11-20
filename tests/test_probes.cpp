@@ -252,6 +252,9 @@ void TestPureSkyBakeMeasurements(test::TestContext& ctx)
     const auto baked = renderer::IBLBaker::BakeFromTexture(texture, 1.f, params);
     CHECK(ctx, baked.IsValid());
     if (!baked.IsValid()) return;
+    std::printf("# puresky sun: sky median %.6f, removed peak %.6f, solid angle %.9f sr, original peak now %.6f\n",
+        diagnostics.skyMedianLuminance, diagnostics.removedSunPeakLuminance,
+        diagnostics.removedSunSolidAngle, diagnostics.sourcePeakAfterFiltering);
     for (const auto& stage : {std::pair{"source", diagnostics.source},
                              std::pair{"compressed", diagnostics.compressed},
                              std::pair{"lighting", diagnostics.lighting}})
@@ -341,6 +344,52 @@ void TestProceduralSunOnlyInVisibleSky(test::TestContext& ctx)
     CHECK_GT(ctx, MaximumCubeChannel(sun.environmentData), 20.f);
     CHECK(ctx, sun.irradianceData == noSun.irradianceData);
     CHECK(ctx, sun.prefilterData == noSun.prefilterData);
+}
+
+void TestSunRemovalSwitchAndSkyRegions(test::TestContext& ctx)
+{
+    const auto source = SyntheticSunTexture(true);
+    auto params = SunTestParams();
+    const auto removed = renderer::IBLBaker::BakeFromTexture(source, 1.f, params);
+    params.removeSunFromLighting = false;
+    const auto kept = renderer::IBLBaker::BakeFromTexture(source, 1.f, params);
+    CHECK(ctx, removed.environmentData == kept.environmentData);
+    CHECK(ctx, MaximumCubeChannel(removed.prefilterData) < 1.01f);
+    CHECK(ctx, MaximumCubeChannel(removed.irradianceData) < math::PI + .01f);
+    CHECK_GT(ctx, MaximumCubeChannel(kept.prefilterData), 1.5f);
+    CHECK(ctx, renderer::IBLBaker::HashTextureSource(source, 1.f, true)
+            != renderer::IBLBaker::HashTextureSource(source, 1.f, false));
+    CHECK_EQ(ctx, renderer::IBLBaker::HashTextureSource(source, 1.f),
+                  renderer::IBLBaker::HashTextureSource(source, 1.f, true));
+
+    for (int shape = 0; shape < 3; ++shape)
+    {
+        auto texture = SyntheticSunTexture(false);
+        for (uint32_t y = 0u; y < texture.height; ++y)
+            for (uint32_t x = 0u; x < texture.width; ++x)
+            {
+                // Large cloud, seam-crossing disc, then a small polar cap.
+                const bool bright = shape == 0 ? x >= 80u && x < 180u && y >= 20u && y < 60u
+                                  : shape == 1 ? (x < 3u || x >= 253u) && y >= 29u && y < 35u
+                                               : y < 3u;
+                if (bright)
+                {
+                    const uint16_t rgba[] = {0x5400u, 0x5400u, 0x5400u, 0x3C00u};
+                    std::memcpy(texture.pixelData.data() + (static_cast<size_t>(y) * texture.width + x) * 8u, rgba, 8u);
+                }
+            }
+        params.removeSunFromLighting = true;
+        const auto filtered = renderer::IBLBaker::BakeFromTexture(texture, 1.f, params);
+        if (shape == 0)
+        {
+            params.removeSunFromLighting = false;
+            const auto unfiltered = renderer::IBLBaker::BakeFromTexture(texture, 1.f, params);
+            CHECK(ctx, filtered.prefilterData == unfiltered.prefilterData);
+            CHECK(ctx, filtered.irradianceData == unfiltered.irradianceData);
+        }
+        else
+            CHECK(ctx, MaximumCubeChannel(filtered.prefilterData) < 1.01f);
+    }
 }
 
 void TestInputHash(test::TestContext& ctx)
@@ -527,6 +576,7 @@ int RunProbeTests()
         .Add("Pure sky bake measurements", TestPureSkyBakeMeasurements)
         .Add("Separate visible sky and lighting", TestSeparateVisibleSkyAndLighting)
         .Add("Procedural sun only in visible sky", TestProceduralSunOnlyInVisibleSky)
+        .Add("Sun removal switch, broad clouds, seams and poles", TestSunRemovalSwitchAndSkyRegions)
         .Add("Input hash",                     TestInputHash)
         .Add("Fit box from scene triangles",   TestFitProbeBox)
         .Add("Probe data path",                TestProbeDataPath)

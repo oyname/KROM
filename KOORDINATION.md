@@ -30,7 +30,7 @@ Branch `codex/remove-sun-from-ibl`. Keine Aenderung der Filter oder der Material
   nach Sonnenfilter 0.569792/2.977215 (2.541602 % gegen Original). Prefilter-Maxima
   Mip 0: 2.923454, Mip 2: 1.980501. Quelle unterscheidet sich vom Engine-Test-HDR.
 - GPU-Diagnose `--material-ibl` erweitert: feste Belichtung, Weiss mit Metallic 0 und
-  Roughness 1 (optional `KROM_IBL_ROUGHNESS_HALF`), Gesamt/Global-Spekular und Probe-Debug 1/2,
+  Roughness 0.5 aus der Testdatei, Gesamt/Global-Spekular und Probe-Debug 1/2,
   jeweils Materialvorschau und Szene. In der DX11-Vorschau sind Gesamt-Spekular und
   Global-Spekular bytegleich (mittlere Differenz 0): kein Probe-Beitrag zu diesem Befund.
   Room 2s sichtbare Oberflaechen zeigen in Probe-Gewicht schwarz; keine flaechige Probe-Abdeckung.
@@ -58,6 +58,49 @@ Branch `codex/remove-sun-from-ibl`. Keine Aenderung der Filter oder der Material
 - Test mit/ohne Sonnenscheibe: sichtbare Cubes verschieden, Irradiance und Prefilter
   bytegleich. Bereits gemeinsam mit Phase 1 gebaut und getestet: Probes-Suite 12/12,
   `out/ibl-phase12-tests.log`. Keine neue Cache-Version innerhalb dieser gemeinsamen Auslieferung.
+
+### Phase 3: Sonnenmaske und Szenenschalter (2026-11-20)
+
+- `EnvironmentDesc::removeSunFromLighting` und Inspector-Feld unter der Skybox,
+  Standard true. Editor-JSON, alte Szenen, `.kscene`-Export und KromWrapper lesen/schreiben
+  denselben Schalter. Aus deaktiviert die Sonnenmaske; bestehende Highlight-Kompression bleibt aktiv.
+- Erkennung am Original-HDR vor der Kompression: Median der oberen Hemisphaere,
+  mit exaktem Texel-Raumwinkel gewichtet. Peak >=16*Median; zusammenhaengende Region
+  oberhalb 4*Median, maximal 0.02 sr. Nur die staerkste passende Region bekommt die
+  mittlere Randfarbe. Horizontale Bildnaht und Pole sind verbunden; breite helle Regionen bleiben erhalten.
+- Textur-Cache-Hash enthaelt das Flag als explizites Byte. Der prozedurale Hash bekommt
+  eine konstante Algorithmuskennung, damit auch zwischenzeitliche Version-8-Caches mit Sonne
+  im Licht nicht wiederverwendet werden. Finale globale Bake-Version bleibt wie geplant 8.
+- Echte Room-2-Quelle bei Intensitaet 1: Median 0.724622, erkannter Peak 46.216599,
+  Sonnengebiet 0.000499801 sr, Radiance am urspruenglichen Peak danach 2.368786.
+  Das Gesamtmaximum der gefilterten Quelle bleibt 5.576137; Prefilter-Maxima Mip 0/2:
+  5.217908/2.302411. Diese sind hoeher als beim alten breiten Filter, weil andere
+  helle Himmelsbereiche erhalten bleiben. Das Ziel ist Sonnenentfernung, nicht pauschal weniger IBL.
+- Regressionen: Scheibe im sichtbaren Cube, ohne Spitze in der Beleuchtung; konstantes
+  HDR unveraendert; breite helle Wolke wird durch die Sonnenmaske nicht geaendert;
+  Naht/Pole; Flag-Hash verschieden; prozedurales IBL mit/ohne sichtbare Sonne bytegleich.
+  Vollstaendiger finaler Debug-Testlauf: 480/480 in 20 Suiten, Physik/Audio aus.
+  Zusaetzlich echte HDR-Messung und Probes-Suite 13/13.
+- GPU-Test prueft Editor-Speichern/-Laden, alten Szenenstandard und Runtime-Export.
+  Der Test schliesst seinen Lesestream vor dem Zurueckspeichern (Windows-Dateisperre).
+  Er markiert die absichtlich geaenderte Test-Rauheit als in-memory Aenderung und
+  verwirft sie beim Ende; sonst nahm der Editor die Datei mit Roughness 0.5 fuer beide Aufnahmen.
+  Die anfaenglichen als r1 bezeichneten Diagnosebilder waren deshalb ebenfalls r0.5.
+  Finale Vergleichsaufnahmen fuer beide Rauheiten separat wiederholt und bestanden.
+  GPU-Roughness-Mitte: 202 fuer r1, 174 fuer r0.5, auf beiden Backends identisch.
+- Alle vier finalen GPU-Laeufe bestanden, einschliesslich gezieltem Blick auf die
+  sichtbare Sonne. DX11/Vulkan mittlere absolute Bildabweichung (RGB8, Skala 0..255):
+  0.000262 bei r1 und 0.031706 bei r0.5. Vergleiche links vorher/rechts nachher:
+  `out/ibl-compare-{dx11,vulkan}-{r1,r05}.png`; Metriken `out/ibl-image-metrics.json`.
+  DX11-, Vulkan- und OpenGL-Editor als Debug gebaut. OpenGL-Start-/Ladetest bestanden.
+- Keine Materialdatei und kein Materialshader geaendert. Bestehende Probes werden nicht
+  neu gebacken. Phase 4 bleibt entsprechend der Vorschau-Messung aus: Gesamt-Spekular
+  und Global-Spekular waren identisch. Der bekannte Skybox-Pfad neuer Probe-Aufnahmen
+  bleibt ein gesonderter Punkt fuer Szenen, in denen Probes diesen Befund verursachen.
+- Lokale Belege: `out/ibl-final-tests.log`, `out/ibl-phase3-final-probes.log`,
+  `out/ibl-{before,after}-{dx11,vulkan}-{r1,r05}/`, `out/ibl-opengl-start.log`.
+  Die r1-Lichtreferenzen stammen aus Phase 2 (identischer alter IBL-Lichtfilter,
+  bereits getrennte sichtbare Skybox); die r0.5-Referenzen aus der ersten Messreihe.
 
 ## Windows-Release-SDK und Plattformgrenzen (Codex, 2026-11-20)
 

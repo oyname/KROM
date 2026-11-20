@@ -465,6 +465,9 @@ struct EditorLoadingSmokeTest final : IAppScene
     std::shared_ptr<MaterialIblConstants> materialIblConstants;
     int materialIblReadyFrames = 0;
     size_t materialIblStage = 0u;
+    bool environmentSunChecked = false;
+    float materialIblSunYaw = 0.f;
+    float materialIblSunPitch = 0.f;
     std::chrono::steady_clock::time_point materialIblStart{};
 
     bool UpdateMaterialIbl(AppSceneContext& context)
@@ -494,12 +497,74 @@ struct EditorLoadingSmokeTest final : IAppScene
         }
         if (materialIblStage == 0u && materialIblReadyFrames == 0)
         {
+            // Only opt in on a disposable project: this checks the real scene writer,
+            // editor reader, runtime export and old-scene default without changing fixtures.
+            if (!environmentSunChecked && std::getenv("KROM_IBL_CHECK_SCENE_ROUNDTRIP"))
+            {
+                environmentSunChecked = true;
+                auto& state = app.m_editorFrameCtx->state;
+                state.environmentRemoveSunFromLighting = false;
+                Check(app.SaveEditorScene(), "save scene with sun removal disabled");
+                std::ifstream file(app.GetCurrentEditorScenePath(), std::ios::binary);
+                const std::string text((std::istreambuf_iterator<char>(file)), {});
+                file.close();
+                std::string error;
+                auto root = serialization::JsonParser::Parse(text, error);
+                const auto* environment = root.Get("environment");
+                Check(error.empty() && environment && environment->Get("removeSunFromLighting")
+                      && !environment->Get("removeSunFromLighting")->AsBool(), "scene stores sun-removal switch");
+                const auto exported = app.MakeKsceneJson(text, app.m_currentSceneName);
+                Check(exported.has_value(), "export scene with sun-removal switch");
+                if (exported)
+                {
+                    const auto runtimeScene = serialization::JsonParser::Parse(*exported, error);
+                    const auto* env = runtimeScene.Get("environment");
+                    Check(env && env->Get("removeSunFromLighting") && !env->Get("removeSunFromLighting")->AsBool(),
+                          "runtime export preserves disabled sun removal");
+                }
+                Check(app.LoadEditorScene(true, "", &root), "reload scene with sun-removal switch");
+                Check(!state.environmentRemoveSunFromLighting, "editor restores disabled sun removal");
+                for (auto& [key, value] : root.objectVal)
+                    if (key == "environment")
+                        std::erase_if(value.objectVal, [](const auto& field) { return field.first == "removeSunFromLighting"; });
+                Check(app.LoadEditorScene(true, "", &root), "load old scene without sun-removal switch");
+                Check(state.environmentRemoveSunFromLighting, "old scenes default to sun removal enabled");
+                Check(app.SaveEditorScene(), "restore disposable scene to sun removal enabled");
+                materialIblReadyFrames = 0;
+                return true;
+            }
             auto& asset = app.m_editorFrameCtx->state.selectedMaterialAssetData;
             asset.metallicFactor = 0.f;
             asset.roughnessFactor = std::getenv("KROM_IBL_ROUGHNESS_HALF") ? .5f : 1.f;
             asset.graph.metallic = asset.graph.roughness = 0u;
+            app.m_editorFrameCtx->state.selectedMaterialAssetDirty = true;
             app.m_editorFrameCtx->state.tonemap.exposureMode = renderer::addons::forward::ExposureMode::Fixed;
             app.m_editorFrameCtx->state.tonemap.exposureEv = 0.f;
+            Check(app.m_editorFrameCtx->state.environmentRemoveSunFromLighting,
+                  "capture uses sun removal enabled");
+            const auto texture = context.assetPipeline.LoadTexture(app.m_editorFrameCtx->state.environmentTexturePath);
+            const auto* sky = app.m_assetRegistry.textures.Get(texture);
+            if (sky && sky->format == assets::TextureFormat::RGBA16F && !sky->pixelData.empty())
+            {
+                const auto half = [](uint16_t h) {
+                    const uint32_t exponent = (h >> 10u) & 31u, mantissa = h & 1023u;
+                    const float value = exponent == 0u ? std::ldexp(static_cast<float>(mantissa), -24)
+                        : std::ldexp(static_cast<float>(mantissa + 1024u), static_cast<int>(exponent) - 25);
+                    return (h & 0x8000u) ? -value : value;
+                };
+                size_t brightest = 0u;
+                float maximum = 0.f;
+                for (size_t i = 0u; i < static_cast<size_t>(sky->width) * sky->height; ++i)
+                {
+                    uint16_t rgba[4];
+                    std::memcpy(rgba, sky->pixelData.data() + i * 8u, 8u);
+                    const float luminance = half(rgba[0]) * .2126f + half(rgba[1]) * .7152f + half(rgba[2]) * .0722f;
+                    if (luminance > maximum) { maximum = luminance; brightest = i; }
+                }
+                const float phi = ((static_cast<float>(brightest % sky->width) + .5f) / sky->width - .5f) * math::PI * 2.f;
+                materialIblSunYaw = std::atan2(-std::cos(phi), -std::sin(phi)) * math::RAD_TO_DEG;
+                materialIblSunPitch = 90.f - (static_cast<float>(brightest / sky->width) + .5f) / sky->height * 180.f;
+            }
         }
         if (++materialIblReadyFrames < 8)
             return true;
@@ -517,6 +582,7 @@ struct EditorLoadingSmokeTest final : IAppScene
             {"global-specular", renderer::DBG_VIEW_IBL_SPEC, true},
             {"probe-index", 0u, false, 1u},
             {"probe-weight", 0u, false, 2u},
+            {"sky-sun", 0u, false},
         };
         auto* device = context.renderLoop.GetRenderSystem().GetDevice();
         const auto texture = device->GetRenderTargetColorTexture(app.m_materialPreviewRT);
@@ -546,12 +612,24 @@ struct EditorLoadingSmokeTest final : IAppScene
             Check(static_cast<bool>(output), "scene lighting diagnostic capture");
         }
         if (++materialIblStage == std::size(stages))
+        {
+            app.m_editorFrameCtx->state.selectedMaterialAssetDirty = false;
             context.renderLoop.GetWindow()->RequestClose();
+        }
         else
         {
             materialIblConstants->flags = stages[materialIblStage].flags;
             materialIblConstants->disableProbes = stages[materialIblStage].disableProbes;
             materialIblConstants->probeDebug = stages[materialIblStage].probeDebug;
+            if (std::string_view(stages[materialIblStage].name) == "sky-sun")
+            {
+                auto& state = app.m_editorFrameCtx->state;
+                state.editorCamera.position = {0.f, 100.f, 0.f};
+                state.editorCamera.yawDeg = materialIblSunYaw;
+                state.editorCamera.pitchDeg = materialIblSunPitch;
+                state.showSkyboxBackground = true;
+                state.showEditorIcons = false;
+            }
             materialIblReadyFrames = 0;
         }
         return true;

@@ -1358,6 +1358,8 @@
   "settings.ibl_debug_normal": "Normal",
   "settings.ibl_debug_diffuse": "IBL diffuse",
   "settings.ibl_debug_specular": "IBL specular",
+  "environment.remove_sun": "Remove sun from lighting",
+  "environment.remove_sun_tip": "Keep the sun visible in the sky, but remove its disc from environment lighting. Disable when the HDR sky is the only sun light source.",
   "probe.debug_none": "Off",
   "probe.debug_index": "Probe used",
   "probe.debug_weight": "Blend weight",

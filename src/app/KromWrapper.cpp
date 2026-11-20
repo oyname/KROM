@@ -171,6 +171,7 @@ struct KromSceneData
     std::string environmentTexturePath;
     bool hasEnvironment = false;
     bool environmentEnableIBL = false;
+    bool environmentRemoveSunFromLighting = true;
     float environmentIntensity = 1.0f;
     std::array<float, 4> backgroundColor{0.f, 0.f, 0.f, 1.f};
     bool hasBackgroundColor = false;
@@ -1677,6 +1678,8 @@ static KromSceneData ParseKscene(const std::string& json)
             }
             if (const auto* enable = env->Get("enableIBL"); enable && enable->IsBool())
                 data.environmentEnableIBL = enable->AsBool();
+            if (const auto* removeSun = env->Get("removeSunFromLighting"); removeSun && removeSun->IsBool())
+                data.environmentRemoveSunFromLighting = removeSun->AsBool();
             if (const auto* intensity = env->Get("iblIntensity"); intensity && intensity->IsNumber())
                 data.environmentIntensity = std::max(0.0f, intensity->AsFloat());
             if (const auto* bg = env->Get("backgroundColor"); bg && bg->IsArray() && bg->arrayVal.size() >= 3u)
@@ -2538,6 +2541,7 @@ static void ApplySceneEnvironment(State& state, const KromSceneData& data)
             envDesc.sourceTexture = sourceTexture;
             envDesc.intensity     = data.environmentIntensity;
             envDesc.enableIBL     = data.environmentEnableIBL;
+            envDesc.removeSunFromLighting = data.environmentRemoveSunFromLighting;
 
             engine::renderer::RenderSystem& rs = state.renderLoop.GetRenderSystem();
             const engine::renderer::EnvironmentHandle next = rs.CreateEnvironment(envDesc);

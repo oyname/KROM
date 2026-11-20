@@ -33,6 +33,10 @@ struct IBLBakeDiagnostics
     IBLSourceStatistics source;
     IBLSourceStatistics compressed;
     IBLSourceStatistics lighting;
+    float skyMedianLuminance = 0.f;
+    float removedSunPeakLuminance = 0.f;
+    double removedSunSolidAngle = 0.0;
+    float sourcePeakAfterFiltering = 0.f;
 };
 
 struct IBLBakeParams
@@ -50,6 +54,7 @@ struct IBLBakeParams
     // steps (environment conversion, irradiance convolution, prefilter mip chain). null → single-threaded.
     jobs::JobSystem* jobSystem  = nullptr;
     IBLBakeDiagnostics* diagnostics = nullptr;
+    bool removeSunFromLighting = true;
 };
 
 class IBLBaker
@@ -59,9 +64,9 @@ public:
     // Hashing — deterministic 64-bit source identifiers for cache key.
     // -------------------------------------------------------------------------
 
-    // Hash of raw asset pixel bytes + intensity (FNV-1a chained).
+    // Hash of raw asset pixel bytes, intensity and sun-removal mode (FNV-1a chained).
     [[nodiscard]] static uint64_t HashTextureSource(
-        const assets::TextureAsset& asset, float intensity) noexcept;
+        const assets::TextureAsset& asset, float intensity, bool removeSunFromLighting = true) noexcept;
 
     // Hash of each ProceduralSkyDesc field individually in a fixed order.
     // Does NOT hash raw struct bytes — padding-safe and layout-stable.

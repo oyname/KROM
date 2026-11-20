@@ -1358,6 +1358,8 @@
   "settings.ibl_debug_normal": "Normal",
   "settings.ibl_debug_diffuse": "IBL Diffus",
   "settings.ibl_debug_specular": "IBL Spekular",
+  "environment.remove_sun": "Sonne aus Umgebungslicht entfernen",
+  "environment.remove_sun_tip": "Die Sonne bleibt am Himmel sichtbar, ihre Scheibe wird aus der Umgebungsbeleuchtung entfernt. Ausschalten, wenn der HDR-Himmel die einzige Sonnenlichtquelle ist.",
   "probe.debug_none": "Aus",
   "probe.debug_index": "Genutzte Probe",
   "probe.debug_weight": "Überblendgewicht",
