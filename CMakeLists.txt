@@ -629,20 +629,21 @@ function(krom_apply_release_runtime_options target)
     endforeach()
 endfunction()
 
-set(KROM_PROJECT_SCRIPT_ROOT "" CACHE PATH "Optional KROM project root whose C++ scripts are linked into editor targets")
+include(cmake/KromProjects.cmake)
+krom_collect_projects(KROM_PROJECT_ROOTS)
+# Written only after a successful generate, unlike CMakeCache.txt on failure.
+file(GENERATE OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/krom-project-root.txt"
+    CONTENT "${KROM_PROJECT_ROOT}")
 
 function(krom_resolve_project_script_root out_var)
-    if(KROM_PROJECT_SCRIPT_ROOT)
-        set(${out_var} "${KROM_PROJECT_SCRIPT_ROOT}" PARENT_SCOPE)
+    if(KROM_PROJECT_ROOT)
+        set(${out_var} "${KROM_PROJECT_ROOT}" PARENT_SCOPE)
         return()
     endif()
 
-    file(GLOB _krom_project_files CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/projects/*/krom-project.json")
-    list(LENGTH _krom_project_files _krom_project_count)
+    list(LENGTH KROM_PROJECT_ROOTS _krom_project_count)
     if(_krom_project_count EQUAL 1)
-        list(GET _krom_project_files 0 _krom_project_file)
-        get_filename_component(_krom_project_root "${_krom_project_file}" DIRECTORY)
+        list(GET KROM_PROJECT_ROOTS 0 _krom_project_root)
         set(${out_var} "${_krom_project_root}" PARENT_SCOPE)
     else()
         set(${out_var} "" PARENT_SCOPE)
@@ -699,45 +700,9 @@ function(krom_link_project_scripts target)
     message(STATUS "  ${target}: Projekt-Scripts eingebunden aus ${_krom_project_root}")
 endfunction()
 
-function(krom_sanitize_identifier input out_var)
-    string(REGEX REPLACE "[^A-Za-z0-9_]" "_" _sanitized "${input}")
-    if(_sanitized STREQUAL "")
-        set(_sanitized "KromGame")
-    endif()
-    if(_sanitized MATCHES "^[0-9]")
-        set(_sanitized "Krom_${_sanitized}")
-    endif()
-    set(${out_var} "${_sanitized}" PARENT_SCOPE)
-endfunction()
-
-function(krom_read_project_runtime_target project_root out_var)
-    set(_runtime_target "")
-    set(_project_file "${project_root}/krom-project.json")
-    if(EXISTS "${_project_file}")
-        file(READ "${_project_file}" _project_json)
-        string(REGEX MATCH "\"runtimeTarget\"[ \t\r\n]*:[ \t\r\n]*\"([^\"]+)\"" _runtime_match "${_project_json}")
-        if(_runtime_match)
-            set(_runtime_target "${CMAKE_MATCH_1}")
-        else()
-            string(REGEX MATCH "\"name\"[ \t\r\n]*:[ \t\r\n]*\"([^\"]+)\"" _name_match "${_project_json}")
-            if(_name_match)
-                set(_runtime_target "${CMAKE_MATCH_1}")
-            endif()
-        endif()
-    endif()
-    if(_runtime_target STREQUAL "")
-        get_filename_component(_runtime_target "${project_root}" NAME)
-    endif()
-    krom_sanitize_identifier("${_runtime_target}" _runtime_target)
-    set(${out_var} "${_runtime_target}" PARENT_SCOPE)
-endfunction()
-
 function(krom_add_project_script_module project_root)
     krom_read_project_runtime_target("${project_root}" _project)
     set(_target "krom_scripts_${_project}")
-    if(TARGET ${_target})
-        return()
-    endif()
     file(GLOB_RECURSE _scripts CONFIGURE_DEPENDS
         "${project_root}/Assets/Scripts/*.cpp" "${project_root}/Assets/Scripts/*.cxx"
         "${project_root}/Assets/Scripts/*.h" "${project_root}/Assets/Scripts/*.hpp"
@@ -746,9 +711,11 @@ function(krom_add_project_script_module project_root)
     file(GLOB _bindings CONFIGURE_DEPENDS "${project_root}/generated/ScriptBindings.cpp")
     add_library(${_target} SHARED EXCLUDE_FROM_ALL ${_scripts} ${_bindings}
         addons/script/ScriptModuleEntry.cpp)
+    krom_enable_unicode_link(${_target})
     target_include_directories(${_target} PRIVATE "${project_root}"
         "${project_root}/Assets/Scripts" "${project_root}/scripts" "${project_root}/generated")
     target_link_libraries(${_target} PRIVATE engine_script)
+    target_compile_definitions(${_target} PRIVATE KROM_SCRIPT_PROJECT_ROOT="${project_root}")
     set_target_properties(${_target} PROPERTIES PREFIX "")
     if(_bindings)
         target_compile_definitions(${_target} PRIVATE KROM_HAS_GAME_SCRIPTS=1)
@@ -772,18 +739,14 @@ function(krom_add_project_script_module project_root)
 endfunction()
 
 if(WIN32 AND KROM_BUILD_EDITOR)
-    file(GLOB _script_projects CONFIGURE_DEPENDS "${CMAKE_CURRENT_SOURCE_DIR}/projects/*/krom-project.json")
-    foreach(_project_file IN LISTS _script_projects)
-        get_filename_component(_root "${_project_file}" DIRECTORY)
+    foreach(_root IN LISTS KROM_PROJECT_ROOTS)
         krom_add_project_script_module("${_root}")
     endforeach()
-    if(KROM_PROJECT_SCRIPT_ROOT)
-        krom_add_project_script_module("${KROM_PROJECT_SCRIPT_ROOT}")
-    endif()
 endif()
 
 function(krom_add_project_runtime target output_name platform_target backend_addon backend_define project_root)
     add_executable(${target} examples/editor_scene_runtime.cpp)
+    krom_enable_unicode_link(${target})
     set_target_properties(${target} PROPERTIES OUTPUT_NAME "${output_name}")
     krom_apply_console_option(${target})
 
@@ -807,17 +770,12 @@ function(krom_add_project_runtime target output_name platform_target backend_add
 endfunction()
 
 function(krom_add_project_runtimes_for_backend platform_target backend_addon backend_define backend_id)
-    file(GLOB _krom_project_files CONFIGURE_DEPENDS
-        "${CMAKE_CURRENT_SOURCE_DIR}/projects/*/krom-project.json")
-    foreach(_krom_project_file IN LISTS _krom_project_files)
-        get_filename_component(_krom_project_root "${_krom_project_file}" DIRECTORY)
+    foreach(_krom_project_root IN LISTS KROM_PROJECT_ROOTS)
         krom_read_project_runtime_target("${_krom_project_root}" _runtime_target)
         set(_target "krom_runtime_${_runtime_target}_${backend_id}")
         set(_output "${_runtime_target}_${backend_id}")
-        if(NOT TARGET ${_target})
-            krom_add_project_runtime(${_target} ${_output}
-                ${platform_target} ${backend_addon} ${backend_define} "${_krom_project_root}")
-        endif()
+        krom_add_project_runtime(${_target} ${_output}
+            ${platform_target} ${backend_addon} ${backend_define} "${_krom_project_root}")
     endforeach()
 endfunction()
 
@@ -948,7 +906,13 @@ function(krom_add_wrapper_example_src target platform_target backend_addon backe
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
     target_compile_definitions(${target} PRIVATE ${backend_define}=1)
-    krom_link_project_scripts(${target})
+    # Standalone engine examples must not inherit scripts/defaults from the
+    # editor's cached project selection. Project runtimes bind scripts explicitly.
+    # Keep the generic scene-runtime sample's shipped DemoProject behavior.
+    if("${src}" STREQUAL "examples/editor_scene_runtime.cpp" AND
+       EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/projects/DemoProject/krom-project.json")
+        krom_link_project_scripts(${target} "${CMAKE_CURRENT_SOURCE_DIR}/projects/DemoProject")
+    endif()
 
     krom_copy_assets(${target})
     if("${backend_define}" STREQUAL "KROM_APP_BACKEND_DX11")
@@ -1140,7 +1104,8 @@ if(WIN32)
     target_sources(krom_tests PRIVATE app/editor/ScriptModuleHost.cpp)
     add_library(script_module_fixture SHARED tests/script_module_fixture/Fixture.cpp addons/script/ScriptModuleEntry.cpp)
     target_link_libraries(script_module_fixture PRIVATE engine_script)
-    target_compile_definitions(script_module_fixture PRIVATE KROM_HAS_GAME_SCRIPTS=1)
+    target_compile_definitions(script_module_fixture PRIVATE KROM_HAS_GAME_SCRIPTS=1
+        KROM_SCRIPT_PROJECT_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/tests/script_module_fixture")
     add_dependencies(krom_tests script_module_fixture)
     add_library(script_module_preinit SHARED tests/script_module_fixture/Fixture.cpp addons/script/ScriptModuleEntry.cpp)
     target_link_libraries(script_module_preinit PRIVATE engine_script)

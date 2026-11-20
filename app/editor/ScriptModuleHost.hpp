@@ -40,13 +40,15 @@ public:
     static std::vector<std::filesystem::path> FindStaleSharedHeaders(
         std::string_view editorInputs, std::string_view deps, const std::string& scriptTarget,
         const std::filesystem::path& buildDir, const std::filesystem::path& sourceDir,
-        std::filesystem::file_time_type editorTime);
+        std::filesystem::file_time_type editorTime,
+        const std::filesystem::path& projectRoot = {});
     // Fragt Ninja ab (ohne Compiler-Umgebung). Fehlt Ninja, wird nicht geprueft.
     static bool CheckSharedEngineHeaders(const std::filesystem::path& ninja,
                                          const std::filesystem::path& buildDir,
                                          const std::filesystem::path& sourceDir,
                                          const std::filesystem::path& editorExe,
-                                         const std::string& scriptTarget, std::string& error);
+                                         const std::string& scriptTarget, std::string& error,
+                                         const std::filesystem::path& projectRoot = {});
 private:
     void* m_module = nullptr;
     std::filesystem::path m_copyDirectory;

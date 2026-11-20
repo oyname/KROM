@@ -1,5 +1,16 @@
 #include "addons/script/ScriptModuleApi.hpp"
 
+// Embedded in the DLL itself: a stale DLL at the same output path must never be
+// accepted merely because its target name and engine ABI happen to match.
+KROM_SCRIPT_EXPORT const char* KromScriptModuleProjectRoot()
+{
+#ifdef KROM_SCRIPT_PROJECT_ROOT
+    return KROM_SCRIPT_PROJECT_ROOT;
+#else
+    return "";
+#endif
+}
+
 KROM_SCRIPT_EXPORT uint32_t KromScriptModuleApiVersion()
 {
     return engine::script::ScriptModuleAbiVersion;

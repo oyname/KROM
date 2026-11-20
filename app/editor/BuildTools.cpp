@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <charconv>
 #include <fstream>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -339,6 +340,29 @@ bool CheckBuildCache(const std::filesystem::path& buildDirectory, const BuildToo
         }
     }
     return true;
+}
+
+bool ProjectNeedsConfigure(const std::filesystem::path& buildDirectory,
+                           const std::filesystem::path& projectRoot)
+{
+    std::ifstream cache(buildDirectory / "CMakeCache.txt");
+    std::string line, selected;
+    bool found = false;
+    while (std::getline(cache, line))
+    {
+        if (!line.starts_with("KROM_PROJECT_ROOT:")) continue;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const auto equals = line.find('=');
+        if (equals == std::string::npos) continue;
+        selected = line.substr(equals + 1);
+        found = true;
+        break;
+    }
+    if (!found || selected.empty() || projectRoot.empty() ||
+        !SameFile(PathFromUtf8(selected), projectRoot)) return true;
+    std::ifstream generated(buildDirectory / "krom-project-root.txt", std::ios::binary);
+    const std::string root((std::istreambuf_iterator<char>(generated)), std::istreambuf_iterator<char>());
+    return root.empty() || !SameFile(PathFromUtf8(root), projectRoot);
 }
 
 std::filesystem::path CachedMakeProgram(const std::filesystem::path& buildDirectory)
