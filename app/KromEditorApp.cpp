@@ -7,6 +7,7 @@
 #include "renderer/runtime/MaterialRuntimeDesc.hpp"
 #include "app/KromEditorApp.hpp"
 #include "app/editor/BuildTools.hpp"
+#include "app/editor/EnginePaths.hpp"
 #include "renderer/ShaderToolPaths.hpp"
 
 #include "addons/camera/CameraComponents.hpp"
@@ -97,6 +98,7 @@ using engine::PathToUtf8;
 using engine::PathToGenericUtf8;
 using engine::renderer::addons::editor::Translate;
 using engine::renderer::addons::editor::TranslateWithValue;
+using engine::app::GetEnginePaths;
 
 #ifdef KROM_HAS_GAME_SCRIPTS
 extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry);
@@ -200,7 +202,7 @@ std::filesystem::path RuntimeExecutablePath(const std::filesystem::path& buildDi
 
 std::filesystem::path RuntimeProfileDir(const char* configuration)
 {
-    return PathFromUtf8(KROM_BUILD_DIR).parent_path() / PathFromUtf8(std::string("runtime-") + configuration);
+    return GetEnginePaths().RuntimeBuildDir(configuration);
 }
 
 constexpr size_t kMaxConsoleLogs = 512u;
@@ -439,7 +441,7 @@ struct RuntimeBuildRequest
     std::string configuration;
     bool scriptBuild = false;
     // runtime-<config> folders belong to the editor and may be reconfigured with new
-    // tools; the editor's own build folder (KROM_BUILD_DIR) never is.
+    // tools; the editor's own build folder never is.
     bool editorOwnedBuildDir = false;
     // Tool paths from the personal editor settings, copied on the main thread.
     engine::app::build::BuildToolOverrides toolOverrides;
@@ -463,6 +465,11 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
                          const std::filesystem::path& scriptProject = {},
                          const char* configuration = "Release")
 {
+    if (!GetEnginePaths().BuildsAvailable())
+    {
+        AddEditorConsoleLog(editorState, engine::LogLevel::Error, Translate("build.sdk_unavailable"));
+        return false;
+    }
     const bool scriptBuild = !scriptTarget.empty();
     if (scriptBuild && !std::filesystem::exists(buildDir / "CMakeCache.txt"))
     {
@@ -470,14 +477,14 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
         return false;
     }
     outRequest = {};
-    outRequest.sourceDir = PathFromUtf8(KROM_SOURCE_DIR);
+    outRequest.sourceDir = GetEnginePaths().engineSourceDir;
     outRequest.buildDir = buildDir;
     outRequest.scriptProject = scriptProject;
     outRequest.target = scriptBuild ? scriptTarget : RuntimeTargetName(runtimeTarget, backend);
     outRequest.configuration = configuration;
     outRequest.scriptBuild = scriptBuild;
     outRequest.editorOwnedBuildDir =
-        buildDir.lexically_normal() != PathFromUtf8(KROM_BUILD_DIR).lexically_normal();
+        buildDir.lexically_normal() != GetEnginePaths().engineBuildDir.lexically_normal();
     outRequest.toolOverrides =
         BuildToolOverridesFrom(engine::renderer::addons::editor::GetEditorPreferences());
     engine::Debug::LogVerbose("%s", TranslateWithValue("build.start_target", outRequest.target).c_str());
@@ -895,27 +902,19 @@ struct SceneLoadJob
 
 namespace {
 
-// Source tree folders (based on __FILE__, independent of the loaded project):
-// shaders/ holds the engine shaders, editor/ the editor-only files, assets/ the
-// example assets (asset root when no project is open).
-std::filesystem::path ResolveSourceRoot()
-{
-    return PathFromUtf8(__FILE__).parent_path().parent_path();
-}
-
 std::filesystem::path ResolveAssetRoot()
 {
-    return ResolveSourceRoot() / "assets";
+    return GetEnginePaths().assetsDir;
 }
 
 std::filesystem::path ResolveEngineShaderRoot()
 {
-    return ResolveSourceRoot() / "shaders";
+    return GetEnginePaths().shadersDir;
 }
 
 std::filesystem::path ResolveEditorDir()
 {
-    return ResolveSourceRoot() / "editor";
+    return GetEnginePaths().editorDir;
 }
 
 #ifdef KROM_EDITOR_HAS_IMGUI
@@ -972,7 +971,7 @@ void ConfigureEditorUiFont(ImGuiIO& io)
 
 std::filesystem::path ResolveProjectsRoot()
 {
-    return PathFromUtf8(__FILE__).parent_path().parent_path() / "projects";
+    return GetEnginePaths().projectsDir;
 }
 
 const char* ProjectBackendId(renderer::DeviceFactory::BackendType backend) noexcept
@@ -1768,7 +1767,7 @@ std::string CanonicalSceneContent(const std::string& json)
 
 std::filesystem::path ResolveLegacyEditorScenePath()
 {
-    return ResolveEditorDir() / "editor_scene.json";
+    return GetEnginePaths().standaloneScenesDir / "editor_scene.json";
 }
 
 #endif // KROM_EDITOR_HAS_IMGUI
@@ -1806,6 +1805,31 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 {
     if (m_initialized)
         return true;
+
+    const auto& paths = GetEnginePaths();
+    if (!paths.error.empty())
+    {
+        Debug::LogError("KromEditorApp: %s", paths.error.c_str());
+        return false;
+    }
+    if (paths.sdk)
+    {
+        // Device initialization already creates pipelines. Set these before
+        // initializing graphics so Vulkan's first cache cannot land beside EXE.
+        renderer::ShaderCompiler::SetCacheDirectory(paths.shaderCacheDir);
+        renderer::ShaderCompiler::SetEngineAssetDirectory(paths.shadersDir);
+        m_renderLoop.GetRenderSystem().SetEnvironmentCacheDirectory(PathToUtf8(paths.userDataDir / "cache" / "ibl"));
+    }
+    // The preference directory is shared with editor-preferences.json. Never
+    // fall back to the installation or current directory when it is unavailable.
+    const auto preferencesDir = renderer::addons::editor::EditorPreferencesDirectory();
+    if (!preferencesDir.empty())
+    {
+        std::error_code ec;
+        std::filesystem::create_directories(preferencesDir, ec);
+        if (!ec) m_imguiIniPath = PathToUtf8(preferencesDir / "imgui.ini");
+        else Debug::LogWarning("KromEditorApp: cannot create ImGui settings directory: %s", ec.message().c_str());
+    }
 
 #ifdef KROM_EDITOR_HAS_IMGUI
     DrainConsoleLogs(nullptr);
@@ -1977,6 +2001,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                     return false;
                 ImGui::CreateContext();
                 ImGuiIO& io = ImGui::GetIO();
+                io.IniFilename = m_imguiIniPath.empty() ? nullptr : m_imguiIniPath.c_str();
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
                 EnableEditorMultiViewports(io);
                 io.ConfigDragClickToInputText = true;
@@ -2026,6 +2051,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                     return false;
                 ImGui::CreateContext();
                 ImGuiIO& io = ImGui::GetIO();
+                io.IniFilename = m_imguiIniPath.empty() ? nullptr : m_imguiIniPath.c_str();
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
                 io.ConfigDragClickToInputText = true;
                 io.ConfigWindowsMoveFromTitleBarOnly = true; // Klicks ins Viewport verschieben kein Fenster
@@ -2094,6 +2120,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 
                 ImGui::CreateContext();
                 ImGuiIO& io = ImGui::GetIO();
+                io.IniFilename = m_imguiIniPath.empty() ? nullptr : m_imguiIniPath.c_str();
                 io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
                 io.ConfigDragClickToInputText = true;
                 io.ConfigWindowsMoveFromTitleBarOnly = true; // Klicks ins Viewport verschieben kein Fenster
@@ -2467,11 +2494,13 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         return BuildAllScenes();
     };
     m_editorFrameCtx->exportProject = [this]() {
+        if (RejectUnavailableSdkBuild()) return false;
         if (!LeavePrefabMode())
             return false;
         return ExportProjectBuild();
     };
     m_editorFrameCtx->playGame = [this]() {
+        if (RejectUnavailableSdkBuild()) return false;
         if (!LeavePrefabMode())
             return false;
         if (m_projectRoot.empty())
@@ -2500,7 +2529,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
 
         constexpr const char* profiles[] = {nullptr, "Debug", "RelWithDebInfo", "Release"};
         const char* profile = profiles[m_projectSettings.testBuild];
-        const std::filesystem::path buildDir = profile ? RuntimeProfileDir(profile) : PathFromUtf8(KROM_BUILD_DIR);
+        const std::filesystem::path buildDir = profile ? RuntimeProfileDir(profile) : GetEnginePaths().engineBuildDir;
         return StartRuntimeBuild(buildDir, [this, buildDir](bool ok) {
             if (!ok)
             {
@@ -2679,13 +2708,14 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             };
             const std::filesystem::path initialFolder = !m_projectRoot.empty()
                 ? m_projectRoot
-                : (std::filesystem::current_path() / "projects");
+                : GetEnginePaths().ProjectBrowseDir();
             return platform::dialog::BrowseForFile(
                 Translate("project.open"), filters, 2, "krom-project.json", handle,
                 PathToUtf8(initialFolder).c_str());
         };
         m_editorFrameCtx->projectsRootDirectory =
-            PathToUtf8((PathFromUtf8(KROM_SOURCE_DIR) / "projects").make_preferred());
+            PathToUtf8((GetEnginePaths().sdk ? ResolveProjectsRoot()
+                : GetEnginePaths().engineSourceDir / "projects").make_preferred());
         m_editorFrameCtx->browseForProjectFolder = [this]() -> std::string {
             platform::NativeWindowHandle handle{};
             if (auto* win = m_renderLoop.GetWindow())
@@ -2811,7 +2841,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     m_editorFrameCtx->currentProjectRoot = PathToUtf8(m_projectRoot);
     m_editorFrameCtx->engineAssetRoot  = PathToUtf8(ResolveEngineShaderRoot());
     m_editorFrameCtx->engineEditorDir  =
-        PathToUtf8(PathFromUtf8(__FILE__).parent_path().parent_path() / "editor");
+        PathToUtf8(ResolveEditorDir());
     m_editorFrameCtx->scriptRegistry   = &m_scriptRegistry;
 #ifdef KROM_HAS_GAME_SCRIPTS
     KromRegisterGameScripts(m_scriptRegistry);
@@ -4613,7 +4643,7 @@ void KromEditorApp::EnsureCameraGizmos()
     using namespace renderer::addons::editor;
 
     // Absoluter Pfad zum editor/-Ordner.
-    // ResolveEditorDir() basiert auf __FILE__ → zeigt immer auf den Source-Baum,
+    // ResolveEditorDir() liefert die Engine-Ressourcen aus Quellbaum oder SDK,
     // unabhaengig davon ob ein Projekt geladen ist (GetCurrentAssetRoot koennte
     // auf m_projectRoot/Assets zeigen, was ein anderer Ordner ist).
     const std::filesystem::path editorDir =
@@ -6024,16 +6054,33 @@ void KromEditorApp::ReportScriptBuildError(const std::string& error)
     m_editorFrameCtx->state.consoleFocusRequest = true;
 }
 
+bool KromEditorApp::RejectUnavailableSdkBuild()
+{
+    if (GetEnginePaths().BuildsAvailable()) return false;
+    ReportScriptBuildError(Translate("build.sdk_unavailable"));
+    return true;
+}
+
 bool KromEditorApp::CheckScriptEngineLibraries(std::string& error) const
 {
-    return ScriptModuleHost::CheckEngineLibraries(PathFromUtf8(KROM_BUILD_DIR), CurrentExecutablePath(), error);
+    if (!GetEnginePaths().BuildsAvailable())
+    {
+        error = Translate("build.sdk_unavailable");
+        return false;
+    }
+    return ScriptModuleHost::CheckEngineLibraries(GetEnginePaths().engineBuildDir, CurrentExecutablePath(), error);
 }
 
 bool KromEditorApp::ReloadProjectScriptModule(bool reportMissing)
 {
+    if (!GetEnginePaths().BuildsAvailable())
+    {
+        if (reportMissing) ReportScriptBuildError(Translate("build.sdk_unavailable"));
+        return false;
+    }
 #ifdef _WIN32
     if (!m_world || m_projectRoot.empty()) return true;
-    const auto library = ScriptModuleHost::LibraryPath(PathFromUtf8(KROM_BUILD_DIR), m_projectRuntimeTarget);
+    const auto library = ScriptModuleHost::LibraryPath(GetEnginePaths().engineBuildDir, m_projectRuntimeTarget);
     if (!std::filesystem::exists(library))
     {
         if (reportMissing) ReportScriptBuildError(Translate("script.library_missing") + PathToUtf8(library));
@@ -6044,8 +6091,8 @@ bool KromEditorApp::ReloadProjectScriptModule(bool reportMissing)
     // die neuer als die laufende EXE sind, wuerden abweichende Layouts bedeuten.
     // Ninja aus dem CMakeCache des Editor-Builds: keine Werkzeugsuche im Hauptthread.
     if (!CheckScriptEngineLibraries(error) ||
-        !ScriptModuleHost::CheckSharedEngineHeaders(build::CachedMakeProgram(PathFromUtf8(KROM_BUILD_DIR)),
-            PathFromUtf8(KROM_BUILD_DIR), PathFromUtf8(KROM_SOURCE_DIR), CurrentExecutablePath(),
+        !ScriptModuleHost::CheckSharedEngineHeaders(build::CachedMakeProgram(GetEnginePaths().engineBuildDir),
+            GetEnginePaths().engineBuildDir, GetEnginePaths().engineSourceDir, CurrentExecutablePath(),
             "krom_scripts_" + m_projectRuntimeTarget, error) ||
         !m_scriptModule.Swap(library, *m_world, m_scriptRegistry, error, m_projectRoot))
     {
@@ -6062,6 +6109,7 @@ bool KromEditorApp::ReloadProjectScriptModule(bool reportMissing)
 
 bool KromEditorApp::StartEditorPlay()
 {
+    if (RejectUnavailableSdkBuild()) return false;
 #ifdef _WIN32
     if (m_playActive) return true;
     if (!m_editorFrameCtx || !m_world || m_editorFrameCtx->sceneLoadActive || m_runtimeBuildJob)
@@ -6074,7 +6122,7 @@ bool KromEditorApp::StartEditorPlay()
     if (!bindings.ok) { ReportScriptBuildError(bindings.message); return false; }
     try
     {
-        const auto buildDir = PathFromUtf8(KROM_BUILD_DIR);
+        const auto buildDir = GetEnginePaths().engineBuildDir;
         const auto library = ScriptModuleHost::LibraryPath(buildDir, m_projectRuntimeTarget);
         if (!m_scriptModule.IsLoaded() || m_scriptModule.NeedsBuild(m_projectRoot, library))
         {
@@ -7341,6 +7389,7 @@ bool KromEditorApp::BuildAllScenes()
 
 bool KromEditorApp::ExportProjectBuild()
 {
+    if (RejectUnavailableSdkBuild()) return false;
     if (m_projectRoot.empty())
     {
         if (m_editorFrameCtx)
@@ -7663,6 +7712,7 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
                                       const std::string& scriptTarget,
                                       const char* configuration)
 {
+    if (RejectUnavailableSdkBuild()) return false;
     if (m_runtimeBuildJob)
     {
         if (m_editorFrameCtx)
@@ -8578,7 +8628,7 @@ std::filesystem::path KromEditorApp::GetCurrentAssetRoot() const
 
 std::filesystem::path KromEditorApp::GetCurrentShaderCacheDir() const
 {
-    return m_projectRoot.empty() ? (ResolveSourceRoot() / "shader_artifacts")
+    return m_projectRoot.empty() ? GetEnginePaths().shaderCacheDir
                                  : (m_projectRoot / "shader-bin");
 }
 

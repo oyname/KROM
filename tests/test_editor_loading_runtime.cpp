@@ -1,6 +1,7 @@
 // Optionaler GPU-Test: --headless automatisiert, ohne Argumente sichtbare
 // ImGui-Anzeige fuer 40 s. Kein plattformspezifischer UI-Code.
 #include "app/KromEditorApp.hpp"
+#include "app/editor/EnginePaths.hpp"
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/gtao/GtaoPass.hpp"
 #include "addons/editor/EditorAnimationWindow.hpp"
@@ -16,6 +17,7 @@
 #include "assets/KMeshSerializer.hpp"
 #include "addons/editor/EditorPreferences.hpp"
 #include "core/PathUtf8.hpp"
+#include "renderer/ShaderCompiler.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/particles/ParticleComponents.hpp"
@@ -39,6 +41,73 @@ using renderer::addons::editor::Translate;
 
 struct EditorLoadingSmokeTest final : IAppScene
 {
+    // Run a copy of this executable beside a test manifest. No GPU, compiler
+    // discovery or real project is needed: the guards must run before all of it.
+    int TestSdkBuildGuards()
+    {
+        const auto& paths = GetEnginePaths();
+        if (!paths.sdk || !paths.error.empty()) return 1;
+        int failed = 0;
+        auto check = [&](bool ok, const char* message) {
+            std::printf("%s: %s\n", ok ? "PASS" : "FAIL", message);
+            if (!ok) ++failed;
+        };
+        app.m_world = std::make_unique<ecs::World>(app.m_componentRegistry);
+        app.m_editorFrameCtx = std::make_unique<renderer::addons::editor::EditorFrameContext>(
+            *app.m_world, app.m_materialSystem, app.m_assetRegistry, app.m_editorState);
+        const auto expected = std::string(Translate("build.sdk_unavailable"));
+        check(!app.StartEditorPlay() && app.m_editorFrameCtx->lastFileMessage == expected,
+              "SDK Play fails clearly before project or script preparation");
+        check(!app.ExportProjectBuild() && app.m_editorFrameCtx->lastFileMessage == expected,
+              "SDK export fails clearly before scene saves or staging");
+        bool callback = false;
+        check(!app.StartRuntimeBuild({}, [&](bool) { callback = true; }) && !app.m_runtimeBuildJob && !callback,
+              "SDK test build starts no worker or compiler discovery");
+        check(!app.StartRuntimeBuild({}, {}, "krom_scripts_test") && !app.m_runtimeBuildJob,
+              "SDK script build starts no worker");
+        std::string error;
+        check(!app.CheckScriptEngineLibraries(error) && error == expected && !app.ReloadProjectScriptModule(true),
+              "SDK script reload never inspects development libraries or headers");
+        check(app.GetCurrentAssetRoot() == paths.assetsDir && app.GetCurrentShaderCacheDir() == paths.shaderCacheDir &&
+              app.GetCurrentEditorScenePath() == paths.standaloneScenesDir / "editor_scene.json",
+              "editor uses SDK resources and separate writable scene/cache locations");
+        check(!std::filesystem::exists(paths.userDataDir / "scenes") && !std::filesystem::exists(paths.userDataDir / "cache"),
+              "rejected builds create no scene or cache directories");
+        app.m_editorFrameCtx.reset();
+        app.m_world.reset();
+        return failed ? 1 : 0;
+    }
+
+    int TestInvalidSdkManifest()
+    {
+        const auto& paths = GetEnginePaths();
+        return paths.sdk && !paths.error.empty() && !app.Initialize({}) && !app.m_initialized &&
+            !app.m_renderFeaturesRegistered ? 0 : 1;
+    }
+
+    int TestIniPath()
+    {
+        KromEditorAppConfig config;
+        config.backend = SelectAppBackend();
+        config.visible = false;
+        config.enableDebugLayer = false;
+        if (!app.Initialize(config)) return 1;
+        const auto expected = GetEnginePaths().userDataDir / "imgui.ini";
+        const auto* filename = ImGui::GetIO().IniFilename;
+        const bool configured = filename && PathFromUtf8(filename) == expected;
+        const bool cacheConfigured = !GetEnginePaths().sdk ||
+            renderer::ShaderCompiler::GetCacheDirectory() == GetEnginePaths().shaderCacheDir;
+        ImGui::LoadIniSettingsFromMemory("[Window][EnginePathsProbe]\nPos=17,29\nSize=300,200\nCollapsed=0\n");
+        if (configured) ImGui::SaveIniSettingsToDisk(filename);
+        std::ifstream in(expected, std::ios::binary);
+        const std::string saved((std::istreambuf_iterator<char>(in)), {});
+        const bool persisted = saved.find("EnginePathsProbe") != std::string::npos;
+        std::printf("%s: editor ImGui settings use user directory and save Unicode path\n",
+                    configured && persisted ? "PASS" : "FAIL");
+        app.Shutdown();
+        return configured && persisted && cacheConfigured ? 0 : 1;
+    }
+
     KromEditorApp app;
     int frames = 0;
     int failures = 0;
@@ -2489,6 +2558,12 @@ struct EditorLoadingSmokeTest final : IAppScene
 int main(int argc, char** argv)
 {
     engine::app::EditorLoadingSmokeTest test;
+    if (argc > 1 && std::string_view(argv[1]) == "--sdk-build-guards")
+        return test.TestSdkBuildGuards();
+    if (argc > 1 && std::string_view(argv[1]) == "--sdk-invalid-manifest")
+        return test.TestInvalidSdkManifest();
+    if (argc > 1 && std::string_view(argv[1]) == "--ini-path")
+        return test.TestIniPath();
     if (argc > 1 && std::string_view(argv[1]) == "--scene-rename")
         return test.TestSceneRename();
     test.directSwitch = argc > 1 && std::string_view(argv[1]) == "--without-progress";

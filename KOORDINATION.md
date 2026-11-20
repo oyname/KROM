@@ -17,6 +17,37 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## EnginePaths / SDK-Vorbereitung, Schritt 1 (Codex, 2026-11-20)
+
+Auf ausdruecklichen Nutzerauftrag implementiert. `app/editor/EnginePaths.{hpp,cpp}`
+trennt Ressourcen, Projektvorgabe, Engine-Quelle/Build, SDK-CMake/Vorlage und
+schreibbare Benutzerpfade. Nur diese Implementierung liest im Produktivcode noch
+`KROM_SOURCE_DIR`, `KROM_BUILD_DIR` und die bisherige Ressourcenbasis aus `__FILE__`.
+Ohne Manifest bleiben die bisherigen Pfadwerte erhalten (einschliesslich
+`CWD/projects` im Datei-Dialog); `imgui.ini` liegt jetzt in beiden Modi neben den
+Benutzereinstellungen unter `%LOCALAPPDATA%/KROM/`.
+
+- SDK-Erkennung: `krom-sdk.json` neben der wirklichen EXE, danach genau eine Ebene
+  hoeher. Schema und Pfadoptionen: `doc/SDK_PATHS.md`. Ein vorhandenes ungueltiges
+  Manifest oder fehlende Ressourcenordner brechen den Start klar ab; kein Rueckfall
+  auf Quellbaum/CWD. SDK-Quelle und Engine-Buildpfad bleiben leer.
+- Im SDK-Modus: Script-Build/-Laden, Editor-Play, Testbuild und Export vor den
+  Vorbereitungen gesperrt (de/en). Szenen ohne Projekt und Shader-/IBL-Caches
+  liegen im Benutzerbereich. Cache-Ziele werden vor der Geraeteinitialisierung
+  gesetzt, da Vulkan dabei bereits Pipelines erstellt.
+- Geprueft: frischer Debug-Build aller drei Editoren ohne Netzbezug mit lokalen
+  Jolt/miniaudio-Quellen; 39 Pfadchecks (inkl. Umlaut/Leerzeichen, JSON-Unicode,
+  beide Manifestorte/Vorrang, defekte Manifeste, fehlende Ressourcen, fremdes CWD,
+  Verschieben); sieben SDK-Sperrchecks; ungueltiges Manifest stoppt vor Rendering.
+  Versteckter Editorstart und echtes Speichern von `imgui.ini` im Umlautpfad unter
+  DX11/Vulkan/OpenGL. Kopierter Vulkan-SDK-Aufbau startet mit fremdem CWD; Benutzer-
+  und Pipeline-Cachepfade stimmen, keine Installationsdatei veraendert.
+  Logs im Worktree unter `out/engine-paths-tests.log`, `out/build-engine-paths.log`,
+  `out/test-engine-paths-build.log`, `out/ini-*.log`, `out/sdk-*-final.log`.
+- Noch getrennte Folgeschritte: install/importierte Targets, Projekt-Buildvorlage,
+  SDK-Compiler-/ABI-Regel, Paket-Script, echte schreibgeschuetzte Installation und
+  saubere Offline-VM. Bestehende Compiler-/ABI-Regeln sind unveraendert.
+
 ## Clear coat layer for pbr-lit materials (Claude, 2026-11-20)
 
 - Second item of the open shading list. Working tree on `feature/post-process-volumes`, not committed

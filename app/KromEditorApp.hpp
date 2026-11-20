@@ -253,6 +253,7 @@ private:
     bool ReloadProjectScriptModule(bool reportMissing = false);
     bool CheckScriptEngineLibraries(std::string& error) const;
     void ReportScriptBuildError(const std::string& error);
+    [[nodiscard]] bool RejectUnavailableSdkBuild();
     void StopEditorPlay();
     void SetEditorPlayPaused(bool paused);
     // One play frame via GameSimulation::RunFrame (same order as the runtime).
@@ -302,6 +303,8 @@ private:
     bool m_renderFeaturesRegistered = false;
     bool m_forwardPlusActive = false;
     bool m_initialized = false;
+    // ImGui retains IniFilename until DestroyContext(), including its final save.
+    std::string m_imguiIniPath;
     std::filesystem::path m_projectRoot;
     std::string           m_projectName;
     std::string           m_projectRuntimeTarget;

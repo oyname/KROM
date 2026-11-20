@@ -10,7 +10,4 @@ namespace engine::app {
 void InstallImGuiWin32Hook(platform::NativeWindowHandle windowHandle, std::function<void()> onCloseRequested = {});
 void RemoveImGuiWin32Hook(platform::NativeWindowHandle windowHandle);
 
-// Pfad der laufenden Exe (leer bei Fehler).
-[[nodiscard]] std::filesystem::path CurrentExecutablePath();
-
 } // namespace engine::app

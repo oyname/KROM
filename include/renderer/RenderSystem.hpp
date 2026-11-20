@@ -83,6 +83,7 @@ public:
     [[nodiscard]] bool IsGpuPassTimingEnabled() const noexcept { return m_gpuPassProfiler.IsEnabled(); }
     [[nodiscard]] GpuPassTimingReport GetGpuPassTimings() const;
     [[nodiscard]] EnvironmentHandle CreateEnvironment(const EnvironmentDesc& desc) { return m_environmentSystem.CreateEnvironment(desc); }
+    void SetEnvironmentCacheDirectory(std::string directory) { m_environmentSystem.SetCacheDirectory(std::move(directory)); }
     void DestroyEnvironment(EnvironmentHandle handle) { m_environmentSystem.DestroyEnvironment(handle); }
     void SetActiveEnvironment(EnvironmentHandle handle) noexcept
     {

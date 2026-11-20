@@ -827,6 +827,16 @@ add_library(krom_editor_build_tools STATIC
 target_include_directories(krom_editor_build_tools PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
 
+add_library(krom_editor_paths STATIC app/editor/EnginePaths.cpp)
+target_include_directories(krom_editor_paths PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_compile_definitions(krom_editor_paths PRIVATE
+    KROM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
+    KROM_BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+if(WIN32)
+    target_link_libraries(krom_editor_paths PRIVATE Shell32 Ole32)
+endif()
+
 function(krom_add_editor target platform_target backend_addon backend_define)
     set(_editor_main app/editor/editor_main.cpp)
     if(ARGC GREATER 4)
@@ -848,6 +858,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
     endif()
     target_link_libraries(${target} PRIVATE
         krom_editor_build_tools
+        krom_editor_paths
         engine_renderer_orchestration_layer
         engine_camera
         engine_forward
@@ -1033,6 +1044,10 @@ message(STATUS "===================================================")
 # Visual Studio installation and builds a small project, which takes seconds).
 add_executable(krom_build_tools_tests tests/test_build_tools.cpp)
 target_link_libraries(krom_build_tools_tests PRIVATE krom_editor_build_tools)
+
+add_executable(krom_engine_paths_tests tests/test_engine_paths.cpp)
+target_link_libraries(krom_engine_paths_tests PRIVATE krom_editor_paths)
+target_compile_definitions(krom_engine_paths_tests PRIVATE KROM_TEST_BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}")
 
 if(TARGET engine_platform_win32 AND TARGET engine_vulkan)
     krom_add_editor(krom_editor_loading_tests engine_platform_win32 engine_vulkan
