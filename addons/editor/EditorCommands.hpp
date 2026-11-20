@@ -126,6 +126,8 @@ EntityID CreateEmptyEntity(EditorFrameContext& ctx, const char* name = "Entity",
 EntityID CreateFolderEntity(EditorFrameContext& ctx, const char* name = "Folder", EntityID parent = NULL_ENTITY);
 EntityID CreateCameraEntity(EditorFrameContext& ctx, EntityID parent = NULL_ENTITY);
 EntityID CreateLightEntity(EditorFrameContext& ctx, LightType type, EntityID parent = NULL_ENTITY);
+// Entity with a PostProcessVolumeComponent (default box, no overrides yet).
+EntityID CreatePostProcessVolumeEntity(EditorFrameContext& ctx, EntityID parent = NULL_ENTITY);
 EntityID DuplicateEntity(EditorFrameContext& ctx, EntityID source);
 // Copies selected hierarchies once, selects the corresponding copies and records one undo step.
 bool DuplicateSelectedEntityHierarchies(EditorFrameContext& ctx);

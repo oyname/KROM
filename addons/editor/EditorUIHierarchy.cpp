@@ -560,6 +560,9 @@ void DrawEntityList(EditorFrameContext& ctx)
                     CreateLightEntity(ctx, LightType::Point, createParent);
                 if (ImGui::MenuItem(TranslateLabel("component.spot_light", "Spot Light").c_str()))
                     CreateLightEntity(ctx, LightType::Spot, createParent);
+                ImGui::Separator();
+                if (ImGui::MenuItem(TranslateLabel("hierarchy.post_process_volume", "Post-Process Volume").c_str()))
+                    CreatePostProcessVolumeEntity(ctx, createParent);
                 ImGui::EndMenu();
             }
 
@@ -780,6 +783,10 @@ void DrawEntityList(EditorFrameContext& ctx)
                 CreateLightEntity(ctx, LightType::Point, createParent);
             if (ImGui::MenuItem(TranslateLabel("component.spot_light", "Spot Light").c_str()))
                 CreateLightEntity(ctx, LightType::Spot, createParent);
+
+            ImGui::Separator();
+            if (ImGui::MenuItem(TranslateLabel("hierarchy.post_process_volume", "Post-Process Volume").c_str()))
+                CreatePostProcessVolumeEntity(ctx, createParent);
             ImGui::EndMenu();
         }
         ImGui::EndPopup();

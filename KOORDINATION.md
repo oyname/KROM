@@ -17,6 +17,111 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Clear coat layer for pbr-lit materials (Claude, 2026-11-20)
+
+- Second item of the open shading list. Working tree on `feature/post-process-volumes`, not committed
+  (together with the Burley entry below). Agreed with the user: values like Unreal/glTF (strength and
+  roughness as numbers, no textures yet), coat smooth over the base (geometric normal, as glTF without
+  a coat normal map), own group "Clear coat" in the material editor; glTF import later.
+- Material: `MaterialAsset::clearcoatFactor` / `clearcoatRoughness` (0..1, `ClearcoatStrength()` /
+  `ClearcoatRoughness()` clamp), .mat keys `clearcoatFactor` / `clearcoatRoughness`, written only when not
+  zero (old materials stay byte-identical on save), read by both parsers (`AssetPipeline.cpp`,
+  `EditorMaterialLibrary.cpp`). Editor: card "Clear coat" in the material editor after "Render
+  options", pbr-lit only (`DrawClearcoatProperties`), roughness greyed out at strength 0, de/en texts.
+  (First placed in `DrawSurfaceScalars`, which only custom shaders reach - moved; `--material-ui` passes.)
+- Constant buffer: `clearcoatFactor` @ 108, `clearcoatRoughness` @ 112 after `boxTileSize`; the material
+  graph block moves from 112 to 128. Changed in `PbrMasterMaterial` (packed in list order, no
+  reflection), the HLSL pixel shaders (`pbr_lit`, `pbr_forward_plus`, `shadow_pbr`) and, layout only,
+  the four GLSL PBR/shadow shaders (frozen OpenGL renders no coat but must keep the graph offsets).
+  Vertex shaders end at `boxTileSize` and need nothing. `kMaxSlots` comment 53 -> 55 (limit 64).
+- Values are set through `pbr::SetPbrClearcoat` (editor `UpdateRuntimeMaterialParameters`, krom.h
+  runtime). It checks the desc parameters, not `GetParameterLayout`, which is derived later.
+- Shader (`shaders/pbr_clearcoat.hlsl`, Filament model): F0 0.04, GGX + Kelemen visibility, coat
+  roughness clamped to 0.04 and widened by specular AA on the geometric normal. Direct light: base of
+  each light times (1 - Fc(LoH)), plus the coat lobe. IBL: global prefiltered map plus local probes
+  (second `EvaluateLocalProbes` call, only when strength > 0), base IBL times (1 - Fc(NoV)), coat
+  reflection gets the same specular occlusion. SSR replaces only the base reflection (coat stays IBL,
+  `iblSpecularWeight` attenuated). Material graph has no coat output yet.
+- Checked: Debug x64 build incl. loading tests per target (`out/claude-clearcoat-build5.log`),
+  `krom_tests` all passed (`out/claude-clearcoat-tests.log`) incl. new checks: .mat round trip and
+  clamping (`test_editor_commands.cpp`), CB offsets 104/108/112/128/256 and `SetPbrClearcoat` reaching the
+  CB of a fresh instance (`test_renderer.cpp`). Room 2 copies, `KROM_VALIDATION=1 KROM_CAPTURE_LIT=1
+  --gtao-motion`: without coat identical to the Burley capture (0.02/0.03 mean), with coat 1 / 0.05 on
+  the floor (`NewMaterial.mat`) the floor reflects the sky at grazing angles (mean 5.7/255,
+  `out/claude-clearcoat-check/vergleich.png`), DX11 vs Vulkan 0.28, no validation messages; OpenGL
+  loading test runs with the coat material.
+- Trap found on the way: the first test put the coat on `Material_Boden.mat`, but the visible checker
+  floor in Room 2 is `NewMaterial.mat` - no code issue, cost a few debug runs.
+- Not checked: the editor group by hand (undo, greyed roughness), the material preview sphere,
+  exported game, a coated normal-mapped material up close.
+- Please review: the CB layout move (graph block 112 -> 128) across all PBR shaders, the base
+  attenuation and the SSR split, and the second probe evaluation for the coat.
+
+## Burley diffuse as a fifth BRDF option (Claude, 2026-11-20)
+
+- First item of the open shading list (Burley, clearcoat, sheen, anisotropy, SSS, transmission, LTC).
+  On `feature/post-process-volumes` (working tree, not committed yet).
+- Shader: bit 4 of `featureParams[2].x` (`shadingBurleyDiffuse`), `KromBurleyDiffuseFactor` in
+  `shaders/pbr_shading_options.hlsl` (Burley 2012 as a factor on Lambert, perceptual roughness,
+  not energy conserving as in Filament). Direct light only in `pbr_lit.ps.hlsl` and
+  `pbr_forward_plus.ps.hlsl`; IBL/probe diffuse stays Lambert. The half vector is now computed once for
+  per-light Fresnel and Burley (dot(H,L) = dot(H,V), so the Fresnel result is unchanged).
+  OpenGL GLSL unchanged (frozen); the bit is ignored there.
+- Settings: `ShadingSettings::burleyDiffuse` (struct default false, so "all off" stays the old image),
+  project key `brdfBurleyDiffuse` (default true, missing key in existing projects = on, like the other
+  BRDF keys), checkbox "Burley diffuse" in the project settings (de/en), legacy scenes off,
+  editor/krom.h script service, `script::RenderSettings::burleyDiffuse`, `KROM_SHADING` bit 16 in
+  `reflection_probe`. `ScriptModuleAbiVersion` 5 -> 6 (`RenderSettings` changed size).
+- Trap fixed on the way: `ReadLegacySceneRenderSettings` initialises `ProjectRenderSettings`
+  positionally; the new field needed one more `false` there (test checks `specularAntiAliasing` and
+  `specularOcclusion` of legacy scenes).
+- Checked: Debug x64 build (`out/claude-burley-build.log`, loading tests built per target:
+  `out/claude-burley-build-tests.log`), `krom_tests` all passed (`out/claude-burley-tests.log`) incl.
+  extended "Shading settings flags" and "Project settings and legacy defaults". Room 2 copies with the key
+  on/off (`out/claude-burley-on|off`), `KROM_VALIDATION=1 KROM_CAPTURE_LIT=1 --gtao-motion`: no validation
+  messages on DX11 and Vulkan; on vs off mean 0.5/255, up to ~50/255 brighter on walls and stairs seen at
+  grazing angles, no change elsewhere (`out/claude-burley-check/vergleich.png`); DX11 vs Vulkan 0.18/255.
+  Cross-check that the bit reaches the GPU: zeroing the Burley factor in the shader removed the direct
+  diffuse. OpenGL loading test builds and runs.
+- Not checked: the checkbox by hand in the editor, exported game, a script DLL using the new field.
+- Please review: the Burley term and its place in the light loop, the default true for existing
+  projects (changes their look slightly), the ABI bump.
+
+## Post-process volumes (Claude, 2026-11-19)
+
+- Step 9 of `doc/PLAN_BILDQUALITAET_2.md`, branch `feature/post-process-volumes` from `main` (017cdb5),
+  not committed yet. UI as agreed in step 8 of the plan.
+- New add-on `addons/postprocess` (no GPU code): `PostProcessVolumeComponent` (global, weight 0..1,
+  priority, box like the reflection probe: extents, boxOffset, blendDistance inward; 17 override bits:
+  exposure/correction, auto-exposure min/max EV, every field of `ColorGradingSettings`, bloom/GTAO/SSR/
+  contact shadow intensity). `BlendPostProcessVolumes`: factor 0 at the wall -> 1 at blendDistance,
+  ascending priority, equal priority larger box first, lerp by weight * factor, AgX look switches above
+  0.5, inactive entities ignored.
+- Hosts blend every frame and write only the add-on settings: editor (`KromEditorApp`, editor camera, main
+  camera during play) and krom.h runtime (new `effectiveTonemapSettings` for the forward feature;
+  `tonemapSettings` stays the base for scripts/krom.h; project intensities kept as base). Bloom via new
+  `TonemapSettings::bloomIntensity` (< 0 = feature value), read by the tonemap pass per frame.
+- Editor: hierarchy Create -> "Post-Process Volume", Add component -> "Post Process", Inspector section
+  with override ticks (greyed out when off, undo), duplicate, clipboard; viewport box with dashed inner
+  blend edge and face handles. Deviation: the probe has no viewport handles, so the collision box handles
+  (`UpdateOBBHandles`) now work on an OBB or a volume box.
+- Scenes (.json/.kscene) and prefabs (`postProcessVolume` record, instance sync): `overrides` as a name
+  list (missing name = no override), all values stored. Scripts: `IScriptContext::Set/GetPostProcessWeight`
+  (inline), krom.h `Set/GetPostProcessWeight`; no ABI bump (no by-value type changed).
+- Checked: Debug x64 targets with `-j6` (`out/claude-ppvolume-build.log`), `krom_tests` all passed incl.
+  new suite "Post-process volumes" (57 checks) and an editor test (create, override undo/redo, duplicate,
+  inspector draws). Room 2 copy with a volume (`out/claude-ppvolume-DemoProject`), `KROM_VALIDATION=1
+  KROM_CAPTURE_LIT=1 KROM_CAPTURE_PPVOLUME=1 --gtao-motion`: outside / blend band middle / inside give
+  +0.5 / 0.0 / -0.5 EV etc. as expected, no validation messages on DX11 and Vulkan, DX11 vs Vulkan
+  0.42-0.47/255 (`out/claude-ppvolume-check/vergleich.png`).
+  OpenGL editor and loading test build and start; the blended values are computed there too (grading has
+  no effect on OpenGL, frozen).
+- Not checked: manual editor use (dragging handles, ticks), play mode with the game camera, exported game,
+  a script DLL calling `SetPostProcessWeight`. Known: material/animation previews share the tonemap
+  settings and show the volume values at the camera.
+- Please review: blend order and the equal-priority rule, the base/effective split in `KromWrapper.cpp`,
+  `TonemapSettings::bloomIntensity`, and the shared OBB/volume handle code in `EditorUIViewport.cpp`.
+
 ## Colour grading and AgX looks per scene (Claude, 2026-11-19)
 
 - Step 7b of `doc/PLAN_BILDQUALITAET_2.md`, on `main`, not committed yet. UI agreed with the

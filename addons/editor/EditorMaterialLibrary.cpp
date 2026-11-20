@@ -764,6 +764,8 @@ bool ParseEditorMaterialAssetSource(const std::string& source,
         else if (parts[0] == "uvOffset" && parts.size() >= 3) loaded.uvOffset = { std::stof(parts[1]), std::stof(parts[2]) };
         else if (parts[0] == "uvProjection" && parts.size() >= 2) loaded.boxProjection = parts[1] == "box";
         else if (parts[0] == "boxTileSize" && parts.size() >= 2) loaded.boxTileSize = std::stof(parts[1]);
+        else if (parts[0] == "clearcoatFactor" && parts.size() >= 2) loaded.clearcoatFactor = std::stof(parts[1]);
+        else if (parts[0] == "clearcoatRoughness" && parts.size() >= 2) loaded.clearcoatRoughness = std::stof(parts[1]);
         else if (parts[0] == "alphaMode" && parts.size() >= 2)
         {
             if (parts[1] == "mask") loaded.alphaMode = assets::MaterialAlphaMode::Mask;
@@ -846,6 +848,8 @@ bool ParseEditorMaterialAssetSource(const std::string& source,
     outAsset.graph                    = std::move(loaded.graph);
     outAsset.boxProjection            = loaded.boxProjection;
     outAsset.boxTileSize              = loaded.boxTileSize;
+    outAsset.clearcoatFactor          = loaded.clearcoatFactor;
+    outAsset.clearcoatRoughness       = loaded.clearcoatRoughness;
     outAsset.params.erase(std::remove_if(outAsset.params.begin(), outAsset.params.end(),
         [](const assets::MaterialParam& p) { return IsBuiltInMaterialParamName(p.name); }),
         outAsset.params.end());
@@ -1615,6 +1619,7 @@ void UpdateRuntimeMaterialParameters(EditorFrameContext& ctx,
         ctx.materials.SetVec2(runtimeMaterial, "uvScale", asset.uvScale);
         ctx.materials.SetVec2(runtimeMaterial, "uvOffset", asset.uvOffset);
         ctx.materials.SetFloat(runtimeMaterial, "boxTileSize", asset.BoxProjectionTileSize());
+        renderer::pbr::SetPbrClearcoat(ctx.materials, runtimeMaterial, asset.ClearcoatStrength(), asset.ClearcoatRoughness());
         ctx.materials.SetTexture(runtimeMaterial, "albedo", binding.baseColorTexture);
         ctx.materials.SetTexture(runtimeMaterial, "normal", binding.normalTexture);
         ctx.materials.SetTexture(runtimeMaterial, "orm", binding.ormTexture);
@@ -2800,6 +2805,25 @@ bool DrawRenderOptions(assets::MaterialAsset& asset, bool allowInstancing)
     return dirty;
 }
 
+// Clear coat card of pbr-lit materials (custom shaders and the legacy template have no layer).
+bool DrawClearcoatProperties(assets::MaterialAsset& asset)
+{
+    bool dirty = false;
+    const auto field = [](const std::string& label, float& value) {
+        return value_ui::DragFloat(label.c_str(), &value, 0.005f, 0.f, 1.f, "%.3f", ImGuiSliderFlags_AlwaysClamp);
+    };
+    if (field(TranslateLabel("material.clearcoat_strength", "Clearcoat Strength"), asset.clearcoatFactor))
+        dirty = true;
+    ImGui::SetItemTooltip("%s", Translate("material.clearcoat_strength_tip"));
+    const bool noLayer = asset.clearcoatFactor <= 0.f;
+    if (noLayer) ImGui::BeginDisabled();
+    if (field(TranslateLabel("material.clearcoat_roughness", "Clearcoat Roughness"), asset.clearcoatRoughness))
+        dirty = true;
+    ImGui::SetItemTooltip("%s", Translate("material.clearcoat_roughness_tip"));
+    if (noLayer) ImGui::EndDisabled();
+    return dirty;
+}
+
 bool DrawSurfaceScalars(EditorFrameContext& ctx, assets::MaterialAsset& asset, EditorMaterialTemplate currentTemplate)
 {
     bool dirty = false;
@@ -2963,6 +2987,9 @@ void DrawSelectedMaterialEditor(EditorFrameContext& ctx)
                 [&] { return DrawUvProperties(asset, type, uvInput); });
         section("##render_card", "material.render_options", "Render Options", ICON_LC_SETTINGS,
                 [&] { return DrawRenderOptions(asset, !pbr); });
+        if (pbr)
+            section("##clearcoat_card", "material.clearcoat", "Clear coat", ICON_LC_SPARKLES,
+                    [&] { return DrawClearcoatProperties(asset); });
         if (custom)
             section("##shader_card", "material.shader_parameters", "Shader Parameters", ICON_LC_CODE, [&] {
                 const bool scalars = DrawSurfaceScalars(ctx, asset, type);

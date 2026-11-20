@@ -8,6 +8,7 @@
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/physics/PhysicsComponents.hpp"
+#include "addons/postprocess/PostProcessVolumeComponent.hpp"
 #include "addons/script/ScriptRegistry.hpp"
 #include "assets/AssetImporter.hpp"
 #include "core/Types.hpp"
@@ -103,6 +104,8 @@ struct PrefabEntityRecord
 
     // Partikel-Addon (nur Daten)
     std::optional<ParticleEmitterComponent> particleEmitter;
+    // Post-process add-on (data only)
+    std::optional<PostProcessVolumeComponent> postProcessVolume;
     std::optional<CameraComponent> camera;
     std::optional<LightComponent> light;
 };

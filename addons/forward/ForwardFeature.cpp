@@ -2073,9 +2073,11 @@ void main()
                             // Settings are read every frame: the owner may change them at any time.
                             TonemapPassConstants tonemapConstants{};
                             tonemapConstants.bloom = bloomConstants;
+                            const TonemapSettings settings = tonemapSettings ? *tonemapSettings : TonemapSettings{};
+                            if (settings.bloomIntensity >= 0.0f)
+                                tonemapConstants.bloom.intensity = settings.bloomIntensity;
                             if (!bloomAvailable)
                                 tonemapConstants.bloom.intensity = 0.0f;
-                            const TonemapSettings settings = tonemapSettings ? *tonemapSettings : TonemapSettings{};
                             tonemapConstants.exposureScale = std::exp2(std::clamp(settings.exposureEv, kMinExposureEv, kMaxExposureEv));
                             tonemapConstants.op = static_cast<float>(static_cast<uint32_t>(settings.op));
                             tonemapConstants.grading = BuildColorGradingConstants(settings.grading,

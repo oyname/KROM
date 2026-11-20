@@ -42,6 +42,7 @@
 
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/probes/ProbeComponents.hpp"
+#include "addons/postprocess/PostProcessVolumeComponent.hpp"
 
 #include "addons/prefab/Prefab.hpp"
 
@@ -2251,6 +2252,8 @@ static void TestIndependentMaterialInstances(test::TestContext& ctx)
     assets::MaterialAsset asset; asset.uvScale = {5.f, 3.f}; asset.uvOffset = {.2f, .4f};
     asset.boxProjection = true;
     asset.boxTileSize = 0.5f;
+    asset.clearcoatFactor = 0.75f;
+    asset.clearcoatRoughness = 0.25f;
 
     state.selectedMaterialAssetData = asset;
 
@@ -2277,6 +2280,8 @@ static void TestIndependentMaterialInstances(test::TestContext& ctx)
 
     CHECK(ctx, registry.materials.Get(parsed)->boxProjection);
     CHECK_EQ(ctx, registry.materials.Get(parsed)->BoxProjectionTileSize(), 0.5f);
+    CHECK_EQ(ctx, registry.materials.Get(parsed)->ClearcoatStrength(), 0.75f);
+    CHECK_EQ(ctx, registry.materials.Get(parsed)->ClearcoatRoughness(), 0.25f);
 
     const auto other = pipeline.LoadMaterialSource("template pbr-lit\nuvScale 2 2\n");
 
@@ -2287,6 +2292,14 @@ static void TestIndependentMaterialInstances(test::TestContext& ctx)
     CHECK_EQ(ctx, registry.materials.Get(other)->uvScale.x, 2.f);
 
     CHECK(ctx, !registry.materials.Get(other)->boxProjection);
+    // No clear coat keys: no layer, and a material without one writes none.
+    CHECK_EQ(ctx, registry.materials.Get(other)->ClearcoatStrength(), 0.f);
+    CHECK(ctx, assets::SerializeMaterialProperties(*registry.materials.Get(other)).find("clearcoat") == std::string::npos);
+    assets::MaterialAsset outOfRange;
+    outOfRange.clearcoatFactor = 3.f;
+    outOfRange.clearcoatRoughness = -1.f;
+    CHECK_EQ(ctx, outOfRange.ClearcoatStrength(), 1.f);
+    CHECK_EQ(ctx, outOfRange.ClearcoatRoughness(), 0.f);
     CHECK_EQ(ctx, registry.materials.Get(other)->BoxProjectionTileSize(), 0.f);
 
     CHECK(ctx, world.Get<MaterialComponent>(second)->materialOverrideSource.empty());
@@ -5880,6 +5893,71 @@ static void TestEditProbeBoxFaces(test::TestContext& ctx)
     ImGui::SetCurrentContext(previous);
 }
 
+// Post-process volume: created from the hierarchy menu, overrides and undo,
+// duplicate keeps the values, the inspector section draws.
+static void TestPostProcessVolumeEditing(test::TestContext& ctx)
+{
+    namespace ui = engine::renderer::addons::editor::detail;
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterPostProcessComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+
+    const EntityID entity = CreatePostProcessVolumeEntity(editor);
+    CHECK(ctx, world.IsAlive(entity) && world.Has<PostProcessVolumeComponent>(entity));
+    CHECK(ctx, world.Has<WorldTransformComponent>(entity));
+    CHECK_EQ(ctx, state.selectedEntity, entity);
+    CHECK(ctx, world.Get<PostProcessVolumeComponent>(entity)->overrides == 0u);
+
+    auto* volume = world.Get<PostProcessVolumeComponent>(entity);
+    CHECK(ctx, EditComponents<PostProcessVolumeComponent>(editor, "history.ppv_override", entity, [&] {
+        volume->SetOverride(PostProcessOverride::ExposureEv, true);
+        volume->exposureEv = 2.f;
+    }));
+    CHECK(ctx, world.Get<PostProcessVolumeComponent>(entity)->Overrides(PostProcessOverride::ExposureEv));
+    CHECK(ctx, UndoEditorHistory(editor));
+    const EntityID afterUndo = state.selectedEntity.IsValid() ? state.selectedEntity : entity;
+    const auto* undone = world.Get<PostProcessVolumeComponent>(afterUndo);
+    CHECK(ctx, undone && undone->overrides == 0u && undone->exposureEv == 0.f);
+    CHECK(ctx, RedoEditorHistory(editor));
+    const auto* redone = world.Get<PostProcessVolumeComponent>(state.selectedEntity);
+    CHECK(ctx, redone && redone->Overrides(PostProcessOverride::ExposureEv) && redone->exposureEv == 2.f);
+
+    const EntityID copy = DuplicateEntity(editor, state.selectedEntity);
+    const auto* copied = world.Get<PostProcessVolumeComponent>(copy);
+    CHECK(ctx, copied && redone && *copied == *redone);
+
+    // The inspector section draws with every override ticked and unticked.
+    auto* previous = ImGui::GetCurrentContext();
+    auto* gui = ImGui::CreateContext();
+    auto& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = {800.f, 1400.f};
+    io.DeltaTime = 1.f / 60.f;
+    unsigned char* pixels;
+    int width, height;
+    io.Fonts->GetTexDataAsRGBA32(&pixels, &width, &height);
+    const auto frame = [&] {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos({0.f, 0.f});
+        ImGui::SetNextWindowSize(io.DisplaySize);
+        ui::DrawInspector(editor);
+        ImGui::Render();
+    };
+    state.selectedEntity = copy;
+    frame();
+    world.Get<PostProcessVolumeComponent>(copy)->overrides = (1u << kPostProcessOverrideCount) - 1u;
+    frame();
+    world.Get<PostProcessVolumeComponent>(copy)->global = true;
+    frame();
+    CHECK(ctx, ImGui::FindWindowByName(TranslateLabel("panel.inspector", "Inspector##editor").c_str()) != nullptr);
+    ImGui::DestroyContext(gui);
+    ImGui::SetCurrentContext(previous);
+}
+
 static void TestUnpackPrefabInstance(test::TestContext& ctx)
 {
     ComponentMetaRegistry componentRegistry = CreateEditorCommandsRegistry();
@@ -6019,6 +6097,7 @@ int RunEditorCommandTests()
     suite.Add("Hierarchy create under selected parent, else at root end", TestCreateEntityUnderParent);
     suite.Add("Duplicated reflection probe gets a new id", TestDuplicateProbeGetsNewId);
     suite.Add("Probe inspector edits one box face at a time", TestEditProbeBoxFaces);
+    suite.Add("Post-process volume create, override undo, duplicate, inspector", TestPostProcessVolumeEditing);
     suite.Add("Unpack prefab instance keeps nested instances", TestUnpackPrefabInstance);
 
     suite.Add("Editor transaction groups operations and selection", TestEditorTransactionGroupsOperationsAndSelection);

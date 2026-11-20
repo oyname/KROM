@@ -70,6 +70,8 @@ layout(std140) uniform PerMaterial
     vec2  uvScale;              // byte 88
     vec2  uvOffset;             // byte 96
     float  boxTileSize;
+    float  clearcoatFactor;     // layout only: OpenGL (frozen) renders no clear coat
+    float  clearcoatRoughness;
 #ifdef KROM_MATERIAL_GRAPH
     vec4 graphOutputs;
     vec4 graphNodes[16];

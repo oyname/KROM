@@ -61,6 +61,11 @@ inline std::string SerializeMaterialProperties(const assets::MaterialAsset& asse
         out << "uvOffset " << asset.uvOffset.x << " " << asset.uvOffset.y << "\n";
         out << "uvProjection " << (asset.boxProjection ? "box" : "mesh") << "\n";
         out << "boxTileSize " << asset.boxTileSize << "\n";
+        if (asset.clearcoatFactor != 0.f || asset.clearcoatRoughness != 0.f)
+        {
+            out << "clearcoatFactor " << asset.clearcoatFactor << "\n";
+            out << "clearcoatRoughness " << asset.clearcoatRoughness << "\n";
+        }
 
         out << "baseColorTexture " << asset.baseColorTexture.path << "\n";
         out << "metallicRoughnessTexture " << asset.metallicRoughnessTexture.path << "\n";

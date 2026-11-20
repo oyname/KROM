@@ -28,6 +28,9 @@ struct ShadingSettings
     // frozen OpenGL shader keeps its older normal-map-only variant. On by
     // default: an older variant (normal maps only) was always on before.
     bool specularAntiAliasing = true;
+    // Direct diffuse: Burley (Disney) shape instead of Lambert; indirect diffuse
+    // stays Lambert. HLSL shaders only (OpenGL frozen).
+    bool burleyDiffuse = false;
 
     [[nodiscard]] friend constexpr bool operator==(const ShadingSettings&, const ShadingSettings&) noexcept = default;
 };
@@ -36,13 +39,15 @@ inline constexpr uint32_t kShadingFlagHeightCorrelatedVisibility = 1u << 0;
 inline constexpr uint32_t kShadingFlagPerLightDiffuseFresnel     = 1u << 1;
 inline constexpr uint32_t kShadingFlagMultiScatterCompensation   = 1u << 2;
 inline constexpr uint32_t kShadingFlagSpecularAntiAliasing       = 1u << 3;
+inline constexpr uint32_t kShadingFlagBurleyDiffuse              = 1u << 4;
 
 [[nodiscard]] inline constexpr uint32_t ShadingFlags(const ShadingSettings& settings) noexcept
 {
     return (settings.heightCorrelatedVisibility ? kShadingFlagHeightCorrelatedVisibility : 0u)
          | (settings.perLightDiffuseFresnel     ? kShadingFlagPerLightDiffuseFresnel     : 0u)
          | (settings.multiScatterCompensation   ? kShadingFlagMultiScatterCompensation   : 0u)
-         | (settings.specularAntiAliasing       ? kShadingFlagSpecularAntiAliasing       : 0u);
+         | (settings.specularAntiAliasing       ? kShadingFlagSpecularAntiAliasing       : 0u)
+         | (settings.burleyDiffuse              ? kShadingFlagBurleyDiffuse              : 0u);
 }
 
 // featureParams[2]; must match the #defines in assets/pbr_shading_options.*.

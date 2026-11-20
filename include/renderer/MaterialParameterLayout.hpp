@@ -83,7 +83,7 @@ struct MaterialParameterSlot
 
 struct MaterialParameterLayout
 {
-    static constexpr uint32_t kMaxSlots = 64u; // PBR with material graph needs 53.
+    static constexpr uint32_t kMaxSlots = 64u; // PBR with material graph needs 55.
 
     std::array<MaterialParameterSlot, kMaxSlots> slots{};
     uint32_t slotCount = 0u;

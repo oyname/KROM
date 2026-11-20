@@ -46,8 +46,8 @@ Qualitätsstufen und Post-Process-Volumes. Zeitliche Verfahren (TAA) kommen zule
 | 6 | Auto-Exposure | erledigt (2026-11-19), Review offen |
 | 7 | Qualitätsstufen | erledigt (2026-11-19), Review offen |
 | 7b | Color Grading und AgX-Looks (pro Szene) | erledigt (2026-11-19), Review offen |
-| 8 | Post-Process-Volume: Bedienablauf abstimmen | offen |
-| 9 | Post-Process-Volume: Umsetzung | offen |
+| 8 | Post-Process-Volume: Bedienablauf abstimmen | erledigt (2026-11-19) |
+| 9 | Post-Process-Volume: Umsetzung | erledigt (2026-11-19), Review offen |
 | 10 | Motion Vectors (optional, später entscheiden) | offen |
 | 11 | TAA und zeitliche Akkumulation für GTAO/SSR (optional) | offen |
 | 12 | Weiteres: 3D-LUT, HDR-Display-Ausgabe, Shading-Models, Flächenlichter (optional) | offen |
@@ -142,13 +142,26 @@ unabhängig weiter.
 
 ### 8. Bedienablauf abstimmen
 
-- Nur Text, mit dem Nutzer abstimmen, bevor Code entsteht. Vorschlag:
-  - Komponente „Post Process“ an einer Entity; global oder mit Trigger-Collider als Bereich,
-  - Priorität und Überblendweite,
-  - Werte direkt in der Komponente, keine Profil-Assets; jedes Feld mit Override-Häkchen,
-  - Wiederverwendung über Prefabs.
-- Volumes ändern nur **Werte**, keine Techniken (kein MSAA, kein Operator), damit beim
-  Betreten keine Pipelines neu gebaut werden.
+Abgestimmt mit dem Nutzer am 2026-11-19 (gilt für Schritt 9):
+
+- **Anlegen:** Hierarchie → Erstellen → „Post-Process-Volume“ (Entity mit Komponente) oder
+  an einer vorhandenen Entity „Komponente hinzufügen → Post Process“.
+- **Bereich: eigene Box wie die Reflection Probe** (nicht die Trigger-Box): Ausdehnung,
+  Versatz, Überblendweite in Metern nach innen (an der Wand 0 %, ab dieser Tiefe 100 %),
+  Priorität; Griffe im Viewport wie bei der Probe, innere Überblendgrenze gestrichelt.
+- **Kopf der Komponente:** Häkchen „Global“ (Box wird ignoriert), Gewicht 0..1 (auch per
+  Script, z. B. Schadens-Effekt).
+- **Überschreibbar, je Feld mit Häkchen** (nicht angehakt = ausgegraut, wirkt nicht):
+  - Belichtung: feste Belichtung bzw. Korrektur, Min/Max-EV der Automatik,
+  - Farbkorrektur: alle Regler der Szenenkarte (`ColorGradingSettings`),
+  - Effekte: Intensität von Bloom, GTAO, SSR, Kontaktschatten.
+- **Nicht überschreibbar:** Belichtungsmodus, Tonemap-Operator, MSAA, Post-AA, Effekte an/aus
+  – sie bauen den Frame-Graph oder Pipelines um (Ruckler beim Betreten).
+- **Mischen:** Grundwerte = Szenenkarten „Belichtung“/„Farbkorrektur“ und
+  Projekteinstellungen; Volumes nach Priorität aufsteigend, je Gewicht × Überblendfaktor
+  linear darüber. Maßgeblich ist die Editor-Kamera bzw. im Play-Modus die Spielkamera.
+  Werte ohne Zwischenstufen (AgX-Look) wechseln ab mehr als 50 %.
+- Werte stehen direkt in der Komponente, keine Profil-Assets; Wiederverwendung über Prefabs.
 
 ### 9. Umsetzung
 
@@ -455,3 +468,49 @@ GTX 1660, Viewport 1181×709, MSAA wie Projekt, ohne Validierung), ms:
   `out/claude-grading-check/vergleich.png`.
 - Nicht geprüft: Bedienung der Inspector-Karte von Hand; OpenGL (eingefroren, ohne Grading,
   nur gebaut).
+
+### 2026-11-19 – Schritt 9, Post-Process-Volumes (Claude, Zweig `feature/post-process-volumes`)
+
+- Umgesetzt wie unter „8. Bedienablauf abstimmen“. Nicht committet.
+- Neues Add-on `addons/postprocess` (ohne GPU-Code): `PostProcessVolumeComponent` (Global, Gewicht,
+  Priorität, Box wie die Reflection Probe: Ausdehnung, Versatz, Überblendweite nach innen; Häkchen-Bits
+  für 17 Felder: feste Belichtung/Korrektur, Min/Max-EV, alle Felder von `ColorGradingSettings`
+  (Lift/Gamma/Gain je Farbe + Wert zusammen), Intensität von Bloom, GTAO, SSR, Kontaktschatten).
+  `PostProcessBlend`: Faktor 0 an der Wand → 1 ab Überblendweite (0 = harte Kante), Box dreht mit der
+  Entity, Skalierung ignoriert; Volumes nach Priorität aufsteigend, bei gleicher Priorität die größere
+  Box zuerst (kleinere gewinnt, wie bei den Probes), linear mit Gewicht × Faktor; AgX-Look wechselt ab
+  > 50 %. Inaktive Entities zählen nicht.
+- Hosts: Editor (`KromEditorApp`, jeden Frame vor dem Rendern) und krom.h-Runtime mischen über die
+  Grundwerte (Szenenkarten bzw. Script-/Szenenwerte + Projekteinstellungen) und schreiben das Ergebnis
+  in die Add-on-Einstellungen; gespeicherte Werte bleiben unberührt. Runtime: neuer
+  `effectiveTonemapSettings` für den Forward-Pass, `tonemapSettings` bleibt Grundwert (Scripts, krom.h).
+  Position: Editor-Kamera, im Play-Modus Hauptkamera (sonst erste Kamera); Runtime: Kamera der Ansicht.
+- Bloom: `TonemapSettings::bloomIntensity` (neu, < 0 = Feature-Wert, nicht gespeichert), vom
+  Tonemap-Pass jeden Frame gelesen.
+- Editor: Hierarchie → Erstellen → „Post-Process-Volume“, „Komponente hinzufügen → Post Process“,
+  Inspector-Bereich (Kopf, Box, Abschnitte Belichtung/Farbkorrektur/Effekte, je Zeile Häkchen, ausgegraut
+  wenn aus, Undo über `BeginPendingComponentEdit`/`EditComponents`), Duplizieren, Komponenten-Zwischenablage.
+  Viewport: blaue Box, innere Überblendgrenze gestrichelt, Flächengriffe. **Abweichung:** Die Probe hat im
+  Viewport keine Griffe (nur Linien und Felder im Inspector); die Griffe kommen deshalb von der
+  Kollisionsbox (`UpdateOBBHandles` arbeitet jetzt auf OBB oder Volume-Box, Strg = symmetrisch).
+- Szene (Editor-.json und .kscene) und Prefabs: Komponente `PostProcessVolumeComponent`, `overrides` als
+  Namensliste (fehlender Name = kein Override), alle Werte werden gespeichert (Häkchen aus behält sie),
+  Farbkorrektur als `colorGrading`-Objekt wie in der Szene. Prefab-Record `postProcessVolume`, auch beim
+  Abgleich von Instanzen.
+- Script: `IScriptContext::SetPostProcessWeight/GetPostProcessWeight` (inline über `Get<T>`), krom.h
+  `SetPostProcessWeight/GetPostProcessWeight`. Kein ABI-Sprung: keine per Wert übergebene Struktur geändert.
+- Geprüft: Debug x64 (`-j6`, nur nötige Ziele, `out/claude-ppvolume-build.log`), `krom_tests` grün, neu
+  „Post-process volumes“ (Faktor an Rand/innen/außen mit Versatz und Drehung, global, Gewicht, Priorität,
+  kleinere Box, Häkchen aus, inaktiv, Look-Schwelle 0,5/0,51, Szenen-Rundweg, fehlende Schlüssel,
+  Prefab-Rundweg; 57 Prüfungen) und ein Editor-Test (Erstellen, Override + Undo/Redo, Duplizieren,
+  Inspector zeichnet). Room 2 (Kopie `out/claude-ppvolume-DemoProject` mit Volume: Halbausdehnung 3 m,
+  Überblendung 2 m, −0,5 EV, Temperatur 60, Sättigung 0,4, Kontrast 1,15) mit `KROM_VALIDATION=1
+  KROM_CAPTURE_LIT=1 KROM_CAPTURE_PPVOLUME=1 --gtao-motion` auf DX11 und Vulkan ohne Meldung; außen
+  +0,5 EV (Szene), am Rand (Mitte des Bandes) 0,0 EV / Temperatur 30 / Sättigung 0,7, innen −0,5 / 60 /
+  0,4; DX11/Vulkan mittlere Abweichung 0,42–0,47/255. Bild: `out/claude-ppvolume-check/vergleich.png`
+  (oben DX11, unten Vulkan; außen / Rand / innen).
+  OpenGL-Editor und -Ladetest bauen und starten; die Werte werden dort ebenso gemischt (Grading wirkt
+  unter OpenGL nicht, eingefroren).
+- Nicht geprüft: Bedienung im Editor von Hand (Griffe ziehen, Häkchen), Play-Modus mit Spielkamera,
+  exportiertes Spiel, Script-DLL mit `SetPostProcessWeight`. Bekannt: Material-/Animationsvorschau
+  benutzen dieselben Tonemap-Einstellungen und zeigen daher auch die Volume-Werte an der Kamera.

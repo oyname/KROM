@@ -411,6 +411,7 @@ add_subdirectory(addons/gtao)
 add_subdirectory(addons/contact_shadow)
 add_subdirectory(addons/ssr)
 add_subdirectory(addons/probes)
+add_subdirectory(addons/postprocess)
 add_subdirectory(addons/outline)
 add_subdirectory(addons/animation)
 add_subdirectory(addons/script)
@@ -1080,6 +1081,7 @@ add_executable(krom_tests
     tests/test_text.cpp
     tests/test_particles.cpp
     tests/test_probes.cpp
+    tests/test_postprocess.cpp
     tests/test_editor_commands.cpp
     tests/test_editor_close.cpp)
 target_include_directories(krom_tests PRIVATE

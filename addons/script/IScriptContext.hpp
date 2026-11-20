@@ -6,6 +6,7 @@
 #include "addons/script/IPhysicsService.hpp"
 #include "addons/script/IRenderSettingsService.hpp"
 #include "addons/script/ITextService.hpp"
+#include "addons/postprocess/PostProcessVolumeComponent.hpp"
 #include "collision/SceneQueries.hpp"
 #include "core/Math.hpp"
 #include "core/Types.hpp"
@@ -233,6 +234,23 @@ public:
         if (T* existing = world->Get<T>(id))
             return existing;
         return &world->Add<T>(id, std::forward<Args>(args)...);
+    }
+
+    // ── Post-process volumes ─────────────────────────────────────────────────
+    // Weight 0..1 of the PostProcessVolumeComponent of the entity (e.g. a damage
+    // effect). Set returns false without a volume; Get then returns 0.
+    bool SetPostProcessWeight(float weight, EntityID entity = NULL_ENTITY) noexcept
+    {
+        PostProcessVolumeComponent* volume = Get<PostProcessVolumeComponent>(entity);
+        if (!volume)
+            return false;
+        volume->weight = weight >= 0.f ? (weight <= 1.f ? weight : 1.f) : 0.f;   // NaN -> 0
+        return true;
+    }
+    [[nodiscard]] float GetPostProcessWeight(EntityID entity = NULL_ENTITY) noexcept
+    {
+        const PostProcessVolumeComponent* volume = Get<PostProcessVolumeComponent>(entity);
+        return volume ? volume->weight : 0.f;
     }
 
     // Erste lebende Entity mit diesem NameComponent-Namen, sonst NULL_ENTITY.

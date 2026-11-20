@@ -23,6 +23,8 @@
 #include "addons/probes/ProbeComponents.hpp"
 #include "addons/probes/ProbeFeature.hpp"
 #include "addons/probes/ProbeSerialization.hpp"
+#include "addons/postprocess/PostProcessBlend.hpp"
+#include "addons/postprocess/PostProcessSerialization.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/lighting/LightingFeature.hpp"
 #include "addons/lighting/LightingSerialization.hpp"
@@ -206,6 +208,9 @@ using internal::SurfaceRecord;
 
 // =============================================================================
 
+// Bloom strength of the forward feature (base of the post-process volumes).
+constexpr float kRuntimeBloomIntensity = 0.12f;
+
 struct State
 {
     GraphicsConfig config{};
@@ -223,6 +228,15 @@ struct State
     // Read every frame by the forward tonemap pass (Krom::SetTonemapping, scene files).
     std::shared_ptr<engine::renderer::addons::forward::TonemapSettings> tonemapSettings =
         std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
+    // What the tonemap pass reads: tonemapSettings with the post-process volumes
+    // at the camera blended over it, rewritten every frame (tonemapSettings stays).
+    std::shared_ptr<engine::renderer::addons::forward::TonemapSettings> effectiveTonemapSettings =
+        std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
+    // Project effect intensities (base of the post-process volumes); the add-on
+    // settings receive the blended values every frame.
+    float baseGtaoIntensity = 0.65f;
+    float baseSsrIntensity = 1.0f;
+    float baseContactShadowIntensity = 1.0f;
     // Reset request of the automatic exposure on scene loads.
     std::shared_ptr<engine::renderer::addons::forward::AutoExposureStatus> autoExposureStatus =
         std::make_shared<engine::renderer::addons::forward::AutoExposureStatus>();
@@ -1138,6 +1152,8 @@ engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(State& state,
         // Computed graph normals have no direct normal texture for the builder to set this from.
         state.materialSystem.SetFloat(material, "normalStrength", asset.PbrNormalStrength());
         state.materialSystem.SetFloat(material, "boxTileSize", asset.BoxProjectionTileSize());
+        engine::renderer::pbr::SetPbrClearcoat(state.materialSystem, material, asset.ClearcoatStrength(),
+                                               asset.ClearcoatRoughness());
         if (graph.Active())
         {
             ApplyRuntimeMaterialGraph(state, material, graph, asset);
@@ -2228,6 +2244,7 @@ static bool LoadComponentSerializedScene(State& state,
     engine::audio::RegisterAudioDeserializationHandlers(deserializer);
     engine::particles::RegisterParticleDeserializationHandlers(deserializer);
     engine::addons::probes::RegisterProbeDeserializationHandlers(deserializer);
+    engine::addons::postprocess::RegisterPostProcessDeserializationHandlers(deserializer);
 
     engine::serialization::DeserializeResult result =
         deserializer.DeserializeFromJson(data.sourceJson);
@@ -2340,6 +2357,9 @@ static void ApplyProjectRenderSettings(State& state, const engine::ProjectRender
 {
     // A player's quality level replaces the level options of the project.
     engine::ProjectRenderSettings rendering = projectRendering;
+    state.baseGtaoIntensity = rendering.gtaoIntensity;
+    state.baseSsrIntensity = rendering.ssrIntensity;
+    state.baseContactShadowIntensity = rendering.contactShadowIntensity;
     if (state.userQualityLevel && !state.editorLiveStateEnabled)
         engine::ApplyRenderQualityLevel(rendering, *state.userQualityLevel);
     if (state.tonemapSettings &&
@@ -2357,7 +2377,8 @@ static void ApplyProjectRenderSettings(State& state, const engine::ProjectRender
     }
     if (state.shadingSettings)
         *state.shadingSettings = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
-                                   rendering.brdfMultiScatter, rendering.specularAntiAliasing };
+                                   rendering.brdfMultiScatter, rendering.specularAntiAliasing,
+                                   rendering.brdfBurleyDiffuse };
     if (state.ssrResources)
     {
         engine::renderer::addons::ssr::SsrSettings& ssr = state.ssrResources->settings;
@@ -2414,6 +2435,7 @@ public:
         out.perLightDiffuseFresnel = shading.perLightDiffuseFresnel;
         out.multiScatterCompensation = shading.multiScatterCompensation;
         out.specularAntiAliasing = shading.specularAntiAliasing;
+        out.burleyDiffuse = shading.burleyDiffuse;
         out.specularOcclusion = m_state.probeRuntime && m_state.probeRuntime->GetSettings().specularOcclusion;
         out.gtaoEnabled = m_state.gtaoResources && m_state.gtaoResources->settings.enabled;
         out.ssrEnabled = m_state.ssrResources && m_state.ssrResources->settings.enabled;
@@ -2440,7 +2462,8 @@ public:
             m_state.msaaSettings->sampleCount = NormalizeMsaaSamples(in.msaaSamples);
         if (m_state.shadingSettings)
             *m_state.shadingSettings = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel,
-                                         in.multiScatterCompensation, in.specularAntiAliasing };
+                                         in.multiScatterCompensation, in.specularAntiAliasing,
+                                         in.burleyDiffuse };
         if (m_state.probeRuntime)
         {
             engine::addons::probes::ProbeSettings probeSettings = m_state.probeRuntime->GetSettings();
@@ -2808,6 +2831,7 @@ void RegisterEngineComponents(State& state)
     engine::RegisterAudioComponents(state.componentRegistry);
     engine::RegisterParticleComponents(state.componentRegistry);
     engine::RegisterProbeComponents(state.componentRegistry);
+    engine::RegisterPostProcessComponents(state.componentRegistry);
     engine::RegisterPrefabInstanceComponent(state.componentRegistry);
     state.componentsRegistered = true;
 }
@@ -2828,9 +2852,9 @@ bool RegisterEngineFeatures(State& state)
     forwardConfig.enableEnvironmentBackground = true;
     forwardConfig.enableBloom = true;
     forwardConfig.bloomThreshold = 1.0f;
-    forwardConfig.bloomIntensity = 0.12f;
+    forwardConfig.bloomIntensity = kRuntimeBloomIntensity;
     forwardConfig.bloomBlurRadius = 1.0f;
-    forwardConfig.tonemapSettings = state.tonemapSettings;
+    forwardConfig.tonemapSettings = state.effectiveTonemapSettings;
     forwardConfig.autoExposureStatus = state.autoExposureStatus;
     forwardConfig.msaaSettings = state.msaaSettings;
     forwardConfig.postAASettings = state.postAASettings;
@@ -4521,6 +4545,25 @@ bool BakeReflectionProbe(LPENTITY entity, const char* sceneName)
     return true;
 }
 
+bool SetPostProcessWeight(LPENTITY entity, float weight)
+{
+    State& state = Get();
+    auto* volume = (state.world && state.world->IsAlive(entity))
+        ? state.world->Get<engine::PostProcessVolumeComponent>(entity) : nullptr;
+    if (!volume)
+        return false;
+    volume->weight = std::isfinite(weight) ? std::clamp(weight, 0.0f, 1.0f) : 0.0f;
+    return true;
+}
+
+float GetPostProcessWeight(LPENTITY entity)
+{
+    State& state = Get();
+    const auto* volume = (state.world && state.world->IsAlive(entity))
+        ? state.world->Get<engine::PostProcessVolumeComponent>(entity) : nullptr;
+    return volume ? volume->weight : 0.0f;
+}
+
 void SetReflectionProbesEnabled(bool enabled)
 {
     State& state = Get();
@@ -5061,6 +5104,26 @@ int Run()
 
         // The prepass only runs when an add-on (GTAO) asks for an opaque input.
         view.enableDepthPrepass = true;
+
+        // Post-process volumes at the camera over the scene and project values.
+        {
+            engine::addons::postprocess::PostProcessValues ppBase;
+            ppBase.tonemap = *state.tonemapSettings;
+            ppBase.bloomIntensity = kRuntimeBloomIntensity;
+            ppBase.gtaoIntensity = state.baseGtaoIntensity;
+            ppBase.ssrIntensity = state.baseSsrIntensity;
+            ppBase.contactShadowIntensity = state.baseContactShadowIntensity;
+            const engine::addons::postprocess::PostProcessValues pp =
+                engine::addons::postprocess::BlendPostProcessVolumes(*state.world, view.cameraPosition, ppBase);
+            *state.effectiveTonemapSettings = pp.tonemap;
+            state.effectiveTonemapSettings->bloomIntensity = pp.bloomIntensity;
+            if (state.gtaoResources)
+                state.gtaoResources->settings.intensity = pp.gtaoIntensity;
+            if (state.ssrResources)
+                state.ssrResources->settings.intensity = pp.ssrIntensity;
+            if (state.contactShadowResources)
+                state.contactShadowResources->settings.intensity = pp.contactShadowIntensity;
+        }
 
         // Text-Overlay im UI-Pass; Atlas/Pipeline vorher ausserhalb des Passes anlegen.
         engine::renderer::FramePipelineCallbacks frameCallbacks;

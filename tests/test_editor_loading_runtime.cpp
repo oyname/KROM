@@ -21,6 +21,7 @@
 #include "addons/particles/ParticleComponents.hpp"
 #include "addons/prefab/PrefabInstanceComponent.hpp"
 #include "addons/probes/ProbeFeature.hpp"
+#include "addons/postprocess/PostProcessVolumeComponent.hpp"
 #include "imgui.h"
 #include "imgui_internal.h"
 #include <chrono>
@@ -1766,6 +1767,51 @@ struct EditorLoadingSmokeTest final : IAppScene
             out.write(rgb.data(), static_cast<std::streamsize>(rgb.size()));
             Check(static_cast<bool>(out), file);
         };
+
+        // KROM_CAPTURE_PPVOLUME=1: same view, the first post-process volume of the
+        // scene is moved so the camera is outside, in the middle of the blend band
+        // and inside (outside.ppm, edge.ppm, inside.ppm). Needs a box volume.
+        if (std::getenv("KROM_CAPTURE_PPVOLUME") && frames >= 120)
+        {
+            EntityID volumeEntity = NULL_ENTITY;
+            app.m_world->View<PostProcessVolumeComponent>([&](EntityID id, PostProcessVolumeComponent&) {
+                if (!volumeEntity.IsValid()) volumeEntity = id;
+            });
+            auto* volume = volumeEntity.IsValid() ? app.m_world->Get<PostProcessVolumeComponent>(volumeEntity) : nullptr;
+            auto* transform = volumeEntity.IsValid() ? app.m_world->Get<TransformComponent>(volumeEntity) : nullptr;
+            if (!volume || !transform || volume->global)
+            {
+                Check(false, "scene has a box post-process volume");
+                context.renderLoop.GetWindow()->RequestClose();
+                return true;
+            }
+            // Camera depth from the +X wall: < 0 outside, blend/2 in the band, far inside.
+            const auto place = [&](float depth) {
+                const math::Vec3 cam = state.editorCamera.position;
+                const math::Vec3 center{ cam.x - volume->extents.x + depth, cam.y, cam.z };
+                transform->localPosition = center - transform->localRotation.Rotate(volume->boxOffset);
+                transform->dirty = true;
+                ++transform->localVersion;
+            };
+            const auto report = [&](const char* label) {
+                const auto& t = *app.m_tonemapSettings;
+                std::printf("PPVOLUME %s exposureEv=%+.3f temperature=%.2f saturation=%.3f look=%u bloom=%.3f\n",
+                            label, t.exposureEv, t.grading.temperature, t.grading.saturation,
+                            static_cast<unsigned>(t.grading.look), t.bloomIntensity);
+            };
+            switch (frames)
+            {
+            case 120: place(-1.f); break;
+            case 126: report("outside"); capture("outside.ppm"); break;
+            case 127: place(volume->blendDistance * 0.5f); break;
+            case 133: report("edge"); capture("edge.ppm"); break;
+            case 134: place(volume->extents.x); break;
+            case 140: report("inside"); capture("inside.ppm"); break;
+            case 141: context.renderLoop.GetWindow()->RequestClose(); break;
+            default: break;
+            }
+            return true;
+        }
 
         // Update runs before rendering. The readback on n+1 captures precisely
         // the first submitted frame after the mutation on n.

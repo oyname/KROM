@@ -1638,6 +1638,9 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
     ImGui::Checkbox(TranslateLabel("shading.multi_scatter", "Multi-scatter compensation").c_str(),
                     &rendering.brdfMultiScatter);
     ImGui::SetItemTooltip("%s", Translate("shading.multi_scatter_tip"));
+    ImGui::Checkbox(TranslateLabel("shading.burley", "Burley diffuse").c_str(),
+                    &rendering.brdfBurleyDiffuse);
+    ImGui::SetItemTooltip("%s", Translate("shading.burley_tip"));
     ImGui::Checkbox(TranslateLabel("shading.specular_aa", "Specular anti-aliasing").c_str(),
                     &rendering.specularAntiAliasing);
     ImGui::SetItemTooltip("%s", Translate("shading.specular_aa_tip"));

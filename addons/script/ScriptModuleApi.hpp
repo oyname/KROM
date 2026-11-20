@@ -5,7 +5,8 @@
 
 namespace engine::script {
 // 5: script::RenderSettings gained ColorGrading (size change of a by-value API type).
-inline constexpr uint32_t ScriptModuleAbiVersion = 5;
+// 6: script::RenderSettings gained burleyDiffuse.
+inline constexpr uint32_t ScriptModuleAbiVersion = 6;
 
 struct ScriptModuleAbi
 {

@@ -434,6 +434,7 @@ void ApplyChanges(ecs::World& world, EntityID entity, const JsonValue& before,
     copy.template operator()<AudioSourceComponent>({"audioSource"});
     copy.template operator()<AudioListenerComponent>({"audioListener"});
     copy.template operator()<ParticleEmitterComponent>({"particleEmitter"});
+    copy.template operator()<PostProcessVolumeComponent>({"postProcessVolume"});
     copy.template operator()<CameraComponent>({"camera"});
     copy.template operator()<LightComponent>({"light"});
     copy.template operator()<SkinComponent>({"skeletonAssetPath"});
