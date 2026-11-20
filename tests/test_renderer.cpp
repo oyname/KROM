@@ -912,8 +912,25 @@ static void TestPbrMasterMaterial(test::TestContext& ctx)
     {
         CHECK(ctx, graphLayout->FindByName("graphTexture0") != nullptr);
         CHECK(ctx, graphLayout->FindByName("graphTexture1") != nullptr);
-        CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("graphOutputs"), 112u);
-        CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("graphNode7"), 240u);
+        // Must match the PerMaterial cbuffers of the PBR shaders (HLSL and GLSL).
+        CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("boxTileSize"), 104u);
+        CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("clearcoatFactor"), 108u);
+        CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("clearcoatRoughness"), 112u);
+        CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("graphOutputs"), 128u);
+        CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("graphNode7"), 256u);
+
+        // Clear coat values reach the constant buffer of a freshly built instance.
+        pbr::SetPbrClearcoat(materials, graphMaterial, 0.6f, 0.2f);
+        const auto& coatData = materials.GetCBData(graphMaterial);
+        CHECK(ctx, coatData.size() >= 116u);
+        if (coatData.size() >= 116u)
+        {
+            float coat = 0.f, coatRoughness = 0.f;
+            std::memcpy(&coat, coatData.data() + 108u, sizeof(float));
+            std::memcpy(&coatRoughness, coatData.data() + 112u, sizeof(float));
+            CHECK(ctx, std::fabs(coat - 0.6f) < 1e-6f);
+            CHECK(ctx, std::fabs(coatRoughness - 0.2f) < 1e-6f);
+        }
     }
 
     // CB layout: roughnessFactor and metallicFactor must be present
@@ -3166,7 +3183,11 @@ static void TestShadingSettingsFlags(test::TestContext& ctx)
     ShadingSettings specularAA{ false, false, false, false };
     specularAA.specularAntiAliasing = true;
     CHECK_EQ(ctx, ShadingFlags(specularAA), 8u);
+    ShadingSettings burley{ false, false, false, false };
+    burley.burleyDiffuse = true;
+    CHECK_EQ(ctx, ShadingFlags(burley), 16u);
     CHECK_EQ(ctx, ShadingFlags(ShadingSettings{ true, true, true, true }), 15u);
+    CHECK_EQ(ctx, ShadingFlags(ShadingSettings{ true, true, true, true, true }), 31u);
 
     // The block lands in featureParams[2].x, where pbr_shading_options.* reads it.
     CHECK(ctx, IsFrameParameterBlockInRange(kShadingFrameParameterBlock));

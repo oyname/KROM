@@ -218,6 +218,7 @@ int main()
         settings.perLightDiffuseFresnel = (bits & 2) != 0;
         settings.multiScatterCompensation = (bits & 4) != 0;
         settings.specularAntiAliasing = (bits & 8) != 0;
+        settings.burleyDiffuse = (bits & 16) != 0;
         Krom::SetShading(settings);
     }
 

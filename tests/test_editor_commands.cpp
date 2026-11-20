@@ -2252,6 +2252,8 @@ static void TestIndependentMaterialInstances(test::TestContext& ctx)
     assets::MaterialAsset asset; asset.uvScale = {5.f, 3.f}; asset.uvOffset = {.2f, .4f};
     asset.boxProjection = true;
     asset.boxTileSize = 0.5f;
+    asset.clearcoatFactor = 0.75f;
+    asset.clearcoatRoughness = 0.25f;
 
     state.selectedMaterialAssetData = asset;
 
@@ -2278,6 +2280,8 @@ static void TestIndependentMaterialInstances(test::TestContext& ctx)
 
     CHECK(ctx, registry.materials.Get(parsed)->boxProjection);
     CHECK_EQ(ctx, registry.materials.Get(parsed)->BoxProjectionTileSize(), 0.5f);
+    CHECK_EQ(ctx, registry.materials.Get(parsed)->ClearcoatStrength(), 0.75f);
+    CHECK_EQ(ctx, registry.materials.Get(parsed)->ClearcoatRoughness(), 0.25f);
 
     const auto other = pipeline.LoadMaterialSource("template pbr-lit\nuvScale 2 2\n");
 
@@ -2288,6 +2292,14 @@ static void TestIndependentMaterialInstances(test::TestContext& ctx)
     CHECK_EQ(ctx, registry.materials.Get(other)->uvScale.x, 2.f);
 
     CHECK(ctx, !registry.materials.Get(other)->boxProjection);
+    // No clear coat keys: no layer, and a material without one writes none.
+    CHECK_EQ(ctx, registry.materials.Get(other)->ClearcoatStrength(), 0.f);
+    CHECK(ctx, assets::SerializeMaterialProperties(*registry.materials.Get(other)).find("clearcoat") == std::string::npos);
+    assets::MaterialAsset outOfRange;
+    outOfRange.clearcoatFactor = 3.f;
+    outOfRange.clearcoatRoughness = -1.f;
+    CHECK_EQ(ctx, outOfRange.ClearcoatStrength(), 1.f);
+    CHECK_EQ(ctx, outOfRange.ClearcoatRoughness(), 0.f);
     CHECK_EQ(ctx, registry.materials.Get(other)->BoxProjectionTileSize(), 0.f);
 
     CHECK(ctx, world.Get<MaterialComponent>(second)->materialOverrideSource.empty());

@@ -71,4 +71,8 @@ private:
     [[nodiscard]] static std::vector<PbrSlotDesc> BuildSlotDescs();
 };
 
+// Clear coat values of a pbr-lit instance (PerMaterial clearcoatFactor and
+// clearcoatRoughness). Skipped for materials whose layout lacks them (other templates).
+void SetPbrClearcoat(MaterialSystem& materials, MaterialHandle instance, float strength, float roughness);
+
 } // namespace engine::renderer::pbr

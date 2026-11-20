@@ -7,6 +7,7 @@
 #include "renderer/runtime/MaterialRuntimeBridge.hpp"
 #include "renderer/ShaderBindingModel.hpp"
 #include "core/Debug.hpp"
+#include <algorithm>
 
 namespace engine::renderer::pbr {
 
@@ -172,6 +173,8 @@ MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
     //   float2 uvScale         @ 88
     //   float2 uvOffset        @ 96
     //   float  boxTileSize     @ 104 (0 = mesh UVs)
+    //   float  clearcoatFactor @ 108 (0 = no clear coat layer)
+    //   float  clearcoatRoughness @ 112
     desc.parameters = {
         MakeVec4Param("baseColorFactor",    {1.f, 1.f, 1.f, 1.f}),
         MakeVec4Param("emissiveFactor",     {0.f, 0.f, 0.f, 0.f}),
@@ -192,6 +195,8 @@ MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
         MakeVec2Param("uvScale",            {1.f, 1.f}),
         MakeVec2Param("uvOffset",           {0.f, 0.f}),
         MakeFloatParam("boxTileSize",       0.0f),
+        MakeFloatParam("clearcoatFactor",   0.0f),
+        MakeFloatParam("clearcoatRoughness", 0.0f),
         MakeTextureParam("albedo"),
         MakeTextureParam("normal"),
         MakeTextureParam("orm"),
@@ -257,6 +262,22 @@ void PbrMasterMaterial::SetSlotValue(MaterialHandle instance,
         }
         return;
     }
+}
+
+void SetPbrClearcoat(MaterialSystem& materials, MaterialHandle instance, float strength, float roughness)
+{
+    // The desc lists the parameters at once; the instance layout is derived later.
+    const MaterialDesc* desc = materials.GetDesc(instance);
+    if (!desc)
+        return;
+    const auto has = [desc](const char* name) {
+        return std::any_of(desc->parameters.begin(), desc->parameters.end(),
+                           [name](const MaterialParam& param) { return param.name == name; });
+    };
+    if (!has("clearcoatFactor") || !has("clearcoatRoughness"))
+        return;
+    materials.SetFloat(instance, "clearcoatFactor", strength);
+    materials.SetFloat(instance, "clearcoatRoughness", roughness);
 }
 
 std::vector<PbrSlotDesc> PbrMasterMaterial::BuildSlotDescs()

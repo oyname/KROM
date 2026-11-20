@@ -31,6 +31,8 @@ cbuffer PerMaterial : register(b2)
     float2 uvScale;
     float2 uvOffset;
     float  boxTileSize;
+    float  clearcoatFactor;     // 0 = no clear coat layer (pbr_clearcoat.hlsl)
+    float  clearcoatRoughness;
 #ifdef KROM_MATERIAL_GRAPH
     float4 graphOutputs;
     float4 graphNodes[16];

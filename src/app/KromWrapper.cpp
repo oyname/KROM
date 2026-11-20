@@ -1152,6 +1152,8 @@ engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(State& state,
         // Computed graph normals have no direct normal texture for the builder to set this from.
         state.materialSystem.SetFloat(material, "normalStrength", asset.PbrNormalStrength());
         state.materialSystem.SetFloat(material, "boxTileSize", asset.BoxProjectionTileSize());
+        engine::renderer::pbr::SetPbrClearcoat(state.materialSystem, material, asset.ClearcoatStrength(),
+                                               asset.ClearcoatRoughness());
         if (graph.Active())
         {
             ApplyRuntimeMaterialGraph(state, material, graph, asset);
@@ -2375,7 +2377,8 @@ static void ApplyProjectRenderSettings(State& state, const engine::ProjectRender
     }
     if (state.shadingSettings)
         *state.shadingSettings = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
-                                   rendering.brdfMultiScatter, rendering.specularAntiAliasing };
+                                   rendering.brdfMultiScatter, rendering.specularAntiAliasing,
+                                   rendering.brdfBurleyDiffuse };
     if (state.ssrResources)
     {
         engine::renderer::addons::ssr::SsrSettings& ssr = state.ssrResources->settings;
@@ -2432,6 +2435,7 @@ public:
         out.perLightDiffuseFresnel = shading.perLightDiffuseFresnel;
         out.multiScatterCompensation = shading.multiScatterCompensation;
         out.specularAntiAliasing = shading.specularAntiAliasing;
+        out.burleyDiffuse = shading.burleyDiffuse;
         out.specularOcclusion = m_state.probeRuntime && m_state.probeRuntime->GetSettings().specularOcclusion;
         out.gtaoEnabled = m_state.gtaoResources && m_state.gtaoResources->settings.enabled;
         out.ssrEnabled = m_state.ssrResources && m_state.ssrResources->settings.enabled;
@@ -2458,7 +2462,8 @@ public:
             m_state.msaaSettings->sampleCount = NormalizeMsaaSamples(in.msaaSamples);
         if (m_state.shadingSettings)
             *m_state.shadingSettings = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel,
-                                         in.multiScatterCompensation, in.specularAntiAliasing };
+                                         in.multiScatterCompensation, in.specularAntiAliasing,
+                                         in.burleyDiffuse };
         if (m_state.probeRuntime)
         {
             engine::addons::probes::ProbeSettings probeSettings = m_state.probeRuntime->GetSettings();

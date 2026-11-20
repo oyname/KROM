@@ -31,6 +31,7 @@ struct ProjectRenderSettings
     bool brdfHeightCorrelated = true;
     bool brdfPerLightFresnel = true;
     bool brdfMultiScatter = true;
+    bool brdfBurleyDiffuse = true;
     bool specularAntiAliasing = true;      // geometric specular AA (HLSL backends)
     bool specularOcclusion = true;
     // Screen-space reflections (SSR add-on, not under OpenGL).
@@ -197,6 +198,7 @@ inline void ReadRenderSettingKeys(const serialization::JsonValue& object, Projec
     flag("brdfHeightCorrelated", out.brdfHeightCorrelated);
     flag("brdfPerLightFresnel", out.brdfPerLightFresnel);
     flag("brdfMultiScatter", out.brdfMultiScatter);
+    flag("brdfBurleyDiffuse", out.brdfBurleyDiffuse);
     flag("specularAntiAliasing", out.specularAntiAliasing);
     flag("specularOcclusion", out.specularOcclusion);
     auto number = [&](const char* key, float& value, float lo, float hi) {
@@ -225,7 +227,7 @@ inline void ReadRenderSettingKeys(const serialization::JsonValue& object, Projec
 // existed (Reinhard, everything off).
 inline ProjectRenderSettings ReadLegacySceneRenderSettings(const serialization::JsonValue& sceneRoot)
 {
-    ProjectRenderSettings result{"reinhard", 1u, false, false, false, false, false};
+    ProjectRenderSettings result{"reinhard", 1u, false, false, false, false, false, false};
     if (const auto* env = sceneRoot.Get("environment"); env && env->IsObject())
         ReadRenderSettingKeys(*env, result);
     return result;
@@ -332,6 +334,7 @@ inline void WriteProjectSettings(serialization::JsonWriter& out, const ProjectSe
     out.WriteBool("brdfHeightCorrelated", settings.rendering.brdfHeightCorrelated);
     out.WriteBool("brdfPerLightFresnel", settings.rendering.brdfPerLightFresnel);
     out.WriteBool("brdfMultiScatter", settings.rendering.brdfMultiScatter);
+    out.WriteBool("brdfBurleyDiffuse", settings.rendering.brdfBurleyDiffuse);
     out.WriteBool("specularAntiAliasing", settings.rendering.specularAntiAliasing);
     out.WriteBool("specularOcclusion", settings.rendering.specularOcclusion);
     out.WriteBool("ssrEnabled", settings.rendering.ssrEnabled);

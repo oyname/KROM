@@ -6194,7 +6194,8 @@ void KromEditorApp::ApplyProjectRenderSettings()
     if (!renderer::addons::forward::ParsePostAAMode(rendering.postAA.c_str(), m_editorState.postAA))
         Debug::LogWarning("KromEditorApp.cpp: unknown post-AA mode '%s'", rendering.postAA.c_str());
     m_editorState.shading = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
-                              rendering.brdfMultiScatter, rendering.specularAntiAliasing };
+                              rendering.brdfMultiScatter, rendering.specularAntiAliasing,
+                              rendering.brdfBurleyDiffuse };
     m_editorState.specularOcclusion = rendering.specularOcclusion;
     m_editorState.ssrEnabled = rendering.ssrEnabled;
     m_editorState.ssrIntensity = rendering.ssrIntensity;
@@ -6240,6 +6241,7 @@ public:
         out.perLightDiffuseFresnel = m_state.shading.perLightDiffuseFresnel;
         out.multiScatterCompensation = m_state.shading.multiScatterCompensation;
         out.specularAntiAliasing = m_state.shading.specularAntiAliasing;
+        out.burleyDiffuse = m_state.shading.burleyDiffuse;
         out.specularOcclusion = m_state.specularOcclusion;
         out.gtaoEnabled = m_state.gtaoSettings.enabled;
         out.ssrEnabled = m_state.ssrEnabled;
@@ -6257,7 +6259,7 @@ public:
         m_state.tonemap.exposureMode = in.autoExposure ? ExposureMode::Auto : ExposureMode::Fixed;
         m_state.msaaSamples = NormalizeMsaaSamples(in.msaaSamples);
         m_state.shading = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel, in.multiScatterCompensation,
-                            in.specularAntiAliasing };
+                            in.specularAntiAliasing, in.burleyDiffuse };
         m_state.specularOcclusion = in.specularOcclusion;
         m_state.gtaoSettings.enabled = in.gtaoEnabled;
         m_state.ssrEnabled = in.ssrEnabled;

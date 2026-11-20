@@ -56,6 +56,7 @@ struct RenderSettings
     bool        perLightDiffuseFresnel = true;
     bool        multiScatterCompensation = true;
     bool        specularAntiAliasing = true;  // geometric specular AA; OpenGL keeps its own variant
+    bool        burleyDiffuse = true;         // Burley diffuse for direct light; no effect under OpenGL
     bool        specularOcclusion = true;
     bool        gtaoEnabled = true;          // GTAO add-on; no effect under OpenGL
     bool        ssrEnabled = true;           // SSR add-on; no effect under OpenGL

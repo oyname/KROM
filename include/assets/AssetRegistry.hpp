@@ -21,6 +21,7 @@
 #include "core/Math.hpp"
 #include "core/Debug.hpp"
 #include "renderer/ShaderContract.hpp"
+#include <algorithm>
 #include <cfloat>
 #include <cmath>
 #include <vector>
@@ -304,6 +305,10 @@ struct MaterialAsset : AssetBase
     MaterialGraph             graph;
     bool                      boxProjection = false;
     float                     boxTileSize = 1.f;
+    // Clear coat layer of the pbr-lit template (as glTF KHR_materials_clearcoat /
+    // Unreal ClearCoat): strength 0..1 (0 = no layer) and its own roughness 0..1.
+    float                     clearcoatFactor = 0.f;
+    float                     clearcoatRoughness = 0.f;
 
     static constexpr float kMinBoxTileSize = 0.001f;
 
@@ -336,6 +341,15 @@ struct MaterialAsset : AssetBase
         result.emissiveStrength = PbrEmissiveStrength();
         result.graph = {};
         return result;
+    }
+
+    [[nodiscard]] float ClearcoatStrength() const noexcept
+    {
+        return std::isfinite(clearcoatFactor) ? std::clamp(clearcoatFactor, 0.f, 1.f) : 0.f;
+    }
+    [[nodiscard]] float ClearcoatRoughness() const noexcept
+    {
+        return std::isfinite(clearcoatRoughness) ? std::clamp(clearcoatRoughness, 0.f, 1.f) : 0.f;
     }
 
     [[nodiscard]] float BoxProjectionTileSize() const noexcept

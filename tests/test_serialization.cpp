@@ -410,6 +410,8 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK_EQ(ctx, oldScene.msaaSamples, 2u);
     CHECK(ctx, oldScene.brdfMultiScatter);
     CHECK(ctx, !oldScene.brdfHeightCorrelated);
+    CHECK(ctx, !oldScene.brdfBurleyDiffuse);
+    CHECK(ctx, !oldScene.specularAntiAliasing);
     CHECK(ctx, !oldScene.specularOcclusion);
     const auto keylessScene = ReadLegacySceneRenderSettings(JsonParser::Parse(R"({"entities":[]})", error));
     CHECK_EQ(ctx, keylessScene.tonemapOperator, std::string("reinhard"));
@@ -431,6 +433,7 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     settings.rendering.msaaSamples = 4u;
     settings.rendering.postAA = "smaa";
     settings.rendering.brdfPerLightFresnel = false;
+    settings.rendering.brdfBurleyDiffuse = false;
     settings.rendering.specularOcclusion = false;
     settings.rendering.gtaoEnabled = false;
     settings.rendering.gtaoRadius = 1.5f;   // above the old 1.0 m limit
@@ -457,6 +460,7 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK_EQ(ctx, oldProject.rendering.contactShadowLength, 0.30f);
     CHECK_EQ(ctx, oldProject.rendering.contactShadowSteps, 12u);
     CHECK(ctx, oldProject.rendering.specularAntiAliasing);   // missing key: specular AA stays on
+    CHECK(ctx, oldProject.rendering.brdfBurleyDiffuse);      // missing key: Burley on
     const auto result = ReadProjectSettings(JsonParser::Parse(out.GetString(), error));
     CHECK(ctx, error.empty());
     CHECK_EQ(ctx, result.windowTitle, settings.windowTitle);
@@ -476,6 +480,7 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK(ctx, result.rendering.brdfHeightCorrelated);
     CHECK(ctx, !result.rendering.brdfPerLightFresnel);
     CHECK(ctx, result.rendering.brdfMultiScatter);
+    CHECK(ctx, !result.rendering.brdfBurleyDiffuse);
     CHECK(ctx, !result.rendering.specularOcclusion);
     CHECK(ctx, !result.rendering.gtaoEnabled);
     CHECK_EQ(ctx, result.rendering.gtaoRadius, 1.5f);

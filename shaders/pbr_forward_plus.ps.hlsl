@@ -115,6 +115,8 @@ cbuffer PerMaterial : register(b2)
     float2 uvScale;
     float2 uvOffset;
     float  boxTileSize;
+    float  clearcoatFactor;     // 0 = no clear coat layer (pbr_clearcoat.hlsl)
+    float  clearcoatRoughness;
 #ifdef KROM_MATERIAL_GRAPH
     float4 graphOutputs;
     float4 graphNodes[16];
@@ -519,6 +521,8 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
     return result;
 }
 
+#include "pbr_clearcoat.hlsl"
+
 float3 EvalSpecularGGX(float3 N, float3 V, float3 L, float3 albedoValue, float metallic, float roughness)
 {
     float3 H = SafeNormalize(V + L);
@@ -648,6 +652,17 @@ float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
     float3 F_a = F_SchlickRoughness(NoV, F0, roughness);
     float3 kD_a = (1.0f.xxx - F_a) * (1.0f - metallic);
 
+    // Clear coat layer (material): own roughness, geometric normal.
+    const float coatStrength = saturate(clearcoatFactor);
+    const float3 coatN = geomN;
+    float coatRoughness = 0.04f;
+    float coatFv = 0.0f;
+    if (coatStrength > 0.0f)
+    {
+        coatRoughness = ApplySpecularAA(coatN, clamp(clearcoatRoughness, 0.04f, 1.0f));
+        coatFv = KromClearcoatFresnel(max(dot(coatN, V), 1e-4f), coatStrength);
+    }
+
     // Multi-scatter energy compensation for the specular lobes (shading option).
     float3 energyCompensation = float3(1.0f, 1.0f, 1.0f);
 #ifdef KROM_IBL
@@ -695,6 +710,28 @@ LocalProbeIBL localProbes;
 #else
     iblDiffuse = ambientColor.rgb * ambientColor.a * albedoValue;
 #endif
+    // Clear coat: its own reflection on top, the base IBL attenuated by 1 - Fc.
+    float3 coatIBL = float3(0.0f, 0.0f, 0.0f);
+#ifdef KROM_IBL
+    if (coatStrength > 0.0f && !(debugFlags & DBG_DISABLE_IBL))
+    {
+        if (!(debugFlags & DBG_DISABLE_IBL_SPEC))
+        {
+            const float3 coatR = reflect(-V, coatN);
+            float3 coatPrefilt = SamplePrefilteredIBL(coatR, coatRoughness);
+            if (probeCount != 0u)
+            {
+                const LocalProbeIBL coatProbes = EvaluateLocalProbes(IN.positionWS, coatN, coatR, coatRoughness,
+                                                                     LocalProbeReflectionMipBias(coatR));
+                coatPrefilt = coatProbes.specular + coatPrefilt * coatProbes.remaining;
+            }
+            coatIBL = coatPrefilt * coatFv;
+        }
+        iblDiffuse *= 1.0f - coatFv;
+        iblSpecular *= 1.0f - coatFv;
+        iblSpecularWeight *= 1.0f - coatFv;
+    }
+#endif
     float3 ambientIBL = (iblDiffuse + iblSpecular) * ao;
 
     // GTAO only modulates indirect light. An unbound AO slot leaves it unchanged.
@@ -732,6 +769,10 @@ LocalProbeIBL localProbes;
         specularOcclusion = ComputeSpecularOcclusion(NoV, ao * gtaoFactor, roughness);
         ambientIBL = iblDiffuse * ao * gtaoDiffuse + iblSpecular * specularOcclusion;
     }
+
+    // The coat reflection takes the same specular occlusion as the base; SSR
+    // replaces only the base reflection (KromStoreSsrInputs below).
+    ambientIBL += coatIBL * specularOcclusion;
 
     float3 totalDirectDiffuse = float3(0.0f, 0.0f, 0.0f);
     float3 totalDirectSpecular = float3(0.0f, 0.0f, 0.0f);
@@ -890,11 +931,28 @@ LocalProbeIBL localProbes;
         }
 
         // Diffuse weight: view-angle Fresnel for all lights, or per light from the half vector.
+        // Burley (shading option) scales the Lambert term per light.
         float3 kD_i = kD_a;
-        if (shadingPerLightDiffuseFresnel)
-            kD_i = (1.0f.xxx - F_Schlick(saturate(dot(SafeNormalize(V + L), V)), F0)) * (1.0f - metallic);
-        totalDirectDiffuse += (kD_i * albedoValue / PI) * NoL_i * lightColor;
-        totalDirectSpecular += EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness) * energyCompensation * lightColor;
+        float  diffuseShape = 1.0f;
+        if (shadingPerLightDiffuseFresnel || shadingBurleyDiffuse)
+        {
+            const float LoH_i = saturate(dot(SafeNormalize(V + L), L));
+            if (shadingPerLightDiffuseFresnel)
+                kD_i = (1.0f.xxx - F_Schlick(LoH_i, F0)) * (1.0f - metallic);
+            if (shadingBurleyDiffuse)
+                diffuseShape = KromBurleyDiffuseFactor(NoV, NoL_i, LoH_i, roughness);
+        }
+        float3 lightDiffuse = (kD_i * albedoValue * (diffuseShape / PI)) * NoL_i * lightColor;
+        float3 lightSpecular = EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness) * energyCompensation * lightColor;
+        if (coatStrength > 0.0f)
+        {
+            float coatF;
+            const float coatSpecular = KromClearcoatSpecular(coatN, V, L, coatRoughness, coatStrength, coatF);
+            lightDiffuse *= 1.0f - coatF;
+            lightSpecular = lightSpecular * (1.0f - coatF) + coatSpecular * lightColor;
+        }
+        totalDirectDiffuse += lightDiffuse;
+        totalDirectSpecular += lightSpecular;
     }
 
     float3 emissiveColor = emissiveFactor.rgb;

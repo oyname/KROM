@@ -736,6 +736,10 @@ namespace engine::assets {
                 loaded.boxProjection = parts[1] == "box";
             else if (parts[0] == "boxTileSize" && parts.size() >= 2)
                 loaded.boxTileSize = std::stof(parts[1]);
+            else if (parts[0] == "clearcoatFactor" && parts.size() >= 2)
+                loaded.clearcoatFactor = std::stof(parts[1]);
+            else if (parts[0] == "clearcoatRoughness" && parts.size() >= 2)
+                loaded.clearcoatRoughness = std::stof(parts[1]);
             else if (parts[0] == "alphaMode" && parts.size() >= 2)
             {
                 if (parts[1] == "mask") loaded.alphaMode = MaterialAlphaMode::Mask;
