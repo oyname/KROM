@@ -449,8 +449,8 @@ struct EditorFrameContext
     // laeuft; danach den Bericht (eine Zeile je Werkzeug) und ob alles gefunden wurde.
     std::function<void(const EditorPreferences&)> startBuildToolsCheck;
     std::function<bool(std::string& report, bool& ok)> buildToolsCheckResult;
-    // Ordner, in dem CMake Projekte findet (<Engine>/projects). Nur dort bekommt ein
-    // Projekt Runtime-Targets — Play und Export funktionieren sonst nicht.
+    // Vorgabe fuer Projektlisten und neue Projekte (<Engine>/projects).
+    // Projekte koennen auch in anderen Verzeichnissen liegen.
     std::string projectsRootDirectory;
     std::string           lastFileMessage;
     std::string           currentProjectName;

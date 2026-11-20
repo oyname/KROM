@@ -434,7 +434,7 @@ struct RuntimeBuildRequest
 {
     std::filesystem::path sourceDir;
     std::filesystem::path buildDir;
-    std::filesystem::path scriptProject;
+    std::filesystem::path projectRoot;
     std::string target;
     std::string configuration;
     bool scriptBuild = false;
@@ -460,7 +460,7 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
                          engine::renderer::addons::editor::EditorState* editorState,
                          RuntimeBuildRequest& outRequest,
                          const std::string& scriptTarget = {},
-                         const std::filesystem::path& scriptProject = {},
+                         const std::filesystem::path& projectRoot = {},
                          const char* configuration = "Release")
 {
     const bool scriptBuild = !scriptTarget.empty();
@@ -472,7 +472,17 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
     outRequest = {};
     outRequest.sourceDir = PathFromUtf8(KROM_SOURCE_DIR);
     outRequest.buildDir = buildDir;
-    outRequest.scriptProject = scriptProject;
+    if (!projectRoot.empty())
+    {
+        std::error_code ec;
+        outRequest.projectRoot = std::filesystem::weakly_canonical(projectRoot, ec);
+        if (ec)
+        {
+            AddEditorConsoleLog(editorState, engine::LogLevel::Error,
+                std::string(Translate("build.directory_failed")) + " " + ec.message());
+            return false;
+        }
+    }
     outRequest.target = scriptBuild ? scriptTarget : RuntimeTargetName(runtimeTarget, backend);
     outRequest.configuration = configuration;
     outRequest.scriptBuild = scriptBuild;
@@ -538,18 +548,18 @@ bool ResolveRuntimeBuildCommands(const RuntimeBuildRequest& request,
         command.arguments.insert(command.arguments.end(), options.begin(), options.end());
         commands.push_back(std::move(command));
     };
-    if (needsConfigure)
+    if (needsConfigure || ProjectNeedsConfigure(request.buildDir, request.projectRoot))
     {
         log(engine::LogLevel::Info,
             BuildLogText(TranslateWithValue("build.configuring_path", PathToUtf8(request.buildDir))));
-        configure({"-G", "Ninja", "-DCMAKE_BUILD_TYPE=" + request.configuration,
-            "-DCMAKE_MAKE_PROGRAM=" + PathToGenericUtf8(tools.ninja),
-            "-DCMAKE_CXX_COMPILER=" + PathToGenericUtf8(tools.compiler)});
+        std::vector<std::string> options;
+        if (needsConfigure)
+            options = {"-G", "Ninja", "-DCMAKE_BUILD_TYPE=" + request.configuration,
+                "-DCMAKE_MAKE_PROGRAM=" + PathToGenericUtf8(tools.ninja),
+                "-DCMAKE_CXX_COMPILER=" + PathToGenericUtf8(tools.compiler)};
+        options.push_back("-DKROM_PROJECT_ROOT=" + PathToGenericUtf8(request.projectRoot));
+        configure(std::move(options));
     }
-    // External-project runtime support remains a separate change (point 2).
-    if (request.scriptBuild &&
-        request.scriptProject.parent_path().lexically_normal() != (request.sourceDir / "projects").lexically_normal())
-        configure({"-DKROM_PROJECT_SCRIPT_ROOT=" + PathToUtf8(request.scriptProject)});
     commands.push_back({tools.ninja, {"-C", PathToUtf8(request.buildDir), request.target},
         request.sourceDir, tools.environment});
     return true;
@@ -563,19 +573,17 @@ bool RunRuntimeBuildCommands(const std::vector<engine::app::build::ProcessComman
     using namespace engine::app::build;
     for (const auto& command : commands)
     {
-        bool showedDiagnostic = false;
         std::string pending;
         std::deque<std::string> lastLines;
         auto consumeLine = [&](std::string line) {
             while (!line.empty() && (line.back() == '\n' || line.back() == '\r')) line.pop_back();
             if (line.empty()) return;
-            if (lastLines.size() == 12) lastLines.pop_front();
+            if (lastLines.size() == 32) lastLines.pop_front();
             lastLines.push_back(line);
             if (line.front() == '[' && line.find('/') != std::string::npos && line.find(']') != std::string::npos)
                 progress(line);
             if (ShouldShowBuildOutputLine(line))
             {
-                showedDiagnostic = true;
                 log(BuildOutputLevel(line), std::move(line));
             }
         };
@@ -595,8 +603,11 @@ bool RunRuntimeBuildCommands(const std::vector<engine::app::build::ProcessComman
             return false;
         }
         if (result.Succeeded()) continue;
-        if (!showedDiagnostic)
-            for (const auto& line : lastLines) log(engine::LogLevel::Error, line);
+        // Include the failure context even if a compiler warning/error was already
+        // shown. CMake's project paths and Ninja's final errors often follow on
+        // unclassified continuation lines; a warning must not hide them.
+        for (const auto& line : lastLines)
+            if (!ShouldShowBuildOutputLine(line)) log(engine::LogLevel::Error, line);
         if (!result.error.empty()) log(engine::LogLevel::Error, result.error);
         log(engine::LogLevel::Error, TranslateWithValue("build.process_failed", std::to_string(result.exitCode)));
         return false;
@@ -6046,7 +6057,7 @@ bool KromEditorApp::ReloadProjectScriptModule(bool reportMissing)
     if (!CheckScriptEngineLibraries(error) ||
         !ScriptModuleHost::CheckSharedEngineHeaders(build::CachedMakeProgram(PathFromUtf8(KROM_BUILD_DIR)),
             PathFromUtf8(KROM_BUILD_DIR), PathFromUtf8(KROM_SOURCE_DIR), CurrentExecutablePath(),
-            "krom_scripts_" + m_projectRuntimeTarget, error) ||
+            "krom_scripts_" + m_projectRuntimeTarget, error, m_projectRoot) ||
         !m_scriptModule.Swap(library, *m_world, m_scriptRegistry, error, m_projectRoot))
     {
         ReportScriptBuildError(error);

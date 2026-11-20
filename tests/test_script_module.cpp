@@ -113,6 +113,14 @@ void TestModuleHostSwap(test::TestContext& ctx)
     std::string error;
     CHECK(ctx, host.Swap(library, world, registry, error));
     CHECK(ctx, host.IsLoaded());
+    const auto fixtureProject = PathFromUtf8(__FILE__).parent_path() / "script_module_fixture";
+    CHECK(ctx, host.Swap(library, world, registry, error, fixtureProject));
+    CHECK(ctx, !host.Swap(library, world, registry, error, fixtureProject.parent_path()));
+    CHECK_EQ(ctx, error, std::string(Translate("script.dll_wrong_project")));
+    CHECK(ctx, host.IsLoaded() && registry.Has("ModuleFixture"));
+    // Old modules with no ownership export are rejected when opening a project.
+    CHECK(ctx, !host.Swap(library.parent_path() / "script_module_bad_abi.dll", world, registry, error, fixtureProject));
+    CHECK_EQ(ctx, error, std::string(Translate("script.dll_wrong_project")));
     CHECK(ctx, world.Get<ScriptList>(entity)->Instances()[0].script != nullptr);
     CHECK(ctx, !host.Swap(library.parent_path() / "missing.dll", world, registry, error));
     CHECK(ctx, host.IsLoaded() && registry.Has("ModuleFixture"));
@@ -298,6 +306,22 @@ void TestSharedEngineHeaderCheck(test::TestContext& ctx)
     stale = app::ScriptModuleHost::FindStaleSharedHeaders(inputs, deps, "krom_scripts_P", build, source,
         now + std::chrono::seconds(1));
     CHECK(ctx, stale.empty());
+    // Projects elsewhere inside the engine tree are project code as well.
+    const auto alternateRoot = source / "custom/P";
+    fs::create_directories(alternateRoot);
+    const auto alternateHeader = alternateRoot / "Probe.hpp";
+    std::ofstream(alternateHeader) << "x";
+    fs::last_write_time(alternateHeader, now);
+    std::string alternateDeps = deps;
+    const std::string original = "../../projects/P/Probe.hpp";
+    for (size_t pos = 0; (pos = alternateDeps.find(original, pos)) != std::string::npos;)
+    {
+        alternateDeps.replace(pos, original.size(), "../../custom/P/Probe.hpp");
+        pos += std::string_view("../../custom/P/Probe.hpp").size();
+    }
+    stale = app::ScriptModuleHost::FindStaleSharedHeaders(inputs, alternateDeps, "krom_scripts_P", build, source, exeTime, alternateRoot);
+    CHECK_EQ(ctx, stale.size(), size_t(1));
+    if (!stale.empty()) CHECK(ctx, stale.front().filename() == "Components.hpp");
     // Andere Script-Ziele zaehlen nicht als Editor-Objekte.
     stale = app::ScriptModuleHost::FindStaleSharedHeaders(inputs, deps, "krom_scripts_Q", build, source, exeTime);
     CHECK(ctx, stale.empty());

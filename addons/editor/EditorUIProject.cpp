@@ -474,22 +474,7 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
             }
         }
 
-        if (!ctx.projectsRootDirectory.empty())
-        {
-            std::error_code ec;
-            const std::filesystem::path chosen =
-                std::filesystem::weakly_canonical(PathFromUtf8(ctx.state.projectParentDirBuffer.data()), ec);
-            const std::filesystem::path expected =
-                std::filesystem::weakly_canonical(PathFromUtf8(ctx.projectsRootDirectory), ec);
-            if (chosen != expected)
-            {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.7f, 0.2f, 1.f));
-                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 480.f);
-                ImGui::TextUnformatted(TranslateWithValue("project.runtime_root", ctx.projectsRootDirectory).c_str());
-                ImGui::PopTextWrapPos();
-                ImGui::PopStyleColor();
-            }
-        }
+
 
         const char* backendItems = "Vulkan\0DirectX11\0OpenGL\0";
         ImGui::TextUnformatted("Backend");

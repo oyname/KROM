@@ -55,6 +55,10 @@ std::string EnvironmentValue(const std::vector<std::string>& environment, const 
 bool CompilerCompatible(uint32_t editorVersion, uint32_t buildVersion, bool scriptBuild);
 bool CheckBuildCache(const std::filesystem::path& buildDirectory, const BuildTools& tools,
                      std::string& errorKey, std::string& detail);
+// Both the cache and the last successful CMake generate must select this project.
+// A failed configure may already have changed the cache while leaving old targets.
+bool ProjectNeedsConfigure(const std::filesystem::path& buildDirectory,
+                           const std::filesystem::path& projectRoot);
 // Ninja recorded in an existing build folder's CMakeCache.txt (no discovery needed);
 // empty if the cache or the executable is missing.
 std::filesystem::path CachedMakeProgram(const std::filesystem::path& buildDirectory);

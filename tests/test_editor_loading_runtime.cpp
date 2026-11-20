@@ -1,6 +1,7 @@
 // Optionaler GPU-Test: --headless automatisiert, ohne Argumente sichtbare
 // ImGui-Anzeige fuer 40 s. Kein plattformspezifischer UI-Code.
 #include "app/KromEditorApp.hpp"
+#include "app/editor/BuildTools.hpp"
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/gtao/GtaoPass.hpp"
 #include "addons/editor/EditorAnimationWindow.hpp"
@@ -1296,6 +1297,10 @@ struct EditorLoadingSmokeTest final : IAppScene
         ImGui::LoadIniSettingsFromMemory(ini);
     }
     std::string reloadProject;
+    bool externalScriptProject = false;
+    bool externalProjectExport = false;
+    bool externalExportOnly = false;
+    bool externalStepOk = false;
     std::filesystem::path reloadRoot;
     int reloadStage = 0;
     int reloadPlayFrames = 0;
@@ -1334,10 +1339,54 @@ struct EditorLoadingSmokeTest final : IAppScene
     bool UpdateScriptReload(AppSceneContext& context)
     {
         if (failures) { context.renderLoop.GetWindow()->RequestClose(); return true; }
-        if (std::chrono::steady_clock::now() - reloadStarted > std::chrono::minutes(4))
+        if (std::chrono::steady_clock::now() - reloadStarted > std::chrono::minutes(externalProjectExport ? 15 : 4))
         {
             Check(false, "script reload timed out");
             context.renderLoop.GetWindow()->RequestClose();
+            return true;
+        }
+        if (reloadStage >= 7)
+        {
+            if (app.m_runtimeBuildJob) return true;
+            const std::string backend = app.m_projectBackend == renderer::DeviceFactory::BackendType::DirectX11
+                ? "dx11" : app.m_projectBackend == renderer::DeviceFactory::BackendType::OpenGL ? "opengl" : "vulkan";
+            if (reloadStage == 7)
+            {
+                Check(externalStepOk, "testbuild of external project succeeds");
+                if (failures) return true;
+                const auto exe = PathFromUtf8(KROM_BUILD_DIR) / "bin" /
+                    PathFromUtf8(app.m_projectRuntimeTarget + "_" + backend + ".exe");
+                reloadStage = 8;
+                externalStepOk = false;
+                Check(app.StartBuildJob("External runtime smoke", {{exe,
+                    {PathToUtf8(reloadRoot / "krom-project.json"), "--warmup-shaders"}, reloadRoot, {}}},
+                    [this](bool ok) { externalStepOk = ok; }, "External runtime smoke"), "start external testbuild game");
+            }
+            else if (reloadStage == 8)
+            {
+                Check(externalStepOk, "external testbuild game starts and renders all scenes");
+                reloadStage = 9;
+                Check(app.ExportProjectBuild(), "start full external project export");
+            }
+            else if (reloadStage == 9)
+            {
+                const auto exported = reloadRoot / "Build" / ("runtime-Release-" + backend);
+                Check(std::filesystem::exists(exported / "krom-project.json") &&
+                    std::filesystem::exists(exported / "licenses/KROM-LICENSE.txt"), "external export contains project and licenses");
+                Check(app.m_editorFrameCtx->lastFileMessage.starts_with(Translate("export.success")),
+                    "exported game starts and completes shader warmup");
+                Check(app.LoadProjectFile(PathToUtf8(PathFromUtf8(KROM_SOURCE_DIR) / "projects/DemoProject/krom-project.json")),
+                    "return to DemoProject after external export");
+                reloadStage = 10;
+                externalStepOk = false;
+                Check(app.StartRuntimeBuild(PathFromUtf8(KROM_BUILD_DIR),
+                    [this](bool ok) { externalStepOk = ok; }, "krom_scripts_DemoProject"), "build DemoProject after external selection");
+            }
+            else
+            {
+                Check(externalStepOk, "DemoProject script build succeeds after external export");
+                context.renderLoop.GetWindow()->RequestClose();
+            }
             return true;
         }
         if (reloadStage == 0)
@@ -1357,6 +1406,18 @@ struct EditorLoadingSmokeTest final : IAppScene
             reloadUndoLabel = renderer::addons::editor::GetUndoEditorHistoryLabel(app.m_editorFrameCtx->state);
             Check(!reloadUndoLabel.empty(), "edit history exists before module swap");
             Check(!app.m_scriptModule.IsLoaded() && !app.m_runtimeBuildJob, "missing DLL stays a placeholder on project open");
+            if (externalExportOnly)
+            {
+                Check(renderer::addons::editor::RefreshCppScriptProject(*app.m_editorFrameCtx).ok,
+                    "generate external script bindings before the first runtime build");
+                app.m_buildExcludedScenes.insert("Broken");
+                Check(app.BuildAllScenes(), "build external project scenes");
+                reloadStage = 7;
+                externalStepOk = false;
+                Check(app.StartRuntimeBuild(PathFromUtf8(KROM_BUILD_DIR),
+                    [this](bool ok) { externalStepOk = ok; }), "start external runtime testbuild without a prior script build");
+                return true;
+            }
             RequestReloadBuild(1);
             return true;
         }
@@ -1418,15 +1479,30 @@ struct EditorLoadingSmokeTest final : IAppScene
             Check(app.SaveEditorScene(), "save edit scene with reloaded scripts");
             const auto other = reloadRoot / "Other";
             std::filesystem::create_directories(other / "Assets/Scenes");
-            std::ofstream(other / "krom-project.json") << R"({"name":"Other","runtimeTarget":"Other","sceneOrder":["One"]})";
+            std::ofstream(other / "krom-project.json") << "{\"name\":\"Other\",\"runtimeTarget\":\"" <<
+                (externalScriptProject ? app.m_projectRuntimeTarget : "Other") << "\",\"sceneOrder\":[\"One\"]}";
             std::ofstream(other / "Assets/Scenes/One.json") << R"({"scene":"One","entities":[]})";
-            Check(app.LoadProjectFile(PathToUtf8(other / "krom-project.json")), "switch to project without DLL");
+            Check(app.LoadProjectFile(PathToUtf8(other / "krom-project.json")), "switch to another project");
             Check(!app.m_scriptModule.IsLoaded() && app.m_scriptRegistry.GetFactoryCount() == 0, "project switch unloads previous module");
+            if (externalScriptProject)
+                Check(std::any_of(app.m_editorFrameCtx->state.consoleLogs.begin(), app.m_editorFrameCtx->state.consoleLogs.end(),
+                    [](const auto& log) { return log.message.find(Translate("script.dll_wrong_project")) != std::string::npos; }),
+                    "project open rejects existing same-target DLL owned by the other project");
             Check(app.LoadProjectFile(PathToUtf8(reloadRoot / "krom-project.json")), "reopen script project");
             Check(app.m_scriptModule.IsLoaded() && !app.m_runtimeBuildJob, "project open loads existing DLL without building");
             Check(ReloadProbe().IsValid() && app.m_world->Get<script::ScriptList>(ReloadProbe())->Instances()[0].script != nullptr,
                 "project open restores live script objects");
-            context.renderLoop.GetWindow()->RequestClose();
+            if (externalProjectExport)
+            {
+                // Broken.json is the loading-error fixture used by the base test.
+                app.m_buildExcludedScenes.insert("Broken");
+                Check(app.BuildAllScenes(), "build external project scenes");
+                reloadStage = 7;
+                externalStepOk = false;
+                Check(app.StartRuntimeBuild(PathFromUtf8(KROM_BUILD_DIR),
+                    [this](bool ok) { externalStepOk = ok; }), "start external runtime testbuild");
+            }
+            else context.renderLoop.GetWindow()->RequestClose();
         }
         return true;
     }
@@ -1435,7 +1511,15 @@ struct EditorLoadingSmokeTest final : IAppScene
     {
         std::printf("%s: %s\n", success ? "PASS" : "FAIL", message);
         std::fflush(stdout);
-        if (!success) ++failures;
+        if (!success)
+        {
+            ++failures;
+            if (app.m_editorFrameCtx)
+                for (const auto& log : app.m_editorFrameCtx->state.consoleLogs)
+                    if (log.level >= LogLevel::Error)
+                        std::printf("DIAGNOSTIC: %s\n", log.message.c_str());
+            std::fflush(stdout);
+        }
     }
     bool Switch(const char* name)
     {
@@ -2245,10 +2329,19 @@ struct EditorLoadingSmokeTest final : IAppScene
     }
     int Run()
     {
+        std::vector<std::pair<std::filesystem::path, std::string>> previousSelections;
+        std::vector<std::filesystem::path> buildDirs = {PathFromUtf8(KROM_BUILD_DIR)};
+        if (externalProjectExport) buildDirs.push_back(PathFromUtf8(KROM_BUILD_DIR).parent_path() / "runtime-Release");
+        for (const auto& directory : buildDirs)
+        {
+            std::ifstream previousSelection(directory / "krom-project-root.txt", std::ios::binary);
+            previousSelections.emplace_back(directory, std::string((std::istreambuf_iterator<char>(previousSelection)), {}));
+        }
         const auto id = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-        // Temporaere Projektkopie im projects-Glob: testet auch Ninjas automatische
-        // Aufnahme neuer Projekte, ohne die externe Projektoption zu aendern.
-        const auto root = reloadProject.empty() ? std::filesystem::temp_directory_path() / ("krom-editor-loading-" + id)
+        // Test either automatic in-tree discovery or an external Unicode/space path.
+        const auto root = externalScriptProject
+            ? std::filesystem::temp_directory_path() / PathFromUtf8("krom-editor-Größe " + id)
+            : reloadProject.empty() ? std::filesystem::temp_directory_path() / ("krom-editor-loading-" + id)
             : PathFromUtf8(KROM_SOURCE_DIR) / "projects" / ("_reload_" + id);
         std::filesystem::create_directories(root / "Assets/Scenes");
         if (playUi)
@@ -2362,11 +2455,35 @@ struct EditorLoadingSmokeTest final : IAppScene
                 startupProjectFile = projectFile;
             else
                 Check(app.LoadProjectFile(projectFile), "project loaded");
+            if (externalProjectExport)
+            {
+                app.m_projectBackend = SelectAppBackend();
+                Check(app.SaveProjectFile(false), "save external project with test renderer");
+            }
             if (failures == 0) Check(app.Run(*this) == 0, "editor loop completed without crash");
         }
         app.Shutdown();
+        bool selectionRestored = true;
+#ifdef _WIN32
+        if (!reloadProject.empty())
+        {
+            const auto tools = build::GetBuildTools();
+            std::string output;
+            for (const auto& [directory, previousRoot] : previousSelections)
+            {
+                if (!std::filesystem::exists(directory / "CMakeCache.txt")) continue;
+                const bool restored = tools.Succeeded() && build::CaptureProcessOutput(
+                    {tools.tools.cmake, {"-S", KROM_SOURCE_DIR, "-B", PathToUtf8(directory),
+                        "-DKROM_PROJECT_ROOT=" + previousRoot}, PathFromUtf8(KROM_SOURCE_DIR), tools.tools.environment}, output).Succeeded();
+                selectionRestored = selectionRestored && restored;
+                if (!restored) std::printf("%s\n", output.c_str());
+            }
+            Check(selectionRestored, "restore original CMake project selection before removing test project");
+        }
+#endif
         std::error_code ec;
-        std::filesystem::remove_all(root, ec); // nur eigenes, eindeutig benanntes Testprojekt
+        if (selectionRestored)
+            std::filesystem::remove_all(root, ec); // nur eigenes, eindeutig benanntes Testprojekt
         return failures == 0 ? 0 : 1;
     }
 
@@ -2533,8 +2650,16 @@ int main(int argc, char** argv)
         test.perfProject = argv[2];
         test.compileStatus = true;
     }
-    if (argc > 2 && std::string_view(argv[1]) == "--script-reload")
+    if (argc > 2 && (std::string_view(argv[1]) == "--script-reload" ||
+                     std::string_view(argv[1]) == "--external-script-reload" ||
+                     std::string_view(argv[1]) == "--external-project-export" ||
+                     std::string_view(argv[1]) == "--external-export-only"))
+    {
         test.reloadProject = argv[2];
+        test.externalScriptProject = std::string_view(argv[1]) != "--script-reload";
+        test.externalExportOnly = std::string_view(argv[1]) == "--external-export-only";
+        test.externalProjectExport = std::string_view(argv[1]) == "--external-project-export" || test.externalExportOnly;
+    }
     test.visualProgress = argc == 1 || std::string_view(argv[1]) == "--visual-progress";
     return test.Run();
 }

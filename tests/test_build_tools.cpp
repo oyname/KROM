@@ -122,6 +122,28 @@ int wmain(int argc, wchar_t** argv)
     Check(CachedMakeProgram(scratch.path) == fallback, "Ninja read from an existing CMake cache without discovery");
     Check(CachedMakeProgram(scratch.path / "missing").empty(), "missing CMake cache yields no Ninja");
 
+    const auto projectA = scratch.path / "Projekt Größe A";
+    const auto projectB = scratch.path / "Projekt B";
+    std::filesystem::create_directory(projectA);
+    std::filesystem::create_directory(projectB);
+    const auto projectCache = scratch.path / "project-cache";
+    std::filesystem::create_directory(projectCache);
+    auto selectProject = [&](const std::filesystem::path& cached, const std::filesystem::path& generated) {
+        std::ofstream(projectCache / "CMakeCache.txt") << "KROM_PROJECT_ROOT:PATH=" << PathToGenericUtf8(cached) << '\n';
+        std::ofstream(projectCache / "krom-project-root.txt", std::ios::binary) << PathToGenericUtf8(generated);
+    };
+    Check(ProjectNeedsConfigure(projectCache, projectA), "new build folder requires project configure");
+    selectProject(projectA, projectA);
+    Check(!ProjectNeedsConfigure(projectCache, projectA / "."), "unchanged project identity does not reconfigure");
+    Check(ProjectNeedsConfigure(projectCache, projectB), "project switch reconfigures shared build folder");
+    selectProject(projectB, projectA);
+    Check(ProjectNeedsConfigure(projectCache, projectB), "failed configure cannot validate stale generated targets");
+    Check(ProjectNeedsConfigure(projectCache, projectA), "return after failed selection reconfigures despite old success marker");
+    selectProject(projectB, projectB);
+    Check(!ProjectNeedsConfigure(projectCache, projectB), "successful project switch does not configure twice");
+    std::ofstream(projectCache / "CMakeCache.txt") << "KROM_PROJECT_SCRIPT_ROOT:PATH=" << PathToGenericUtf8(projectB) << '\n';
+    Check(ProjectNeedsConfigure(projectCache, projectB), "legacy-only cache is migrated through configure");
+
     Check(ToolsetMatchesCompiler("14.44.35207", 194435228), "toolset 14.44 matches _MSC_VER 1944");
     Check(!ToolsetMatchesCompiler("14.38.33130", 194435228), "toolset 14.38 does not match _MSC_VER 1944");
     Check(!ToolsetMatchesCompiler("", 194435228) && !ToolsetMatchesCompiler("14.44.35207", 0),
