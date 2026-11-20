@@ -100,6 +100,13 @@ public:
         return *this;
     }
 
+    // Dielectric reflectance: 0.5 gives F0 = 4%; metals retain their base-color reflectance.
+    PbrInstanceBuilder& Specular(float value) noexcept
+    {
+        m_slots["specular"] = PbrSlotValue::FromConstant(value);
+        return *this;
+    }
+
     // ── Occlusion ─────────────────────────────────────────────────────────────
 
     PbrInstanceBuilder& Occlusion(TextureHandle tex,

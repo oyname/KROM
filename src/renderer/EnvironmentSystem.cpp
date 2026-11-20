@@ -311,7 +311,7 @@ namespace engine::renderer {
         // -----------------------------------------------------------------
         // Cache key
         // -----------------------------------------------------------------
-        const IBLBakeParams params{ .jobSystem = m_jobSystem };
+        const IBLBakeParams params{ .jobSystem = m_jobSystem, .removeSunFromLighting = desc.removeSunFromLighting };
         IBLCacheKey key{};
         key.environmentSize = params.environmentSize;
         key.irradianceSize  = params.irradianceSize;
@@ -319,7 +319,7 @@ namespace engine::renderer {
         key.mipCount        = params.prefilterMipCount;
 
         if (desc.mode == EnvironmentMode::Texture)
-            key.sourceHash = IBLBaker::HashTextureSource(*sourceAsset, desc.intensity);
+            key.sourceHash = IBLBaker::HashTextureSource(*sourceAsset, desc.intensity, desc.removeSunFromLighting);
         else
             key.sourceHash = IBLBaker::HashProceduralSky(desc.skyDesc, desc.intensity);
 

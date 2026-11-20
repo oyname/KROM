@@ -91,6 +91,8 @@ struct EnvironmentDesc
     EnvironmentMode   mode          = EnvironmentMode::Texture;
     float             intensity     = 1.0f;   // applied to source radiance before IBL build
     bool              enableIBL     = true;
+    // HDR texture skies: keep the sun visible but remove its disc from lighting.
+    bool              removeSunFromLighting = true;
 
     // Texture mode
     TextureHandle     sourceTexture = TextureHandle::Invalid();

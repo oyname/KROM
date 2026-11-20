@@ -2061,6 +2061,7 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingComponentEdit(ctx, biasKey);
+        ImGui::SetItemTooltip("%s", Translate("light.shadow_bias_tip"));
 
         const LightComponent beforeNormalBias = *light;
         const std::string normalBiasKey = MakeEditHistoryKey(entity, "light.normalBias");
@@ -3942,7 +3943,13 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
     card::Card skyboxCard;
     if (card::Begin(skyboxCard, "##scene_environment", Translate("environment.title"),
                     ICON_LC_GLOBE, ComponentColor(ComponentIcon::Environment)))
+    {
         DrawSkyboxDropZone(ctx);
+        if (value_ui::Checkbox(TranslateLabel("environment.remove_sun", "Remove sun from lighting").c_str(),
+                               &ctx.state.environmentRemoveSunFromLighting))
+            ApplyEnvironmentFromState(ctx);
+        ImGui::SetItemTooltip("%s", Translate("environment.remove_sun_tip"));
+    }
     card::End(skyboxCard);
 
     card::Card lightingCard;
@@ -4227,7 +4234,8 @@ void ApplyEnvironmentFromState(EditorFrameContext& ctx)
 
     if (ctx.setEditorEnvironment(ctx.state.environmentTexturePath,
                                  ctx.state.environmentIntensity,
-                                 ctx.state.environmentEnableIBL))
+                                 ctx.state.environmentEnableIBL,
+                                 ctx.state.environmentRemoveSunFromLighting))
     {
         ctx.lastFileMessage = Translate("environment.updated");
     }

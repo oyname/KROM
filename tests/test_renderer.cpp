@@ -916,6 +916,7 @@ static void TestPbrMasterMaterial(test::TestContext& ctx)
         CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("boxTileSize"), 104u);
         CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("clearcoatFactor"), 108u);
         CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("clearcoatRoughness"), 112u);
+        CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("specularFactor"), 116u);
         CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("graphOutputs"), 128u);
         CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("graphNode7"), 256u);
 
@@ -944,6 +945,16 @@ static void TestPbrMasterMaterial(test::TestContext& ctx)
     const float metalVal = *reinterpret_cast<const float*>(cbData.data() + metalOff);
     CHECK(ctx, std::fabs(roughVal - 0.15f) < 1e-5f);
     CHECK(ctx, std::fabs(metalVal - 0.9f)  < 1e-5f);
+    const uint32_t specularOff = cbLayout.GetOffset("specularFactor");
+    CHECK_EQ(ctx, specularOff, 116u);
+    float defaultSpecular = 0.f;
+    std::memcpy(&defaultSpecular, cbData.data() + specularOff, sizeof(float));
+    CHECK_EQ(ctx, defaultSpecular, 0.5f);
+    const auto matte = master.CreateInstance("SpecularZero").Specular(0.f).Build();
+    CHECK(ctx, matte.IsValid());
+    float matteSpecular = 1.f;
+    std::memcpy(&matteSpecular, materials.GetCBData(matte).data() + specularOff, sizeof(float));
+    CHECK_EQ(ctx, matteSpecular, 0.f);
 
     // Same permutation must be served from cache (same base handle)
     MaterialHandle inst2 = master.CreateInstance("TestInst2")
@@ -2215,7 +2226,7 @@ static void TestForwardPlusShadowBuffersPackMoreThanFourShadowLights(test::TestC
 
     FeatureRegistry registry;
     CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
-    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature({.maxShadowAtlasResolution = 512u})));
 
     RecordingComputeDevice device;
     CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
@@ -2269,6 +2280,11 @@ static void TestForwardPlusShadowBuffersPackMoreThanFourShadowLights(test::TestC
     CHECK_EQ(ctx, constantResult.frameConstants.shadowViewCount, 5u);
     CHECK_EQ(ctx, constantResult.frameConstants.shadowBufferLightCount, 5u);
     CHECK_EQ(ctx, constantResult.frameConstants.shadowBufferViewCount, 5u);
+    // 512 / 3 gives 170-pixel tiles. Sampling must use the same integer
+    // footprint as the rasterizer, rather than drifting to a fractional third.
+    CHECK_EQ(ctx, snapshot.GetQueue().activeShadowResolution, 512u);
+    CHECK(ctx, NearlyEqual(constantResult.frameConstants.shadowViewRect[1][0], 170.f / 512.f));
+    CHECK(ctx, NearlyEqual(constantResult.frameConstants.shadowViewRect[1][2], 170.f / 512.f));
     CHECK(ctx, shadow && shadow->gpu.lightBuffer.IsValid());
     CHECK(ctx, shadow && shadow->gpu.viewBuffer.IsValid());
     CHECK_EQ(ctx, shadow ? shadow->gpu.lightCount : 0u, 5u);
@@ -4800,6 +4816,154 @@ static void TestShadowExtractionFiltersDirectionalCasterOutliers(test::TestConte
     device.Shutdown();
 }
 
+static void TestDirectionalShadowSlicesMatchCameraDepth(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+    ecs::ComponentMetaRegistry components = CreateRendererTestRegistry();
+    ecs::World world(components);
+    const EntityID receiver = world.CreateEntity();
+    MeshComponent mesh{};
+    mesh.mesh = MeshHandle::Make(1u, 1u);
+    world.Add<MeshComponent>(receiver, mesh);
+    world.Add<BoundsComponent>(receiver, BoundsComponent{
+        .centerWorld = {0.f, 0.f, -5.f}, .extentsWorld = {1.f, 1.f, 1.f}, .boundingSphere = 2.f});
+    const EntityID lightEntity = world.CreateEntity();
+    world.Add<WorldTransformComponent>(lightEntity);
+    LightComponent light{};
+    light.type = LightType::Directional;
+    light.castShadows = true;
+    light.shadowSettings.enabled = true;
+    light.shadowSettings.maxDistance = 80.f;
+    world.Add<LightComponent>(lightEntity, light);
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature({.maxShadowAtlasResolution = 1024u})));
+    TestDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    // Wide FOV exposes the old radial-distance fit; orthographic cameras must
+    // keep the same XY footprint at every depth. Include translated/rotated views.
+    bool retainedCascadeTiles = false;
+    for (bool orthographic : {false, true})
+    for (const math::Vec3 position : {math::Vec3::Zero(), math::Vec3{123.f, 8.f, -45.f}})
+    for (uint32_t cascadeCount : {1u, 4u})
+    {
+        auto* settings = &world.Get<LightComponent>(lightEntity)->shadowSettings;
+        settings->cascadeCount = cascadeCount;
+        RenderView view{};
+        view.cameraPosition = position;
+        view.cameraForward = math::Vec3{0.3f, -0.1f, -1.f}.Normalized();
+        view.view = math::Mat4::LookAtRH(position, position + view.cameraForward, math::Vec3::Up());
+        view.nearPlane = 0.5f;
+        view.farPlane = 200.f;
+        view.projection = orthographic
+            ? math::Mat4::OrthoRH(-24.f, 24.f, -8.f, 8.f, view.nearPlane, view.farPlane)
+            : math::Mat4::PerspectiveFovRH(110.f * math::DEG_TO_RAD, 32.f / 9.f, view.nearPlane, view.farPlane);
+        world.Get<BoundsComponent>(receiver)->centerWorld = position + view.cameraForward * 5.f;
+
+        RenderSceneSnapshot snapshot;
+        FrameExtractionStageResult result{};
+        FrameExtractionStage stage;
+        CHECK(ctx, stage.Execute(FrameExtractionStageContext{
+            world, registry.GetSceneExtractionSteps(), snapshot, &view}, result));
+        const auto* data = snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+        const auto* request = data ? data->GetCurrentRenderPathPrimaryRequest() : nullptr;
+        CHECK(ctx, request != nullptr);
+        if (!request) continue;
+        CHECK_EQ(ctx, request->views.size(), static_cast<size_t>(cascadeCount));
+        // The atlas retains its larger grid after the first four-cascade frame.
+        retainedCascadeTiles = retainedCascadeTiles || cascadeCount > 1u;
+        CHECK_EQ(ctx, request->effectiveResolution, retainedCascadeTiles ? 512u : 1024u);
+        CHECK_EQ(ctx, request->views.front().viewport.width, static_cast<float>(request->effectiveResolution));
+        CHECK_EQ(ctx, request->allocation.desc.width, request->effectiveResolution);
+        CHECK_EQ(ctx, request->allocation.desc.height, request->effectiveResolution);
+        CHECK_EQ(ctx, request->settings.resolution, 2048u);
+        if (cascadeCount == 1u)
+        {
+            // The last camera-plane corners must lie in the single-map fit too.
+            const math::Mat4 invProjection = view.projection.Inverse();
+            const math::Mat4 invView = view.view.InverseAffine();
+            for (float y : {-1.f, 1.f}) for (float x : {-1.f, 1.f})
+            {
+                const math::Vec4 a = invProjection * math::Vec4{x, y, 0.f, 1.f};
+                const math::Vec4 b = invProjection * math::Vec4{x, y, 1.f, 1.f};
+                const math::Vec3 av = a.xyz() * (1.f / a.w);
+                const math::Vec3 bv = b.xyz() * (1.f / b.w);
+                const math::Vec3 point = invView.TransformPoint(av + (bv - av) * ((-80.f - av.z) / (bv.z - av.z)));
+                const auto& bounds = request->receiverBoundsWorld;
+                CHECK(ctx, point.x >= bounds.min.x - 0.002f && point.x <= bounds.max.x + 0.002f);
+                CHECK(ctx, point.y >= bounds.min.y - 0.002f && point.y <= bounds.max.y + 0.002f);
+                CHECK(ctx, point.z >= bounds.min.z - 0.002f && point.z <= bounds.max.z + 0.002f);
+            }
+            continue;
+        }
+        CHECK_EQ(ctx, request->cascadeFrustumCornersWorld.size(), size_t(4));
+        auto splitDepth = [&](uint32_t split)
+        {
+            const float f = static_cast<float>(split) / 4.f;
+            const float uniform = view.nearPlane + (80.f - view.nearPlane) * f;
+            const float logarithmic = view.nearPlane * std::pow(80.f / view.nearPlane, f);
+            return uniform + (logarithmic - uniform) * settings->cascadeLambda;
+        };
+        for (size_t cascade = 0; cascade < request->cascadeFrustumCornersWorld.size(); ++cascade)
+        for (size_t corner = 0; corner < 8u; ++corner)
+        {
+            const auto& point = request->cascadeFrustumCornersWorld[cascade][corner];
+            const auto vs = view.view.TransformPoint(point);
+            CHECK(ctx, std::fabs(-vs.z - splitDepth(static_cast<uint32_t>(cascade) + (corner >= 4u ? 1u : 0u))) < 0.002f);
+            const auto cs = view.projection * math::Vec4{vs.x, vs.y, vs.z, 1.f};
+            CHECK(ctx, std::fabs(std::fabs(cs.x / cs.w) - 1.f) < 0.002f);
+            CHECK(ctx, std::fabs(std::fabs(cs.y / cs.w) - 1.f) < 0.002f);
+            const auto shadowCS = request->views[cascade].viewProj * math::Vec4{point.x, point.y, point.z, 1.f};
+            CHECK(ctx, std::fabs(shadowCS.x) <= shadowCS.w && std::fabs(shadowCS.y) <= shadowCS.w);
+            CHECK(ctx, shadowCS.z > 0.f && shadowCS.z < shadowCS.w);
+        }
+    }
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
+static void TestDirectionalShadowDepthIncludesUpstreamCasters(test::TestContext& ctx)
+{
+    using namespace engine::addons::shadow;
+    LightComponent light{};
+    light.type = LightType::Directional;
+    WorldTransformComponent transform{};
+    const collision::AABB receivers{{-3.f, -3.f, -12.f}, {3.f, 3.f, -8.f}};
+    const collision::AABB casters{{-2.f, -2.f, 998.f}, {2.f, 2.f, 1002.f}};
+    std::array<math::Vec3, 8> corners{};
+    size_t index = 0u;
+    for (float z : {-12.f, -8.f}) for (float y : {-3.f, 3.f}) for (float x : {-3.f, 3.f})
+        corners[index++] = {x, y, z};
+    for (bool cascaded : {false, true})
+    {
+        ShadowRequest request{};
+        ShadowViewBuilder::BuildDirectional(light, transform, casters, receivers, request, cascaded ? &corners : nullptr);
+        CHECK_EQ(ctx, request.views.size(), size_t(1));
+        for (float z : {-12.f, -8.f, 998.f, 1002.f})
+        {
+            const auto cs = request.views[0].viewProj * math::Vec4{0.f, 0.f, z, 1.f};
+            CHECK(ctx, cs.z > 0.f && cs.z < cs.w);
+        }
+        if (cascaded)
+        {
+            // Sub-texel motion cannot move the XY projection on a static point.
+            auto moved = corners;
+            for (auto& corner : moved) corner.x += 0.0001f;
+            ShadowRequest movedRequest{};
+            ShadowViewBuilder::BuildDirectional(light, transform, casters, receivers, movedRequest, &moved);
+            const auto before = request.views[0].viewProj * math::Vec4{0.f, 0.f, -10.f, 1.f};
+            const auto after = movedRequest.views[0].viewProj * math::Vec4{0.f, 0.f, -10.f, 1.f};
+            CHECK(ctx, std::fabs(before.x - after.x) < 1e-6f);
+            CHECK(ctx, std::fabs(before.y - after.y) < 1e-6f);
+        }
+    }
+}
+
 static void TestLightingExtractionSortsShadowedAndDirectionalFirst(test::TestContext& ctx)
 {
     RegisterRendererTestComponents();
@@ -6844,6 +7008,111 @@ float4 main(float4 pixel : SV_Position) : SV_Target
 #endif
 }
 
+static void TestShadowReceiverMathOnWarp(test::TestContext& ctx)
+{
+    RenderPassRegistry passes;
+    const auto* locks = passes.GetLocks(StandardRenderPasses::Shadow());
+    CHECK(ctx, locks && locks->cullModeLocked && locks->cullModeValue == CullMode::None);
+#if defined(_WIN32) && defined(KROM_DX11_BACKEND)
+    assets::ShaderAsset vs{}, ps{};
+    vs.stage = assets::ShaderStage::Vertex;
+    vs.sourceLanguage = ps.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    vs.sourceCode = "float4 main(uint id : SV_VertexID) : SV_POSITION { return float4(id == 2 ? 3 : -1, id == 1 ? 3 : -1, 0, 1); }";
+    ps.stage = assets::ShaderStage::Fragment;
+    ps.sourceCode = "#include \"" + PathToUtf8(PathFromUtf8(KROM_SOURCE_DIR) / "shaders/shadow_receiver.hlsl") + "\"\n" + R"(
+float4 main(float4 pixel : SV_Position) : SV_Target
+{
+    // Rotated and sheared UVs: the old component-wise division gives (5,-7).
+    float2 uv = float2(pixel.x + pixel.y, -pixel.x + pixel.y) * 0.01;
+    if (pixel.y >= 2) uv = (pixel.x * 0.01).xx; // singular Jacobian
+    float depth = 2 * uv.x - 3 * uv.y;
+    float2 gradient = KromShadowDepthGradient(depth, uv);
+    float4x4 a = float4x4(1,0,0,0, 0,1,0,0, 0,0,-0.01,0.5, 0,0,0,1);
+    float4x4 b = float4x4(1,0,0,0, 0,1,0,0, 0,-0.0006,-0.0008,0.5, 0,0,0,1);
+    return float4(gradient, KromShadowReceiverBias(0.01, a) * 100,
+                            KromShadowReceiverBias(0.01, b) * 1000);
+}
+)";
+    assets::CompiledShaderArtifact vsCode{}, psCode{};
+    std::string error;
+    const bool vsOk = ShaderCompiler::CompileForTarget(vs, assets::ShaderTargetProfile::DirectX11_SM5, vsCode, &error);
+    const bool psOk = ShaderCompiler::CompileForTarget(ps, assets::ShaderTargetProfile::DirectX11_SM5, psCode, &error);
+    if (!psOk) std::fprintf(stderr, "Shadow receiver shader: %s\n", error.c_str());
+    CHECK(ctx, vsOk && psOk);
+    if (!vsOk || !psOk) return;
+    using Microsoft::WRL::ComPtr;
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> command;
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+        D3D11_SDK_VERSION, &device, nullptr, &command);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr)) return;
+    ComPtr<ID3D11VertexShader> vertex;
+    ComPtr<ID3D11PixelShader> pixel;
+    hr = device->CreateVertexShader(vsCode.bytecode.data(), vsCode.bytecode.size(), nullptr, &vertex);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr)) return;
+    hr = device->CreatePixelShader(psCode.bytecode.data(), psCode.bytecode.size(), nullptr, &pixel);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr)) return;
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = desc.Height = 4;
+    desc.MipLevels = desc.ArraySize = desc.SampleDesc.Count = 1;
+    desc.Format = DXGI_FORMAT_R32G32B32A32_FLOAT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET;
+    ComPtr<ID3D11Texture2D> target, staging;
+    hr = device->CreateTexture2D(&desc, nullptr, &target);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr)) return;
+    ComPtr<ID3D11RenderTargetView> rtv;
+    hr = device->CreateRenderTargetView(target.Get(), nullptr, &rtv);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr)) return;
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    hr = device->CreateTexture2D(&desc, nullptr, &staging);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr)) return;
+    D3D11_RASTERIZER_DESC rasterDesc{};
+    rasterDesc.FillMode = D3D11_FILL_SOLID;
+    rasterDesc.CullMode = D3D11_CULL_NONE;
+    rasterDesc.DepthClipEnable = TRUE;
+    ComPtr<ID3D11RasterizerState> raster;
+    hr = device->CreateRasterizerState(&rasterDesc, &raster);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr)) return;
+    command->VSSetShader(vertex.Get(), nullptr, 0);
+    command->PSSetShader(pixel.Get(), nullptr, 0);
+    command->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    command->RSSetState(raster.Get());
+    D3D11_VIEWPORT viewport{0, 0, 4, 4, 0, 1};
+    command->RSSetViewports(1, &viewport);
+    auto* renderTarget = rtv.Get();
+    command->OMSetRenderTargets(1, &renderTarget, nullptr);
+    command->Draw(3, 0);
+    command->OMSetRenderTargets(0, nullptr, nullptr);
+    command->CopyResource(staging.Get(), target.Get());
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    hr = command->Map(staging.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr)) return;
+    for (uint32_t y = 0; y < 4; ++y)
+    {
+        const auto* row = reinterpret_cast<const math::Vec4*>(static_cast<const uint8_t*>(mapped.pData) + y * mapped.RowPitch);
+        for (uint32_t x = 0; x < 4; ++x)
+        {
+            CHECK(ctx, std::fabs(row[x].x - (y < 2 ? 2.f : 0.f)) < 0.0001f);
+            CHECK(ctx, std::fabs(row[x].y - (y < 2 ? -3.f : 0.f)) < 0.0001f);
+            // Same world-space offset for 100- and 1000-unit depth spans and a rotated light.
+            CHECK(ctx, std::fabs(row[x].z - 0.01f) < 1e-6f);
+            CHECK(ctx, std::fabs(row[x].w - 0.01f) < 1e-6f);
+        }
+    }
+    command->Unmap(staging.Get(), 0);
+#endif
+}
+
 static void TestDepthMaskShadersCompile(test::TestContext& ctx)
 {
     const auto root = PathFromUtf8(KROM_SOURCE_DIR) / "shaders";
@@ -6920,6 +7189,7 @@ int RunRendererTests()
 
     test::TestSuite suite("Renderer");
     suite.Add("Normal graph shaders and normal blend math on WARP", TestNormalGraphShaders);
+    suite.Add("Shadow receiver math and world bias on WARP", TestShadowReceiverMathOnWarp);
     suite.Add("Inherited mesh activation and visibility", TestInheritedMeshState);
     suite
         .Add("Skinning uploads only changed palettes", TestSkinningUploadsOnlyChangedPalettes)
@@ -6974,6 +7244,8 @@ int RunRendererTests()
         .Add("Shadow caster culling filters items per shadow view", TestShadowCasterCullingFiltersItemsPerShadowView)
         .Add("Shadow extraction skips directional without visible receiver", TestShadowExtractionSkipsDirectionalWithoutVisibleReceiver)
         .Add("Shadow extraction filters directional caster outliers", TestShadowExtractionFiltersDirectionalCasterOutliers)
+        .Add("Directional shadow slices match camera depth", TestDirectionalShadowSlicesMatchCameraDepth)
+        .Add("Directional shadows include upstream casters", TestDirectionalShadowDepthIncludesUpstreamCasters)
         .Add("Shadow view builder clamps spot/point far plane", TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance)
         .Add("Lighting extraction sorts shadowed first", TestLightingExtractionSortsShadowedAndDirectionalFirst)
         .Add("Lighting frame constants track packed/dropped lights", TestLightingFrameConstantsTrackPackedAndDroppedLights)

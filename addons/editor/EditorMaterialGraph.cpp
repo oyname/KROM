@@ -60,6 +60,7 @@ constexpr MaterialInput kMaterialInputs[] = {
      &MaterialAsset::emissiveStrength, assets::kHardScalarMaximum},
     {&MaterialGraph::metallic, "material.metallic", {}, nullptr, &MaterialAsset::metallicFactor},
     {&MaterialGraph::roughness, "material.roughness", {}, nullptr, &MaterialAsset::roughnessFactor},
+    {&MaterialGraph::specular, "material.specular", {}, nullptr, &MaterialAsset::specularFactor},
     {&MaterialGraph::normalStrength, "material.normal_strength", MaterialNodeType::Value, nullptr, &MaterialAsset::normalScale, 4.f},
     {&MaterialGraph::occlusion, "material.occlusion", MaterialNodeType::Value, nullptr, &MaterialAsset::occlusionStrength, 4.f},
 };
@@ -84,7 +85,8 @@ bool ShowMaterialInput(const MaterialInput& input, EditorMaterialTemplate type)
         return input.source == &MaterialGraph::baseColor || input.source == &MaterialGraph::emissive ||
                input.source == &MaterialGraph::emissiveStrength;
     case EditorMaterialTemplate::LegacyLit:
-        return input.source != &MaterialGraph::orm && input.source != &MaterialGraph::occlusion;
+        return input.source != &MaterialGraph::orm && input.source != &MaterialGraph::occlusion &&
+               input.source != &MaterialGraph::specular;
     case EditorMaterialTemplate::Custom:
         return input.texture != nullptr || input.source == &MaterialGraph::emissiveStrength;
     }
@@ -453,6 +455,8 @@ void DrawMaterialInput(EditorFrameContext& ctx, MaterialAsset& asset, const Mate
             ImGui::EndDisabled();
             if (linked)
                 ImGui::SetItemTooltip("%s", Translate("material.graph_linked_value"));
+            else if (input.source == &MaterialGraph::specular)
+                ImGui::SetItemTooltip("%s", Translate("material.specular_tip"));
         }
     }
     else

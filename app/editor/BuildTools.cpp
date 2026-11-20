@@ -1,8 +1,10 @@
 #include "app/editor/BuildTools.hpp"
 #include "core/PathUtf8.hpp"
+#include "addons/script/ScriptModuleAbiPolicy.hpp"
 #include <algorithm>
 #include <charconv>
 #include <fstream>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <sstream>
@@ -305,9 +307,10 @@ ToolDiscovery GetBuildTools(uint32_t preferredCompiler, const BuildToolOverrides
     return discovery;
 }
 
-bool CompilerCompatible(uint32_t editorVersion, uint32_t buildVersion, bool scriptBuild)
+bool CompilerCompatible(uint32_t editorVersion, uint32_t buildVersion, bool scriptBuild, bool sdkBuild)
 {
     if (!editorVersion || !buildVersion) return false;
+    if (sdkBuild) return script::CompatibleMsvcSdkCompiler(editorVersion, buildVersion);
     // ScriptModuleApi currently compares _MSC_FULL_VER exactly. Do not relax
     // that contract until the SDK defines and validates its ABI policy.
     if (scriptBuild) return buildVersion == editorVersion;
@@ -315,7 +318,7 @@ bool CompilerCompatible(uint32_t editorVersion, uint32_t buildVersion, bool scri
 }
 
 bool CheckBuildCache(const std::filesystem::path& buildDirectory, const BuildTools& tools,
-                     std::string& errorKey, std::string& detail)
+                     std::string& errorKey, std::string& detail, const std::filesystem::path& sourceDirectory)
 {
     errorKey.clear();
     detail.clear();
@@ -330,6 +333,7 @@ bool CheckBuildCache(const std::filesystem::path& buildDirectory, const BuildToo
         const auto key = line.substr(0, colon);
         const auto value = line.substr(equals + 1);
         if ((key == "CMAKE_CXX_COMPILER" && !SameFile(PathFromUtf8(value), tools.compiler)) ||
+            (key == "CMAKE_HOME_DIRECTORY" && !sourceDirectory.empty() && !SameFile(PathFromUtf8(value), sourceDirectory)) ||
             (key == "CMAKE_MAKE_PROGRAM" && !SameFile(PathFromUtf8(value), tools.ninja)) ||
             (key == "CMAKE_GENERATOR" && value != "Ninja"))
         {
@@ -339,6 +343,29 @@ bool CheckBuildCache(const std::filesystem::path& buildDirectory, const BuildToo
         }
     }
     return true;
+}
+
+bool ProjectNeedsConfigure(const std::filesystem::path& buildDirectory,
+                           const std::filesystem::path& projectRoot)
+{
+    std::ifstream cache(buildDirectory / "CMakeCache.txt");
+    std::string line, selected;
+    bool found = false;
+    while (std::getline(cache, line))
+    {
+        if (!line.starts_with("KROM_PROJECT_ROOT:")) continue;
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        const auto equals = line.find('=');
+        if (equals == std::string::npos) continue;
+        selected = line.substr(equals + 1);
+        found = true;
+        break;
+    }
+    if (!found || selected.empty() || projectRoot.empty() ||
+        !SameFile(PathFromUtf8(selected), projectRoot)) return true;
+    std::ifstream generated(buildDirectory / "krom-project-root.txt", std::ios::binary);
+    const std::string root((std::istreambuf_iterator<char>(generated)), std::istreambuf_iterator<char>());
+    return root.empty() || !SameFile(PathFromUtf8(root), projectRoot);
 }
 
 std::filesystem::path CachedMakeProgram(const std::filesystem::path& buildDirectory)
@@ -354,6 +381,17 @@ std::filesystem::path CachedMakeProgram(const std::filesystem::path& buildDirect
         if (equals == std::string::npos) return {};
         const auto program = PathFromUtf8(line.substr(equals + 1));
         return IsFile(program) ? program : std::filesystem::path{};
+    }
+    return {};
+}
+
+std::filesystem::path TargetPath(const std::filesystem::path& buildDirectory, const std::string& target)
+{
+    for (const auto* configuration : {"Release", "Debug", "RelWithDebInfo"})
+    {
+        std::ifstream in(buildDirectory / "target-paths" / configuration / (target + ".txt"), std::ios::binary);
+        const std::string text((std::istreambuf_iterator<char>(in)), {});
+        if (!text.empty()) return PathFromUtf8(text);
     }
     return {};
 }

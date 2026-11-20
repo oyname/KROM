@@ -92,6 +92,11 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
 }
 
 
+[[nodiscard]] collision::AABB ComputeFrustumSliceBounds(const renderer::RenderView& renderView,
+                                                       float nearDist,
+                                                       float farDist,
+                                                       std::array<math::Vec3, 8>& outCorners) noexcept;
+
 [[nodiscard]] collision::AABB ComputePrimaryCameraFrustumBounds(const ecs::World& world,
                                                                const renderer::RenderView* currentView,
                                                                float maxShadowDistance) noexcept
@@ -106,82 +111,35 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
         return ComputeSceneCasterBounds(world);
     }
 
-    const math::Mat4 invViewProj = (renderView.projection * renderView.view).Inverse();
-
     const float effectiveFar = std::max(renderView.nearPlane,
                                         std::min(renderView.farPlane, std::max(maxShadowDistance, renderView.nearPlane)));
-
-    math::Vec3 minPoint(std::numeric_limits<float>::max());
-    math::Vec3 maxPoint(-std::numeric_limits<float>::max());
-
-    auto addCorner = [&](float x, float y, float z)
-    {
-        math::Vec4 cornerCS{x, y, z, 1.0f};
-        math::Vec4 cornerWS4 = invViewProj * cornerCS;
-        const float invW = std::fabs(cornerWS4.w) > 1e-6f ? (1.0f / cornerWS4.w) : 1.0f;
-        math::Vec3 cornerWS = cornerWS4.xyz() * invW;
-
-        // Clamp perspective far extent to a sane shadow distance so the
-        // directional shadow fit follows the actually useful camera region.
-        if (z > 0.5f)
-        {
-            math::Vec3 ray = cornerWS - renderView.cameraPosition;
-            const float lenSq = ray.LengthSq();
-            if (lenSq > 1e-8f)
-                cornerWS = renderView.cameraPosition + ray.Normalized() * effectiveFar;
-        }
-
-        ExpandMinMax(cornerWS, minPoint, maxPoint);
-    };
-
-    // D3D/Vulkan style clip depth: near=0, far=1
-    for (float z : {0.0f, 1.0f})
-    {
-        addCorner(-1.0f, -1.0f, z);
-        addCorner( 1.0f, -1.0f, z);
-        addCorner(-1.0f,  1.0f, z);
-        addCorner( 1.0f,  1.0f, z);
-    }
-
-    collision::AABB bounds{};
-    bounds.min = minPoint;
-    bounds.max = maxPoint;
-    return bounds;
+    std::array<math::Vec3, 8> corners{};
+    return ComputeFrustumSliceBounds(renderView, renderView.nearPlane, effectiveFar, corners);
 }
 
 // Berechnet AABB + die 8 Welt-Ecken eines Frustum-Slice im Bereich
-// [nearDist, farDist] (Welt-Einheiten vom Kamera-Origin).
+// [nearDist, farDist] in camera view depth, matching shader cascade selection.
 [[nodiscard]] collision::AABB ComputeFrustumSliceBounds(const renderer::RenderView& renderView,
                                                         float nearDist,
                                                         float farDist,
                                                         std::array<math::Vec3, 8>& outCorners) noexcept
 {
-    const math::Mat4 invViewProj = (renderView.projection * renderView.view).Inverse();
+    const math::Mat4 invProjection = renderView.projection.Inverse();
+    const math::Mat4 invView = renderView.view.InverseAffine();
     math::Vec3 minPoint(std::numeric_limits<float>::max());
     math::Vec3 maxPoint(-std::numeric_limits<float>::max());
     uint32_t cornerIndex = 0u;
 
     auto addCorner = [&](float x, float y, float z)
     {
-        math::Vec4 clipCS{x, y, z, 1.0f};
-        math::Vec4 ws4 = invViewProj * clipCS;
-        const float invW = std::fabs(ws4.w) > 1e-6f ? (1.0f / ws4.w) : 1.0f;
-        math::Vec3 wsPos = ws4.xyz() * invW;
-
-        if (z > 0.5f)
-        {
-            math::Vec3 ray = wsPos - renderView.cameraPosition;
-            const float lenSq = ray.LengthSq();
-            if (lenSq > 1e-8f)
-                wsPos = renderView.cameraPosition + ray.Normalized() * farDist;
-        }
-        else
-        {
-            math::Vec3 ray = wsPos - renderView.cameraPosition;
-            const float lenSq = ray.LengthSq();
-            if (lenSq > 1e-8f)
-                wsPos = renderView.cameraPosition + ray.Normalized() * nearDist;
-        }
+        const math::Vec4 nearCS = invProjection * math::Vec4{x, y, 0.f, 1.f};
+        const math::Vec4 farCS = invProjection * math::Vec4{x, y, 1.f, 1.f};
+        const math::Vec3 nearVS = nearCS.xyz() * (1.f / nearCS.w);
+        const math::Vec3 farVS = farCS.xyz() * (1.f / farCS.w);
+        const float depth = z > 0.5f ? farDist : nearDist;
+        const float t = (-depth - nearVS.z) / (farVS.z - nearVS.z);
+        // Interpolating the unprojected ray also preserves orthographic XY.
+        const math::Vec3 wsPos = invView.TransformPoint(nearVS + (farVS - nearVS) * t);
 
         if (cornerIndex < outCorners.size())
             outCorners[cornerIndex++] = wsPos;
@@ -225,7 +183,7 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
         return result;
     }
 
-    const float camNear = renderView.nearPlane;
+    const float camNear = std::max(renderView.nearPlane, 1e-4f);
     const float camFar  = std::min(renderView.farPlane, std::max(shadowMaxDistance, camNear + 1.0f));
     const float N       = static_cast<float>(cascadeCount);
 
@@ -238,7 +196,7 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
         const float fi = static_cast<float>(i) / N;
         const float splitLog     = camNear * std::pow(camFar / std::max(camNear, 1e-4f), fi);
         const float splitUniform = camNear + (camFar - camNear) * fi;
-        splits[i] = splitUniform + (splitLog - splitUniform) * cascadeLambda;
+        splits[i] = splitUniform + (splitLog - splitUniform) * std::clamp(cascadeLambda, 0.f, 1.f);
     }
 
     result.reserve(cascadeCount);
@@ -943,6 +901,19 @@ void ExtractShadow(const renderer::SceneExtractionContext& context,
             maxTileResolution,
             totalViewCount,
             config.maxShadowAtlasResolution);
+        const uint32_t tileResolution = std::max(1u,
+            activeShadowResolution / ComputeCurrentRenderPathAtlasGridDim(totalViewCount));
+        for (size_t requestIndex : shadowData.currentRenderPath.requestIndices)
+        {
+            auto& request = shadowData.requests[requestIndex];
+            request.effectiveResolution = tileResolution;
+            if (tileResolution == request.settings.resolution)
+                continue;
+            const auto* light = world.Get<LightComponent>(request.lightEntity);
+            const auto* transform = world.Get<WorldTransformComponent>(request.lightEntity);
+            if (light && transform)
+                ShadowViewBuilder::BuildViews(*light, *transform, request.casterBoundsWorld, request);
+        }
     }
     else if (temporalState)
     {

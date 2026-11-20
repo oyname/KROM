@@ -152,6 +152,30 @@ ProcessResult CaptureProcessOutput(const ProcessCommand& command, std::string& o
     return RunProcess(command, [&](const std::string& chunk) { output += chunk; }, nullptr, std::chrono::seconds(30));
 }
 
+ProcessResult LaunchProcess(const ProcessCommand& command)
+{
+#ifdef _WIN32
+    auto commandLine = QuoteArgument(command.executable.wstring());
+    for (const auto& argument : command.arguments) commandLine += L" " + QuoteArgument(WideFromUtf8(argument));
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION process{};
+    const auto directory = command.workingDirectory.wstring();
+    // Launches inherit the host environment; explicit build environments belong
+    // to RunProcess, whose complete quoting/cancellation contract is shared.
+    if (!command.environment.empty()) return {-1, false, "LaunchProcess requires inherited environment"};
+    if (!CreateProcessW(command.executable.c_str(), commandLine.data(), nullptr, nullptr, FALSE,
+                        CREATE_NO_WINDOW, nullptr, directory.empty() ? nullptr : directory.c_str(), &startup, &process))
+        return {-1, false, "CreateProcess (Windows " + std::to_string(GetLastError()) + ")"};
+    CloseHandle(process.hThread);
+    CloseHandle(process.hProcess);
+    return {0, false, {}};
+#else
+    (void)command;
+    return {-1, false, "Process launch is not implemented for this platform yet"};
+#endif
+}
+
 bool ReadMsvcEnvironment(const std::filesystem::path& setupScript, const std::string& toolset,
                          std::vector<std::string>& environment, std::string& error)
 {

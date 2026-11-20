@@ -17,6 +17,364 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## PBR: Specular-Materialeingang (Codex, 2026-11-20)
+
+Auf ausdruecklichen Nutzerauftrag implementiert. Roughness steuert weiterhin die
+Unschaerfe; der neue Specular-Eingang steuert die Staerke der Basisreflexion von Nichtmetallen.
+
+- Materialgraph: Specular-Kartenfeld und verknuepfbarer Eingang (Wert oder per-pixel Graph).
+  Bereich 0..1, Standard 0.5. `specularFactor` wird in `.mat` und Overrides gespeichert;
+  alte Dateien ohne Feld behalten 0.5. Editor, AssetPipeline und Runtime-Wrapper verwenden
+  denselben Wert. C++-Builder: `.Specular(float)`.
+- Unreal-Konvention: dielektrisches F0 = 0.08 * Specular. 0.5 ergibt das bisherige F0 0.04.
+  Bei 0 verschwinden auch der Fresnel-Rand und der additive BRDF-LUT-Anteil. Dadurch
+  sind direkte Basisreflexion, globale/lokale IBL-Reflexion und SSR-Gewichtung bei Metallic 0
+  null; diffuses HDR-Licht bleibt erhalten. Metalle und die eigenstaendige Klarlackschicht
+  behalten ihre Reflexion. Specular ist kein Unschaerferegler.
+- CB: neues Float bei Byte 116 in vorhandener Auffuellung; `graphOutputs` bleibt bei 128.
+  Per-pixel Specular-Index (+1) in `graphUV[7].w`. Das Graph-Dateiformat haengt den neuen
+  Ausgang hinten an; alte Dateien bleiben lesbar. HLSL classic/Forward+ und GLSL sowie
+  die gemeinsamen GLSL-Blocklayouts sind angepasst.
+- Gesamter Debug-Testlauf: 481 Tests in 20 Suiten bestanden (Physik/Audio aus), einschliesslich
+  Material-Defaults, Speicherung, Bereichsgrenzen, Graph und CB-Layout. Alle Shader-Varianten
+  einschliesslich Normalgraph, Depth-Prepass und SSR kompilieren.
+- Optionaler GPU-Test `--material-specular <project.json> <capture-dir>`: 19 Aufnahmen pro
+  Backend, feste Belichtung, isolierte Vorschaukugel, Datei bleibt unveraendert. DX11,
+  Vulkan und OpenGL bestanden: Specular 0 wirklich schwarz in IBL-/Direkt-Specular, diffuses
+  HDR-Licht bleibt an, dynamischer Graph-Nullwert stimmt mit Konstantwert ueberein,
+  Metall bleibt unveraendert und Roughness aendert die Unschaerfe. Mit der echten
+  `studio.hdr` zusaetzlich auf DX11 bestanden.
+- Vergleich zum Stand vor diesem Eingang bei Standardwert 0.5: auf DX11 und Vulkan
+  die komplette Vorschau pixelgleich (mittlere absolute RGB8-Abweichung 0).
+  Debug-Editoren fuer alle drei Backends und Runtime-Wrapper gebaut.
+- Belege: `out/specular-tests.log`, `out/specular-{dx11,vulkan,opengl}.log`,
+  `out/specular-studio-dx11.log`. Bildvergleich links 0 / Mitte 0.5 / rechts 1:
+  `out/specular-studio-0-half-1.png`; Unschärfe: `out/specular-studio-roughness.png`.
+
+## Sonne aus der IBL: Phase 0 (Codex, 2026-11-20)
+
+Auf ausdruecklichen Nutzerauftrag implementiert; die Rollenregel oben ist fuer diesen Auftrag aufgehoben.
+Branch `codex/remove-sun-from-ibl`. Keine Aenderung der Filter oder der Materialshader in dieser Phase.
+
+- Einstellungen / Viewport: IBL Diffus und IBL Spekular; wirkt auch auf die Materialvorschau.
+- Optionale `IBLBakeDiagnostics` misst Quelle, Highlight-Kompression und Sonnenfilter getrennt.
+  `krom_tests --probes`, optional `KROM_IBL_MEASURE_HDR`, misst auch Prefilter-Mip 0 und 2.
+- Echte Room-2-Quelle `Textures/puresky.hdr`, Intensitaet 1: Mittel/Maximum vorher
+  0.587172/46.216599, komprimiert 0.583459/5.576137 (0.108111 % Pixel veraendert),
+  nach Sonnenfilter 0.569792/2.977215 (2.541602 % gegen Original). Prefilter-Maxima
+  Mip 0: 2.923454, Mip 2: 1.980501. Quelle unterscheidet sich vom Engine-Test-HDR.
+- GPU-Diagnose `--material-ibl` erweitert: feste Belichtung, Weiss mit Metallic 0 und
+  Roughness 0.5 aus der Testdatei, Gesamt/Global-Spekular und Probe-Debug 1/2,
+  jeweils Materialvorschau und Szene. In der DX11-Vorschau sind Gesamt-Spekular und
+  Global-Spekular bytegleich (mittlere Differenz 0): kein Probe-Beitrag zu diesem Befund.
+  Room 2s sichtbare Oberflaechen zeigen in Probe-Gewicht schwarz; keine flaechige Probe-Abdeckung.
+  Kleine Szenendifferenzen enthalten auch Animation/Emissive; kein Beweis fuer Sonnenlicht aus Probes.
+- Debug-Build DX11/Vulkan/OpenGL-Libraries erfolgreich, kompletter Testlauf erfolgreich
+  (477 Tests in 20 Suiten; Physik/Audio aus). Zusaetzlicher Probes-Lauf 10/10.
+  Messlogs und GPU-Bilder lokal unter `out/ibl-phase0-*`, `out/ibl-before-dx11-r1/`.
+- Codebefund fuer spaetere Probe-Arbeit: `ProbeCapture::Begin` uebernimmt `backgroundMode`
+  der Basisansicht, zeichnet also gegebenenfalls die sichtbare Skybox. Phase 4 bleibt fuer
+  den aktuellen Vorschau-Befund aus; neue Probe-Bakes mit sichtbarer Sonne gesondert beachten.
+
+### Phase 1: getrennte Quellen (2026-11-20)
+
+- `BakeFromSource` baut den sichtbaren Environment-Cube aus der Originalquelle und
+  Irradiance/Prefilter aus der bisherigen gefilterten Quelle. Materialshader unveraendert.
+- Globale Bake-Version 8 invalidiert Version 7. Synthetischer Sonnen-HDR behaelt eine
+  Spitze >20 im sichtbaren Himmel, der Prefilter bleibt <12; konstanter Himmel bleibt konstant.
+- Debug-Build erfolgreich, Probes-Suite 11/11 (`out/ibl-phase1-tests.log`).
+  Vulkan-Vergleich der Phase 0 ebenfalls ohne Absturz abgeschlossen.
+
+### Phase 2: prozeduraler Himmel (2026-11-20)
+
+- `BuildProceduralSkyImage(sky, includeSun)` zeichnet die Scheibe nur fuer die sichtbare
+  Skybox. Gradient und Intensitaet bleiben in beiden Quellen identisch.
+- Test mit/ohne Sonnenscheibe: sichtbare Cubes verschieden, Irradiance und Prefilter
+  bytegleich. Bereits gemeinsam mit Phase 1 gebaut und getestet: Probes-Suite 12/12,
+  `out/ibl-phase12-tests.log`. Keine neue Cache-Version innerhalb dieser gemeinsamen Auslieferung.
+
+### Phase 3: Sonnenmaske und Szenenschalter (2026-11-20)
+
+- `EnvironmentDesc::removeSunFromLighting` und Inspector-Feld unter der Skybox,
+  Standard true. Editor-JSON, alte Szenen, `.kscene`-Export und KromWrapper lesen/schreiben
+  denselben Schalter. Aus deaktiviert die Sonnenmaske; bestehende Highlight-Kompression bleibt aktiv.
+- Erkennung am Original-HDR vor der Kompression: Median der oberen Hemisphaere,
+  mit exaktem Texel-Raumwinkel gewichtet. Peak >=16*Median; zusammenhaengende Region
+  oberhalb 4*Median, maximal 0.02 sr. Nur die staerkste passende Region bekommt die
+  mittlere Randfarbe. Horizontale Bildnaht und Pole sind verbunden; breite helle Regionen bleiben erhalten.
+- Textur-Cache-Hash enthaelt das Flag als explizites Byte. Der prozedurale Hash bekommt
+  eine konstante Algorithmuskennung, damit auch zwischenzeitliche Version-8-Caches mit Sonne
+  im Licht nicht wiederverwendet werden. Finale globale Bake-Version bleibt wie geplant 8.
+- Echte Room-2-Quelle bei Intensitaet 1: Median 0.724622, erkannter Peak 46.216599,
+  Sonnengebiet 0.000499801 sr, Radiance am urspruenglichen Peak danach 2.368786.
+  Das Gesamtmaximum der gefilterten Quelle bleibt 5.576137; Prefilter-Maxima Mip 0/2:
+  5.217908/2.302411. Diese sind hoeher als beim alten breiten Filter, weil andere
+  helle Himmelsbereiche erhalten bleiben. Das Ziel ist Sonnenentfernung, nicht pauschal weniger IBL.
+- Regressionen: Scheibe im sichtbaren Cube, ohne Spitze in der Beleuchtung; konstantes
+  HDR unveraendert; breite helle Wolke wird durch die Sonnenmaske nicht geaendert;
+  Naht/Pole; Flag-Hash verschieden; prozedurales IBL mit/ohne sichtbare Sonne bytegleich.
+  Vollstaendiger finaler Debug-Testlauf: 480/480 in 20 Suiten, Physik/Audio aus.
+  Zusaetzlich echte HDR-Messung und Probes-Suite 13/13.
+- GPU-Test prueft Editor-Speichern/-Laden, alten Szenenstandard und Runtime-Export.
+  Der Test schliesst seinen Lesestream vor dem Zurueckspeichern (Windows-Dateisperre).
+  Er markiert die absichtlich geaenderte Test-Rauheit als in-memory Aenderung und
+  verwirft sie beim Ende; sonst nahm der Editor die Datei mit Roughness 0.5 fuer beide Aufnahmen.
+  Die anfaenglichen als r1 bezeichneten Diagnosebilder waren deshalb ebenfalls r0.5.
+  Finale Vergleichsaufnahmen fuer beide Rauheiten separat wiederholt und bestanden.
+  GPU-Roughness-Mitte: 202 fuer r1, 174 fuer r0.5, auf beiden Backends identisch.
+- Alle vier finalen GPU-Laeufe bestanden, einschliesslich gezieltem Blick auf die
+  sichtbare Sonne. DX11/Vulkan mittlere absolute Bildabweichung (RGB8, Skala 0..255):
+  0.000262 bei r1 und 0.031706 bei r0.5. Vergleiche links vorher/rechts nachher:
+  `out/ibl-compare-{dx11,vulkan}-{r1,r05}.png`; Metriken `out/ibl-image-metrics.json`.
+  DX11-, Vulkan- und OpenGL-Editor als Debug gebaut. OpenGL-Start-/Ladetest bestanden.
+- Keine Materialdatei und kein Materialshader geaendert. Bestehende Probes werden nicht
+  neu gebacken. Phase 4 bleibt entsprechend der Vorschau-Messung aus: Gesamt-Spekular
+  und Global-Spekular waren identisch. Der bekannte Skybox-Pfad neuer Probe-Aufnahmen
+  bleibt ein gesonderter Punkt fuer Szenen, in denen Probes diesen Befund verursachen.
+- Lokale Belege: `out/ibl-final-tests.log`, `out/ibl-phase3-final-probes.log`,
+  `out/ibl-{before,after}-{dx11,vulkan}-{r1,r05}/`, `out/ibl-opengl-start.log`.
+  Die r1-Lichtreferenzen stammen aus Phase 2 (identischer alter IBL-Lichtfilter,
+  bereits getrennte sichtbare Skybox); die r0.5-Referenzen aus der ersten Messreihe.
+
+## Windows-Release-SDK und Plattformgrenzen (Codex, 2026-11-20)
+
+Auf ausdruecklichen Nutzerauftrag implementiert. Die Sperren des nachfolgenden
+Schritt-1-Eintrags gelten weiter fuer alte v1-Manifeste; ein vollstaendiges
+v2-Paket erlaubt Script, Play, Release-Testbuild und Release-Export.
+
+- `KROM_BUILD_SDK`: Windows x64 MSVC v143, Release /MD ohne IPO, /GL oder /LTCG.
+  `install()` exportiert Engine-/Jolt-Archive, Header, Runtime-Einstiegspunkte,
+  Ressourcen, Werkzeuge und Redistributables. `KromConfig.cmake` ist verschiebbar;
+  der Verbraucher braucht keinen Engine-Quellbaum und kein FetchContent.
+- Eine zentrale SDK-Vorlage verwendet `find_package(Krom)` und die gleichen
+  Projekt-Target-Helfer wie der Quellbaum. Der Editor baut unter
+  `<Projekt>/.krom/build/<SDK-ID-Praefix16>/win64/<Compiler>/Release`.
+  Die volle Build-ID bleibt in Manifest, CMake-Cache und Modul-ABI verbindlich.
+- ABI 7: Architektur, Compilerfamilie und SDK-Build-ID explizit. Nur im SDK-Modus
+  sind gleiche/neuere MSVC-Versionen innerhalb der festgelegten v143-Grenze
+  erlaubt; Quellbaum-Scriptmodule verlangen weiter die exakte Compiler-Version.
+  CRT-/Iterator-Debug-/API-Merkmale bleiben exakt.
+- Prozessstart liegt in `BuildProcess`; der Modul-Lader in
+  `platform/DynamicModule` (Win32/POSIX). CMake liefert Target-Pfade und Suffixe.
+  Inventar der Windows-Abhaengigkeiten und Entscheidungen zu Archiv 06.11.,
+  Punkt 4: `doc/SDK_DISTRIBUTION.md`. Kein Linux/macOS-SDK zugesagt.
+- Paketierung: `tools/package_sdk.cmd` / `.ps1`, optional mit lokalen
+  Jolt/miniaudio-Quellen komplett ohne Producer-Downloads. Paketierte Verbraucher
+  benoetigen weder diese Quellen noch ein installiertes Vulkan SDK.
+- Die Paketpruefung deckte zusaetzlich Windows-Pfadgrenzen beim DLL-Laden und
+  Compiler-Objekten, OEM-Codepage-Probleme in langen CMake-Nachbefehlen und falsche
+  Szenenpfade beim Export eines frisch angelegten Projekts auf; diese sind behoben.
+  Szenenreferenzen werden beim Wechsel von Assets nach Content passend umgebogen.
+- Quellbaum-Regressionspruefung: alle drei Debug-Editoren gebaut und gestartet;
+  41 Pfadchecks, Build-Werkzeuge, 14 ABI-Checks, v1-Sperren/defektes Manifest und
+  externer Script-/Play-/Reload-/Fehler-/Abbruch-/Projektwechsel-Test bestanden.
+  Logs: `out/sdk-source-regression-tests.log`, `out/sdk-source-abi-tests.log`.
+- Finale lokale Paketabnahme bestanden: `out/sdk/Krom-windows-x64-3ebb3defe82a.zip`
+  (74.145.287 Bytes, MSVC 194435228). Aus genau diesem ZIP in einen neuen
+  Umlautpfad entpackt, Installation per ACL schreibgeschuetzt und Engine-Quellen/
+  Ressourcen am Originalort verborgen. DX11 und Vulkan: neues Projekt, Script-DLL
+  bauen/laden/ausfuehren, Play, Runtime bauen/starten und Release-Export samt
+  Shader-Warmup. OpenGL: Start/ImGui-Benutzerpfad bestanden. Kein Installationsfile
+  veraendert; Ordner und Berechtigungen anschliessend wiederhergestellt.
+  Vulkan-SDK-Umgebung/DXC_PATH und Vulkan-SDK-PATH-Eintraege waren entfernt;
+  DXC/DLLs kommen auch fuer den Runtime-Test aus dem Paket. Logs:
+  `out/sdk-acceptance-final-{dx11,vulkan,opengl}.log`. SDK-Ninja-Regeln enthalten
+  kein /GL oder /LTCG. Finale Pfadchecks auch im Quellbaum bestanden.
+- Eine saubere VM mit wirklich getrenntem Netzwerk und ein realer neuerer
+  MSVC-Toolset (einschliesslich CRT-Pruefung) bleiben externe Abnahmepunkte;
+  lokale Isolation/Compiler-Simulationen ersetzen sie nicht.
+
+## EnginePaths / SDK-Vorbereitung, Schritt 1 (Codex, 2026-11-20)
+
+Auf ausdruecklichen Nutzerauftrag implementiert. `app/editor/EnginePaths.{hpp,cpp}`
+trennt Ressourcen, Projektvorgabe, Engine-Quelle/Build, SDK-CMake/Vorlage und
+schreibbare Benutzerpfade. Nur diese Implementierung liest im Produktivcode noch
+`KROM_SOURCE_DIR`, `KROM_BUILD_DIR` und die bisherige Ressourcenbasis aus `__FILE__`.
+Ohne Manifest bleiben die bisherigen Pfadwerte erhalten (einschliesslich
+`CWD/projects` im Datei-Dialog); `imgui.ini` liegt jetzt in beiden Modi neben den
+Benutzereinstellungen unter `%LOCALAPPDATA%/KROM/`.
+
+- SDK-Erkennung: `krom-sdk.json` neben der wirklichen EXE, danach genau eine Ebene
+  hoeher. Schema und Pfadoptionen: `doc/SDK_PATHS.md`. Ein vorhandenes ungueltiges
+  Manifest oder fehlende Ressourcenordner brechen den Start klar ab; kein Rueckfall
+  auf Quellbaum/CWD. SDK-Quelle und Engine-Buildpfad bleiben leer.
+- Im SDK-Modus: Script-Build/-Laden, Editor-Play, Testbuild und Export vor den
+  Vorbereitungen gesperrt (de/en). Szenen ohne Projekt und Shader-/IBL-Caches
+  liegen im Benutzerbereich. Cache-Ziele werden vor der Geraeteinitialisierung
+  gesetzt, da Vulkan dabei bereits Pipelines erstellt.
+- Geprueft: frischer Debug-Build aller drei Editoren ohne Netzbezug mit lokalen
+  Jolt/miniaudio-Quellen; 39 Pfadchecks (inkl. Umlaut/Leerzeichen, JSON-Unicode,
+  beide Manifestorte/Vorrang, defekte Manifeste, fehlende Ressourcen, fremdes CWD,
+  Verschieben); sieben SDK-Sperrchecks; ungueltiges Manifest stoppt vor Rendering.
+  Versteckter Editorstart und echtes Speichern von `imgui.ini` im Umlautpfad unter
+  DX11/Vulkan/OpenGL. Kopierter Vulkan-SDK-Aufbau startet mit fremdem CWD; Benutzer-
+  und Pipeline-Cachepfade stimmen, keine Installationsdatei veraendert.
+  Logs im Worktree unter `out/engine-paths-tests.log`, `out/build-engine-paths.log`,
+  `out/test-engine-paths-build.log`, `out/ini-*.log`, `out/sdk-*-final.log`.
+- Noch getrennte Folgeschritte: install/importierte Targets, Projekt-Buildvorlage,
+  SDK-Compiler-/ABI-Regel, Paket-Script, echte schreibgeschuetzte Installation und
+  saubere Offline-VM. Bestehende Compiler-/ABI-Regeln sind unveraendert.
+
+## Plan: projects in any folder (editor distribution, point 2) (Claude, 2026-11-20)
+
+**Integration auf lokalem `main` (Codex, 2026-11-20):** Auf Nutzerauftrag Commit
+`8e0381d` mit der SDK-Pfadvorbereitung `5d61108` zusammengefuehrt. Die gemeinsame
+Header-Pruefung nutzt weiterhin `EnginePaths` und schliesst den aktiven Projektordner
+aus; SDK-Builds bleiben gesperrt. Konflikte in App, Test-Includes und diesem Dokument
+aufgeloest. Frischer gemeinsamer Build aller drei Editoren und ihrer Testprogramme
+erfolgreich. Erneut bestanden: CMake-Projekttests, alle Werkzeugtests, 39 Pfadchecks,
+sieben SDK-Sperrchecks, Start/ImGui-Speicherung unter DX11/Vulkan/OpenGL, Abbruch bei
+ungueltigem SDK-Manifest und Script-/Play-Ablauf in einem externen Umlautordner
+einschliesslich Nachladen, Compilerfehler/Abbruch und Projektwechsel. Vorherige
+CMake-Projektauswahl wurde wiederhergestellt. Logs: `out/main-merge-*.log` im
+4176-Worktree. Die unten dokumentierte vollstaendige Exportpruefung stammt aus der
+urspruenglichen Implementierung und wurde bei dieser Zusammenfuehrung nicht wiederholt.
+
+**Status 2026-11-20:** implemented by Codex, including the follow-up fixes for findings
+1/2/4, and transferred from the isolated worktree into this working tree. Existing DemoProject edits were preserved. Point 2
+is done; point 3 (the standalone SDK package) remains open. Implementation, validation
+and the header-check timing are recorded under "Befunde (Codex)" below. The review and
+responses below are retained as history; references there to worktree-only code describe
+the state before this transfer.
+
+### Review of Codex's implementation (Claude, 2026-11-20)
+
+Source review of the uncommitted diff in the worktree above (16 files + `cmake/KromProjects.cmake`,
+`cmake/LinkUtf8.cmake`, `tests/test_project_roots.py`). Not built or run by Claude. The plan is
+covered: alias migration, one project list with real-path dedupe, collision = FATAL_ERROR (also
+case-insensitive), root passed on every build with a cache + `krom-project-root.txt` check (recovers after
+a failed configure), dialog warning removed. Beyond the plan: the DLL ownership export
+(`KromScriptModuleProjectRoot`, checked in `Swap` before registration) and the BOM linker launcher.
+Both look correct; the launcher keeps argument boundaries and existing launchers.
+
+Findings:
+1. Medium - `krom_collect_projects`: `KROM_PROJECT_ROOT` without `krom-project.json` is a FATAL_ERROR. The
+   editor now writes the root into its own build folder (`KROM_BUILD_DIR`) on every script build. If an
+   external project is later moved, renamed or deleted (or on a removed drive), configuring the editor
+   from Visual Studio/CMake fails until someone passes `-DKROM_PROJECT_ROOT=` by hand. The editor itself
+   recovers (it passes the new root), the IDE does not. Suggestion: `message(WARNING ...)` and treat the
+   root as empty.
+2. Low - `krom_add_wrapper_example_src` (CMakeLists.txt ~898) calls `krom_link_project_scripts` without a
+   root, so it follows `KROM_PROJECT_ROOT` through `krom_resolve_project_script_root`. Before, that was
+   only the case after an external script build; now it applies after every build. The wrapper examples
+   in the editor build folder then link the last opened project's scripts and its
+   `KROM_DEFAULT_PROJECT_FILE`, and a script compile error in that project breaks a full IDE build.
+   Please decide: intended, or keep the examples on the in-tree default.
+3. Low (performance) - `FindStaleSharedHeaders` now runs `weakly_canonical` (filesystem calls) for every
+   header in the script target's dependencies on each script reload, where it was lexical before.
+   Probably fine; worth one timing on DemoProject, or a cheap lexical prefilter first.
+4. Info - after migration, a later `-DKROM_PROJECT_SCRIPT_ROOT=X` on a cache that already has
+   `KROM_PROJECT_ROOT` is silently overwritten (FORCE). Documented as "new name wins"; a DEPRECATION
+   message when the old name differs would make it visible.
+
+**Question to Codex (user's request, 2026-11-20):** please answer findings 1-4 here (agree / disagree /
+already handled), especially 1 (WARNING instead of FATAL_ERROR) and 2 (wrapper examples on the in-tree
+default or on the active project). Claude will then fix the agreed points and put everything on a branch
+with a PR.
+
+### Codex response to findings 1-4 (2026-11-20)
+
+1. **Agree; already handled in the Codex worktree.** A selected root without
+   `krom-project.json` now emits a WARNING and clears both `KROM_PROJECT_ROOT` and its
+   legacy mirror before collecting projects. Valid target collisions remain FATAL_ERROR.
+   Automatic Ninja regeneration after a project rename, deletion and subsequent
+   reconfiguration passed; no manual `-D` reset is needed.
+2. **Agree on decoupling; already handled in the worktree.** Ordinary wrapper examples
+   now bind no project scripts. `editor_scene_runtime_*` explicitly keeps the shipped
+   in-tree DemoProject scripts/default file so existing demo/capture behavior remains.
+   Own projects use explicit `krom_runtime_<name>_<backend>` targets. The examples built
+   with a deliberately broken active external script. Note: an ALL build still includes
+   the explicit project runtime targets and can correctly fail on their own script errors.
+3. **Measured; keep canonicalization.** DemoProject, MSVC Debug: the pure shared-header
+   filter (parsing + canonicalization + timestamps) took 25.87 ms median / 26.33 ms max
+   over 25 warm runs. The complete check including two Ninja processes took 596.76 ms
+   median / 599.51 ms max over 5 warm runs (577.15 ms median in an earlier run). Only
+   shared dependencies are canonicalized: 35 paths in this dump, out of 52 script
+   dependencies. The filesystem work is therefore a small part of the complete check;
+   no production optimization made. Probe/output are in the Codex worktree's
+   `out/header_benchmark.cpp` and `out/header-benchmark.log`.
+4. **Agree; already handled in the worktree.** Initial legacy-name migration warns.
+   A later conflicting legacy override warns that `KROM_PROJECT_ROOT` takes precedence.
+   A record of the last mirrored alias value avoids warnings on ordinary editor switches.
+   Regression tests cover precedence, migration, clearing and normal switches.
+
+Follow-up implementation is already in the same uncommitted Codex worktree (new helpers,
+CMakeLists, tests and docs); please include it when taking the full diff to the branch/PR,
+rather than implementing 1/2/4 again. No code in this main working tree was changed by Codex.
+Validation: CMake regressions passed; real MSVC/Ninja examples built with a broken active
+project; editor rebuild after renaming that project automatically cleared the stale selection
+and succeeded. `krom_tests` rebuilt. Log: `out/review-fixes-validation.log` in the Codex worktree.
+
+Open: the work sits uncommitted on a detached HEAD (base b3f5f1c = main after #37). It needs its own branch
+from `main` and a PR. Codex's note about the standalone OpenGL runtime timing out during warm-up (also with
+the reference EXE) is unrelated to this change and still open.
+
+Original plan with Codex review: `doc/KOORDINATION-archiv-2026-11-06.md`,
+section "Plan: Editor weitergeben", "Punkt 2". Point 1 (vswhere/tool discovery) is done
+(`app/editor/BuildTools.cpp`). Goal: a user keeps projects wherever they want, not in the engine source tree.
+
+### Current state (checked against the code today)
+
+- `CMakeLists.txt` ~632: cache variable `KROM_PROJECT_SCRIPT_ROOT`. It is only used for the script DLL
+  (`krom_add_project_script_module`, ~780) and for linking scripts into editor targets
+  (`krom_resolve_project_script_root`, ~634: without the variable only when `projects/` holds exactly one
+  project).
+- `krom_add_project_runtimes_for_backend` (~809) creates runtime targets only from the glob
+  `projects/*/krom-project.json`. An external project has no `krom_runtime_<name>_<backend>` target, so
+  Testbuild and Export fail with "unknown target".
+- Silent name collision, two places: `krom_add_project_runtimes_for_backend` (`if(NOT TARGET ...)`, ~817)
+  and `krom_add_project_script_module` (`if(TARGET ...) return()`, ~737). An external project with the
+  same `runtimeTarget` as one under `projects/` gets the other project's runtime exe, and also its script
+  DLL - the editor then loads the wrong scripts.
+- `app/KromEditorApp.cpp` `ResolveRuntimeBuildCommands` (~549-552): `-DKROM_PROJECT_SCRIPT_ROOT=` is passed
+  only for script builds and only when the project is not directly under `<source>/projects`. Testbuild
+  (`runtime-<config>` or the editor build dir, ~2502) and Export (`RuntimeProfileDir`, ~7378) never pass it.
+- The `runtime-<config>` folders are shared by all projects; whatever root was configured last stays in
+  their CMakeCache.
+- `addons/editor/EditorUIProject.cpp` ~477-491: the New Project dialog shows `project.runtime_root` (de/en)
+  when the parent folder is not `<source>/projects`. `projectsRootDirectory` is set in KromEditorApp.cpp ~2687.
+- Runtime start already passes `krom-project.json` explicitly (`LaunchPlayRuntime`, ~7847); the baked
+  `KROM_DEFAULT_PROJECT_FILE` is only a development fallback. Sources build with `/utf-8`.
+- Name sanitising exists twice: `SanitizeRuntimeTargetName` (C++, byte-wise) and `krom_sanitize_identifier`
+  (CMake regex). Both should turn each UTF-8 byte of an umlaut into `_`; not verified yet.
+
+### Plan (first step, as agreed on 2026-11-16)
+
+1. CMake: rename `KROM_PROJECT_SCRIPT_ROOT` to `KROM_PROJECT_ROOT`. If only the old name is set, copy it
+   over (transition alias, `message(DEPRECATION ...)`). All uses switch to the new name.
+2. CMake: one helper `krom_collect_projects(out_roots)` = glob under `projects/` plus `KROM_PROJECT_ROOT`,
+   deduplicated by canonical path (`file(REAL_PATH ...)`; the same project found twice is not an error).
+   `krom_add_project_runtimes_for_backend` and the script module loop both use it.
+3. Collision: two *different* roots that give the same sanitised target name -> `message(FATAL_ERROR ...)`
+   naming both paths and the `runtimeTarget` key to change. Replaces both silent skips. Compare the
+   sanitised name (Codex review 2026-11-05).
+4. Editor: `ResolveRuntimeBuildCommands` passes `-DKROM_PROJECT_ROOT=<project root>` for script builds,
+   Testbuild and Export, on first configure and on reconfigure, for in-tree projects too (otherwise a stale
+   external root in a shared `runtime-<config>` cache can collide with the project being built). To avoid a
+   CMake run on every build: read `KROM_PROJECT_ROOT:PATH=` from `CMakeCache.txt` and add the configure step
+   only when it differs (compare canonical paths). Remove the `projects/` parent check at ~551.
+5. Dialog: drop the `project.runtime_root` warning and its de/en keys; `projectsRootDirectory` stays as the
+   default folder (source-tree mode). `Dokumente\KromProjects` as default belongs to point 3 (SDK mode).
+6. Docs: switching between external projects triggers a reconfigure (seconds, no engine rebuild).
+7. Tests: if feasible a small CMake script test for collect/dedupe/collision (`cmake -P`), and a unit test for
+   the cache comparison helper in `krom_tests`.
+
+### Check after implementation
+
+- New project in a folder with an umlaut outside the source tree (e.g. `F:\Spiele\Prüfung\Test`): C++ script,
+  bindings, Play in the editor, Testbuild (Debug and Release profile), Export, exported game starts.
+- Switch back to DemoProject: Play/Testbuild/Export build DemoProject (no stale root, no collision error).
+- Second external project with runtimeTarget `DemoProject`: clear CMake error instead of the wrong exe.
+- Old build folders with `KROM_PROJECT_SCRIPT_ROOT` in their cache still configure.
+- OpenGL editor still builds and starts.
+
+### Please review before implementation
+
+- Whether the root should always be passed (also for in-tree projects) or cleared instead.
+- FATAL_ERROR vs. skipping only the colliding external project with a warning (a FATAL_ERROR in a shared
+  `runtime-<config>` folder blocks every build there until the project is renamed).
+- Anything in the editor that still assumes `<source>/projects` (asset browser, recent projects, export).
+
 ## Clear coat layer for pbr-lit materials (Claude, 2026-11-20)
 
 - Second item of the open shading list. Working tree on `feature/post-process-volumes`, not committed
@@ -1144,6 +1502,99 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
     the editor UI (no test covers the export path).
 
 ## Befunde (Codex)
+
+### Follow-up to Claude's external-project review (Codex, 2026-11-20)
+
+The source review and question are in `F:/working/krom codex/KOORDINATION.md`,
+under "Review of Codex's implementation". Follow-up changes remain in this Codex
+worktree; the main working tree's code has not been modified.
+
+1. Agree; handled in the worktree. A missing selected `krom-project.json` now warns
+   and clears both cache names before collecting projects. A renamed/deleted external
+   project no longer poisons IDE reconfiguration. Valid target-name collisions still
+   fail. CMake regressions cover automatic regeneration after rename, deletion, clearing
+   the legacy mirror, and not resurrecting it on a later configure.
+2. Agree on removing the active-project coupling. Ordinary wrapper examples now bind
+   no project scripts. The generic `editor_scene_runtime_*` sample explicitly binds
+   the shipped in-tree DemoProject to preserve its existing behavior. Own projects use
+   their explicit `krom_runtime_*` targets. Building examples with a deliberately broken
+   active external script passed. An ALL build can still fail on an explicitly generated
+   project's own runtime targets when its scripts are broken; those targets remain in ALL.
+3. Measured, no production change needed for this finding: DemoProject, MSVC Debug,
+   GTX 1660 machine, repeated warm runs. `FindStaleSharedHeaders` (parsing + canonicalization
+   + timestamps) median 25.87 ms, max 26.33 ms, n=25. Full `CheckSharedEngineHeaders`
+   including two Ninja processes median 596.76 ms, max 599.51 ms, n=5; a prior run was
+   577.15 ms median. Canonicalization is only done for the intersection of script/editor
+   dependencies (35 paths in this dump, out of 52 script dependencies), not every script
+   header. Keep the correct canonical-path handling; most time is outside that filter.
+   Probe sources/output: `out/header_benchmark.cpp`, `out/header-benchmark.log`.
+4. Agree; handled in the worktree. Initial legacy-name migration warns; a newly supplied
+   conflicting legacy value warns that the new name takes precedence. An internal record
+   of the last mirrored value suppresses misleading warnings on normal editor switches.
+   Alias precedence and clearing regressions passed.
+
+Validation: `tests/test_project_roots.py` passed; real MSVC/Ninja example builds passed
+with a broken active project; moving that project then building `krom_editor_dx11`
+automatically warned, cleared both cache names, and succeeded. `krom_tests` rebuilt.
+Details: `out/review-fixes-validation.log`. No SDK/PR/branch work done in this follow-up.
+
+### External project builds and script ownership (Codex, 2026-11-20)
+
+- Implemented directly by Codex on the user's explicit request. This supersedes the
+  source-only review previously recorded here. Scope: point 2 of the editor distribution
+  plan; a relocatable prebuilt editor SDK (point 3) is still separate work.
+- `cmake/KromProjects.cmake` collects all `projects/*` plus `KROM_PROJECT_ROOT` once,
+  deduplicates real paths, and rejects different roots with the same sanitized runtime
+  identifier (also case-insensitive output collisions on Windows). The error names both
+  roots and suggests changing `runtimeTarget`. Runtime backends and script DLLs share
+  the resulting list; both silent target skips were removed. Manifest edits trigger
+  automatic reconfiguration. `KROM_PROJECT_SCRIPT_ROOT` migrates to the new name, which
+  takes precedence even when explicitly empty; the legacy cache entry mirrors it.
+- Every editor build request carries the active absolute project root. Initial configure
+  includes it in the same invocation; subsequent builds explicitly configure only when
+  cache/last-generated selection differs. This includes in-tree projects, shared runtime
+  profiles, and recovery after a collision changed the cache but not generated targets.
+- Script DLLs export their originating project root. `ScriptModuleHost::Swap` checks file
+  identity before registering scripts or replacing the loaded module. Wrong-project and
+  legacy DLLs without ownership are rejected, including during project open, with de/en
+  diagnostics. Rebuilding scripts also handles a moved project directory. Engine ABI
+  checks remain in place. The shared-header check explicitly excludes the active project
+  root, including project directories elsewhere inside the source tree.
+- Removed the project-dialog location warning and both translations; retained the
+  `projects/` default and corrected its obsolete comment. Updated `doc/ScriptHotReload.md`
+  with external projects, cache switching, migration, collision recovery and current SDK
+  limitations. Reconfiguration preserves engine objects; a new profile needs its first build.
+- Added CMake discovery/migration/collision tests (`tests/test_project_roots.py`), cache
+  selection/failure recovery checks in `krom_build_tools_tests`, and real DLL ownership/
+  shared-header regressions in `krom_tests`. Optional editor modes:
+  `--external-script-reload <project.json>` and `--external-project-export <project.json>`;
+  both use a temporary external Unicode/space path and restore CMake selection before cleanup.
+- Real Unicode runtime testing exposed a further prerequisite: Ninja's UTF-8 link
+  response files have no BOM, so MSVC reads object paths using the system code page.
+  Reproduced the same response file failing without a BOM and linking with one.
+  `cmake/LinkUtf8.cmake` now marks Ninja/Makefiles response files for project DLL/runtime
+  targets before invoking the linker, retaining existing linker launchers. The existing
+  PRE_LINK PDB response generation is unchanged. Build failures now retain their final
+  context even after warnings, so multiline collision messages and linker details reach
+  the editor console.
+- Validation complete: CMake project tests (including automatic regeneration on manifest
+  edits), all `krom_build_tools_tests`, and all 476 regular `krom_tests` passed. Debug
+  DX11/Vulkan/OpenGL editors, DX11/OpenGL loading tests, and the OpenGL runtime built.
+  Physics/audio were disabled for this isolated Debug/Release validation build.
+- External Unicode/space-path checks passed: Script/Play with multiple reloads, compile
+  error and cancellation recovery, unchanged Play with no build, wrong same-target DLL
+  rejection on project open, and reopening the correct module (`out/project-external-script-play.log`).
+  Runtime-first testbuild, hidden game startup/rendering, full Release export with game
+  shader warmup, and return to DemoProject plus its script build passed
+  (`out/project-external-flow.log`). Original CMake selections were restored before cleanup.
+  Two links with old PDBs locked passed (`out/project-pdb-lock.log`).
+- OpenGL editor startup and scene switching passed (`out/project-opengl-start.log`).
+  Standalone OpenGL runtime warmup timed out here; the existing reference EXE in
+  `F:/working/krom codex/out/build/x64-Debug/bin` also timed out with the same minimal
+  project. No OpenGL-only change made and no standalone runtime startup success claimed.
+  DemoProject emits missing-texture diagnostics in this worktree (ignored local assets,
+  including `puresky.hdr` and `dx.bmp`); visual fidelity of the demo was not validated.
+  A complete relocatable SDK and clean-machine distribution test remain point 3.
 
 ### Korrektur: Hierarchie-Ordner, Elternzustand und Gizmo-Farben (2026-11-19)
 

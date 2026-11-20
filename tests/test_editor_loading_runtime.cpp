@@ -1,6 +1,10 @@
 // Optionaler GPU-Test: --headless automatisiert, ohne Argumente sichtbare
 // ImGui-Anzeige fuer 40 s. Kein plattformspezifischer UI-Code.
 #include "app/KromEditorApp.hpp"
+#include <map>
+#include <numeric>
+#include "app/editor/EnginePaths.hpp"
+#include "app/editor/BuildTools.hpp"
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/gtao/GtaoPass.hpp"
 #include "addons/editor/EditorAnimationWindow.hpp"
@@ -16,6 +20,7 @@
 #include "assets/KMeshSerializer.hpp"
 #include "addons/editor/EditorPreferences.hpp"
 #include "core/PathUtf8.hpp"
+#include "renderer/ShaderCompiler.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/particles/ParticleComponents.hpp"
@@ -39,6 +44,155 @@ using renderer::addons::editor::Translate;
 
 struct EditorLoadingSmokeTest final : IAppScene
 {
+    bool sdkFlow = false;
+    int sdkStep = 0;
+    int sdkPlayFrames = 0;
+    bool sdkBuildOk = false;
+    std::chrono::steady_clock::time_point sdkStarted;
+    std::filesystem::path sdkProject;
+
+    int TestSdkProjectFlow()
+    {
+        const auto& paths = GetEnginePaths();
+        if (!paths.sdk || !paths.BuildsAvailable()) { std::printf("SDK unavailable: %s\n", paths.error.c_str()); return 1; }
+        KromEditorAppConfig config;
+        config.backend = SelectAppBackend();
+        config.visible = false;
+        config.enableDebugLayer = false;
+        if (!app.Initialize(config)) return 1;
+        sdkFlow = true;
+        sdkStarted = std::chrono::steady_clock::now();
+        Check(app.CreateEditorProject("SDKProbe", PathToUtf8(paths.userDataDir.parent_path()), config.backend), "create project with installed SDK");
+        sdkProject = app.m_projectRoot;
+        std::filesystem::create_directories(sdkProject / "Assets/Scripts");
+        std::ofstream(sdkProject / "Assets/Scripts/SdkProbe.hpp") <<
+            "#pragma once\n#include \"krom.h\"\nclass SdkProbe final : public engine::script::ComponentScript {\n"
+            "public: void OnUpdate(engine::script::IScriptContext&) override; };\n// KROM_SCRIPT(SdkProbe)\n";
+        std::ofstream(sdkProject / "Assets/Scripts/SdkProbe.cpp") <<
+            "#include \"SdkProbe.hpp\"\nvoid SdkProbe::OnUpdate(engine::script::IScriptContext& ctx) { ctx.SetPosition({4.f, 0.f, 0.f}); }\n";
+        const auto entity = renderer::addons::editor::CreateEmptyEntity(*app.m_editorFrameCtx, "SDK Probe");
+        app.m_world->Add<script::ScriptList>(entity).AddNameOnly("SdkProbe");
+        app.m_projectSettings.testBuild = 1;
+        Check(!app.m_editorFrameCtx->playGame() && app.m_editorFrameCtx->lastFileMessage == Translate("build.sdk_release_only"), "SDK rejects Debug before testbuild preparation");
+        app.m_projectSettings.testBuild = 3;
+        app.m_projectSettings.exportBuild = 1;
+        Check(!app.ExportProjectBuild() && app.m_editorFrameCtx->lastFileMessage == Translate("build.sdk_release_only"), "SDK rejects RelWithDebInfo export");
+        app.m_projectSettings.exportBuild = 0;
+        if (failures == 0) Check(app.Run(*this) == 0, "installed SDK editor loop completed");
+        app.Shutdown();
+        return failures ? 1 : 0;
+    }
+
+    bool UpdateSdkFlow(AppSceneContext& context)
+    {
+        if (std::chrono::steady_clock::now() - sdkStarted > std::chrono::minutes(10)) Check(false, "SDK flow timeout");
+        if (failures) {
+            if (app.m_editorFrameCtx) {
+                std::printf("SDK status: %s\n", app.m_editorFrameCtx->lastFileMessage.c_str());
+                for (const auto& line : app.m_editorState.consoleLogs) std::printf("%s\n", line.message.c_str());
+            }
+            context.renderLoop.GetWindow()->RequestClose(); return true;
+        }
+        if (app.m_runtimeBuildJob) return true;
+        if (sdkStep == 0) {
+            sdkStep = 1;
+            Check(app.StartEditorPlay(), "SDK starts project-local script build");
+        } else if (sdkStep == 1) {
+            Check(app.m_playActive && app.m_scriptModule.IsLoaded(), "SDK script DLL loads and Play starts");
+            if (++sdkPlayFrames < 5) return true;
+            const auto probe = FindPlayUiEntity("SDK Probe");
+            Check(probe.IsValid() && app.m_world->Get<TransformComponent>(probe)->localPosition.x == 4.f, "SDK script executes through editor ABI");
+            app.StopEditorPlay();
+            Check(!app.m_lastRuntimeBuildDir.empty() && app.m_lastRuntimeBuildDir.lexically_relative(sdkProject).begin()->string() == ".krom", "SDK build remains inside project/.krom");
+            sdkStep = 2;
+            Check(app.BuildAllScenes(), "SDK builds project scenes");
+            Check(app.StartRuntimeBuild({}, [this](bool ok) { sdkBuildOk = ok; }), "SDK starts runtime testbuild");
+        } else if (sdkStep == 2) {
+            Check(sdkBuildOk, "SDK runtime links imported Release libraries");
+            if (failures) return true;
+            sdkStep = 3; sdkBuildOk = false;
+            const auto exe = build::TargetPath(app.m_lastRuntimeBuildDir, "krom_runtime_" + app.m_projectRuntimeTarget + "_" +
+                (app.m_projectBackend == renderer::DeviceFactory::BackendType::DirectX11 ? "dx11" : "vulkan"));
+            Check(!exe.empty() && app.StartBuildJob("SDK runtime smoke", {{exe, {PathToUtf8(sdkProject / "krom-project.json"), "--warmup-shaders"}, sdkProject}},
+                [this](bool ok) { sdkBuildOk = ok; }, "SDK runtime smoke"), "SDK testbuild starts and renders project");
+        } else if (sdkStep == 3) {
+            Check(sdkBuildOk, "SDK testbuild completed");
+            sdkStep = 4;
+            Check(app.ExportProjectBuild(), "SDK starts Release export");
+        } else {
+            Check(app.m_editorFrameCtx->lastFileMessage.starts_with(Translate("export.success")), "SDK exported game starts and completes shader warmup");
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        return true;
+    }
+
+    // Run a copy of this executable beside a test manifest. No GPU, compiler
+    // discovery or real project is needed: the guards must run before all of it.
+    int TestSdkBuildGuards()
+    {
+        const auto& paths = GetEnginePaths();
+        if (!paths.sdk || !paths.error.empty()) return 1;
+        int failed = 0;
+        auto check = [&](bool ok, const char* message) {
+            std::printf("%s: %s\n", ok ? "PASS" : "FAIL", message);
+            if (!ok) ++failed;
+        };
+        app.m_world = std::make_unique<ecs::World>(app.m_componentRegistry);
+        app.m_editorFrameCtx = std::make_unique<renderer::addons::editor::EditorFrameContext>(
+            *app.m_world, app.m_materialSystem, app.m_assetRegistry, app.m_editorState);
+        const auto expected = std::string(Translate("build.sdk_unavailable"));
+        check(!app.StartEditorPlay() && app.m_editorFrameCtx->lastFileMessage == expected,
+              "SDK Play fails clearly before project or script preparation");
+        check(!app.ExportProjectBuild() && app.m_editorFrameCtx->lastFileMessage == expected,
+              "SDK export fails clearly before scene saves or staging");
+        bool callback = false;
+        check(!app.StartRuntimeBuild({}, [&](bool) { callback = true; }) && !app.m_runtimeBuildJob && !callback,
+              "SDK test build starts no worker or compiler discovery");
+        check(!app.StartRuntimeBuild({}, {}, "krom_scripts_test") && !app.m_runtimeBuildJob,
+              "SDK script build starts no worker");
+        std::string error;
+        check(!app.CheckScriptEngineLibraries(error) && error == expected && !app.ReloadProjectScriptModule(true),
+              "SDK script reload never inspects development libraries or headers");
+        check(app.GetCurrentAssetRoot() == paths.assetsDir && app.GetCurrentShaderCacheDir() == paths.shaderCacheDir &&
+              app.GetCurrentEditorScenePath() == paths.standaloneScenesDir / "editor_scene.json",
+              "editor uses SDK resources and separate writable scene/cache locations");
+        check(!std::filesystem::exists(paths.userDataDir / "scenes") && !std::filesystem::exists(paths.userDataDir / "cache"),
+              "rejected builds create no scene or cache directories");
+        app.m_editorFrameCtx.reset();
+        app.m_world.reset();
+        return failed ? 1 : 0;
+    }
+
+    int TestInvalidSdkManifest()
+    {
+        const auto& paths = GetEnginePaths();
+        return paths.sdk && !paths.error.empty() && !app.Initialize({}) && !app.m_initialized &&
+            !app.m_renderFeaturesRegistered ? 0 : 1;
+    }
+
+    int TestIniPath()
+    {
+        KromEditorAppConfig config;
+        config.backend = SelectAppBackend();
+        config.visible = false;
+        config.enableDebugLayer = false;
+        if (!app.Initialize(config)) return 1;
+        const auto expected = GetEnginePaths().userDataDir / "imgui.ini";
+        const auto* filename = ImGui::GetIO().IniFilename;
+        const bool configured = filename && PathFromUtf8(filename) == expected;
+        const bool cacheConfigured = !GetEnginePaths().sdk ||
+            renderer::ShaderCompiler::GetCacheDirectory() == GetEnginePaths().shaderCacheDir;
+        ImGui::LoadIniSettingsFromMemory("[Window][EnginePathsProbe]\nPos=17,29\nSize=300,200\nCollapsed=0\n");
+        if (configured) ImGui::SaveIniSettingsToDisk(filename);
+        std::ifstream in(expected, std::ios::binary);
+        const std::string saved((std::istreambuf_iterator<char>(in)), {});
+        const bool persisted = saved.find("EnginePathsProbe") != std::string::npos;
+        std::printf("%s: editor ImGui settings use user directory and save Unicode path\n",
+                    configured && persisted ? "PASS" : "FAIL");
+        app.Shutdown();
+        return configured && persisted && cacheConfigured ? 0 : 1;
+    }
+
     KromEditorApp app;
     int frames = 0;
     int failures = 0;
@@ -294,13 +448,17 @@ struct EditorLoadingSmokeTest final : IAppScene
     {
         uint32_t flags = 0u;
         bool disableProbes = false;
+        uint32_t probeDebug = 0u;
         std::string_view GetName() const noexcept override { return "test.material_ibl"; }
         void Contribute(const renderer::FrameConstantsContributionContext& context,
                         renderer::FrameConstants& constants) const override
         {
-            if (context.view.visibilityLayerMask != renderer::LAYER_EDITOR_MATERIAL_PREVIEW)
-                return;
             constants.debugFlags = flags;
+            auto& probeSlot = constants.featureParams[engine::addons::probes::kProbeFrameParameterBlock.firstSlot];
+            uint32_t probeFlags = 0u;
+            std::memcpy(&probeFlags, &probeSlot[1], sizeof(probeFlags));
+            probeFlags = (probeFlags & 0xFFu) | (probeDebug << engine::addons::probes::kProbeFlagDebugShift);
+            std::memcpy(&probeSlot[1], &probeFlags, sizeof(probeFlags));
             if (disableProbes)
                 constants.featureParams[engine::addons::probes::kProbeFrameParameterBlock.firstSlot][0] = 0.f;
         }
@@ -309,10 +467,157 @@ struct EditorLoadingSmokeTest final : IAppScene
     std::shared_ptr<MaterialIblConstants> materialIblConstants;
     int materialIblReadyFrames = 0;
     size_t materialIblStage = 0u;
+    bool environmentSunChecked = false;
+    float materialIblSunYaw = 0.f;
+    float materialIblSunPitch = 0.f;
     std::chrono::steady_clock::time_point materialIblStart{};
+
+    bool materialSpecularProbe = false;
+    bool materialSpecularReady = false;
+    assets::MaterialAsset materialSpecularOriginal;
+    std::map<std::string, std::vector<uint8_t>> materialSpecularPixels;
+
+    bool UpdateMaterialSpecular(AppSceneContext& context)
+    {
+        struct Stage { const char* name; uint32_t flags; float specular; float metallic = 0.f;
+                       float roughness = .5f; bool graph = false; };
+        static constexpr Stage stages[] = {
+            {"default-full", 0u, -1.f}, {"half-full", 0u, .5f},
+            {"half-ibl", renderer::DBG_VIEW_IBL_SPEC, .5f},
+            {"zero-ibl", renderer::DBG_VIEW_IBL_SPEC, 0.f},
+            {"one-ibl", renderer::DBG_VIEW_IBL_SPEC, 1.f},
+            {"graph-zero-ibl", renderer::DBG_VIEW_IBL_SPEC, 1.f, 0.f, .5f, true},
+            {"half-direct", renderer::DBG_VIEW_DIRECT_SPEC, .5f},
+            {"zero-direct", renderer::DBG_VIEW_DIRECT_SPEC, 0.f},
+            {"zero-diffuse", renderer::DBG_VIEW_IBL_DIFF, 0.f},
+            {"metal-zero", renderer::DBG_VIEW_IBL_SPEC, 0.f, 1.f},
+            {"metal-one", renderer::DBG_VIEW_IBL_SPEC, 1.f, 1.f},
+            {"rough-low", renderer::DBG_VIEW_IBL_SPEC, .5f, 0.f, .05f},
+            {"rough-high", renderer::DBG_VIEW_IBL_SPEC, .5f, 0.f, 1.f},
+            {"zero-full", 0u, 0.f}, {"one-full", 0u, 1.f},
+            {"graph-zero-full", 0u, 1.f, 0.f, .5f, true},
+            {"f0-zero", renderer::DBG_VIEW_FRESNEL_F0, 0.f},
+            {"f0-half", renderer::DBG_VIEW_FRESNEL_F0, .5f},
+            {"f0-one", renderer::DBG_VIEW_FRESNEL_F0, 1.f},
+        };
+        auto& runtime = context.renderLoop.GetRenderSystem().GetShaderRuntime();
+        if (!materialIblConstants)
+        {
+            materialIblStart = std::chrono::steady_clock::now();
+            auto& registry = context.renderLoop.GetRenderSystem().GetFeatureRegistry();
+            materialIblConstants = std::make_shared<MaterialIblConstants>();
+            Check(registry.RegisterFrameConstantsContributor(*registry.GetFeatures().front(), materialIblConstants),
+                  "register specular material diagnostic");
+            renderer::addons::editor::OpenMaterialAsset(*app.m_editorFrameCtx,
+                app.GetCurrentAssetRoot() / "Materials/Weiss.mat");
+        }
+        if (std::chrono::steady_clock::now() - materialIblStart > std::chrono::minutes(5))
+        {
+            Check(false, "specular diagnostic completed within five minutes");
+            app.m_editorFrameCtx->state.selectedMaterialAssetDirty = false;
+            context.renderLoop.GetWindow()->RequestClose();
+            return true;
+        }
+        if (frames < 20 || !app.m_editorFrameCtx->state.selectedMaterialAssetLoaded || runtime.HasPendingShaderCompiles())
+        {
+            materialIblReadyFrames = 0;
+            return true;
+        }
+        auto applyStage = [&]() {
+            const auto& stage = stages[materialIblStage];
+            auto& state = app.m_editorFrameCtx->state;
+            auto& asset = state.selectedMaterialAssetData;
+            asset = materialSpecularOriginal;
+            asset.metallicFactor = stage.metallic;
+            asset.roughnessFactor = stage.roughness;
+            if (stage.specular >= 0.f) asset.specularFactor = stage.specular;
+            asset.clearcoatFactor = 0.f;
+            asset.graph.metallic = asset.graph.roughness = asset.graph.specular = 0u;
+            if (stage.graph)
+            {
+                using Node = assets::MaterialNodeType;
+                asset.graph.nodes.push_back({100, Node::Value, 0, 0, {0.f, 0.f, 0.f}});
+                asset.graph.nodes.push_back({101, Node::Value, 0, 0, {1.f, 1.f, 1.f}});
+                asset.graph.nodes.push_back({102, Node::Multiply, 100, 101});
+                asset.graph.specular = 102;
+            }
+            state.selectedMaterialAssetDirty = true;
+            state.tonemap.exposureMode = renderer::addons::forward::ExposureMode::Fixed;
+            state.tonemap.exposureEv = 0.f;
+            materialIblConstants->flags = stage.flags;
+            materialIblReadyFrames = 0;
+        };
+        if (!materialSpecularReady)
+        {
+            materialSpecularReady = true;
+            materialSpecularOriginal = app.m_editorFrameCtx->state.selectedMaterialAssetData;
+            Check(materialSpecularOriginal.PbrSpecular() == .5f, "old material defaults to Specular 0.5");
+            applyStage();
+            return true;
+        }
+        if (++materialIblReadyFrames < 8) return true;
+        auto* device = context.renderLoop.GetRenderSystem().GetDevice();
+        uint32_t width = 0u, height = 0u;
+        std::vector<uint8_t> pixels;
+        const auto texture = device->GetRenderTargetColorTexture(app.m_materialPreviewRT);
+        const bool read = device->ReadTexturePixels(texture, pixels, width, height)
+            && width > 0u && height > 0u && pixels.size() == static_cast<size_t>(width) * height * 4u;
+        Check(read, "specular GPU readback");
+        if (read)
+        {
+            std::ofstream output(materialIblCaptures / (std::string(stages[materialIblStage].name) + ".ppm"), std::ios::binary);
+            output << "P6\n" << width << ' ' << height << "\n255\n";
+            auto& sphere = materialSpecularPixels[stages[materialIblStage].name];
+            const float radius = width * .34f;
+            for (uint32_t y = 0u; y < height; ++y)
+                for (uint32_t x = 0u; x < width; ++x)
+                {
+                    const size_t index = (static_cast<size_t>(y) * width + x) * 4u;
+                    output.write(reinterpret_cast<const char*>(pixels.data() + index), 3);
+                    const float dx = static_cast<float>(x) - width * .5f;
+                    const float dy = static_cast<float>(y) - height * .5f;
+                    if (dx * dx + dy * dy < radius * radius)
+                        sphere.insert(sphere.end(), pixels.begin() + index, pixels.begin() + index + 3u);
+                }
+            Check(static_cast<bool>(output), stages[materialIblStage].name);
+        }
+        if (++materialIblStage == std::size(stages))
+        {
+            const auto energy = [&](const char* name) {
+                const auto& pixels = materialSpecularPixels.at(name);
+                return std::accumulate(pixels.begin(), pixels.end(), uint64_t{0});
+            };
+            const bool complete = materialSpecularPixels.size() == std::size(stages);
+            Check(complete, "all specular diagnostic images captured");
+            if (complete)
+            {
+                Check(energy("half-ibl") > 0u, "Specular 0.5 has environment reflection");
+                Check(energy("zero-ibl") == 0u, "Specular zero removes the complete environment lobe");
+                Check(energy("graph-zero-ibl") == 0u, "per-pixel graph zero removes environment reflection");
+                Check(energy("half-direct") > 0u, "direct-light specular reference is lit");
+                Check(energy("zero-direct") == 0u, "Specular zero removes direct specular");
+                Check(energy("zero-diffuse") > 0u, "diffuse HDR lighting remains enabled at Specular zero");
+                Check(energy("one-ibl") > energy("half-ibl"), "Specular one increases dielectric reflection");
+                Check(energy("f0-zero") == 0u && energy("f0-one") > energy("f0-half"), "dielectric F0 responds to Specular");
+                Check(materialSpecularPixels.at("default-full") == materialSpecularPixels.at("half-full"),
+                      "old material and explicit Specular 0.5 render identically");
+                Check(materialSpecularPixels.at("zero-full") == materialSpecularPixels.at("graph-zero-full"),
+                      "constant and per-pixel zero render identically");
+                Check(materialSpecularPixels.at("metal-zero") == materialSpecularPixels.at("metal-one"),
+                      "Specular does not change metal reflectance");
+                Check(materialSpecularPixels.at("rough-low") != materialSpecularPixels.at("rough-high"),
+                      "Roughness still changes reflection blur");
+            }
+            app.m_editorFrameCtx->state.selectedMaterialAssetDirty = false;
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        else applyStage();
+        return true;
+    }
 
     bool UpdateMaterialIbl(AppSceneContext& context)
     {
+        if (materialSpecularProbe) return UpdateMaterialSpecular(context);
         auto& runtime = context.renderLoop.GetRenderSystem().GetShaderRuntime();
         if (!materialIblConstants)
         {
@@ -336,16 +641,81 @@ struct EditorLoadingSmokeTest final : IAppScene
             materialIblReadyFrames = 0;
             return true;
         }
+        if (materialIblStage == 0u && materialIblReadyFrames == 0)
+        {
+            // Only opt in on a disposable project: this checks the real scene writer,
+            // editor reader, runtime export and old-scene default without changing fixtures.
+            if (!environmentSunChecked && std::getenv("KROM_IBL_CHECK_SCENE_ROUNDTRIP"))
+            {
+                environmentSunChecked = true;
+                auto& state = app.m_editorFrameCtx->state;
+                state.environmentRemoveSunFromLighting = false;
+                Check(app.SaveEditorScene(), "save scene with sun removal disabled");
+                std::ifstream file(app.GetCurrentEditorScenePath(), std::ios::binary);
+                const std::string text((std::istreambuf_iterator<char>(file)), {});
+                file.close();
+                std::string error;
+                auto root = serialization::JsonParser::Parse(text, error);
+                const auto* environment = root.Get("environment");
+                Check(error.empty() && environment && environment->Get("removeSunFromLighting")
+                      && !environment->Get("removeSunFromLighting")->AsBool(), "scene stores sun-removal switch");
+                const auto exported = app.MakeKsceneJson(text, app.m_currentSceneName);
+                Check(exported.has_value(), "export scene with sun-removal switch");
+                if (exported)
+                {
+                    const auto runtimeScene = serialization::JsonParser::Parse(*exported, error);
+                    const auto* env = runtimeScene.Get("environment");
+                    Check(env && env->Get("removeSunFromLighting") && !env->Get("removeSunFromLighting")->AsBool(),
+                          "runtime export preserves disabled sun removal");
+                }
+                Check(app.LoadEditorScene(true, "", &root), "reload scene with sun-removal switch");
+                Check(!state.environmentRemoveSunFromLighting, "editor restores disabled sun removal");
+                for (auto& [key, value] : root.objectVal)
+                    if (key == "environment")
+                        std::erase_if(value.objectVal, [](const auto& field) { return field.first == "removeSunFromLighting"; });
+                Check(app.LoadEditorScene(true, "", &root), "load old scene without sun-removal switch");
+                Check(state.environmentRemoveSunFromLighting, "old scenes default to sun removal enabled");
+                Check(app.SaveEditorScene(), "restore disposable scene to sun removal enabled");
+                materialIblReadyFrames = 0;
+                return true;
+            }
+            auto& asset = app.m_editorFrameCtx->state.selectedMaterialAssetData;
+            asset.metallicFactor = 0.f;
+            asset.roughnessFactor = std::getenv("KROM_IBL_ROUGHNESS_HALF") ? .5f : 1.f;
+            asset.graph.metallic = asset.graph.roughness = 0u;
+            app.m_editorFrameCtx->state.selectedMaterialAssetDirty = true;
+            app.m_editorFrameCtx->state.tonemap.exposureMode = renderer::addons::forward::ExposureMode::Fixed;
+            app.m_editorFrameCtx->state.tonemap.exposureEv = 0.f;
+            Check(app.m_editorFrameCtx->state.environmentRemoveSunFromLighting,
+                  "capture uses sun removal enabled");
+            const auto texture = context.assetPipeline.LoadTexture(app.m_editorFrameCtx->state.environmentTexturePath);
+            const auto* sky = app.m_assetRegistry.textures.Get(texture);
+            if (sky && sky->format == assets::TextureFormat::RGBA16F && !sky->pixelData.empty())
+            {
+                const auto half = [](uint16_t h) {
+                    const uint32_t exponent = (h >> 10u) & 31u, mantissa = h & 1023u;
+                    const float value = exponent == 0u ? std::ldexp(static_cast<float>(mantissa), -24)
+                        : std::ldexp(static_cast<float>(mantissa + 1024u), static_cast<int>(exponent) - 25);
+                    return (h & 0x8000u) ? -value : value;
+                };
+                size_t brightest = 0u;
+                float maximum = 0.f;
+                for (size_t i = 0u; i < static_cast<size_t>(sky->width) * sky->height; ++i)
+                {
+                    uint16_t rgba[4];
+                    std::memcpy(rgba, sky->pixelData.data() + i * 8u, 8u);
+                    const float luminance = half(rgba[0]) * .2126f + half(rgba[1]) * .7152f + half(rgba[2]) * .0722f;
+                    if (luminance > maximum) { maximum = luminance; brightest = i; }
+                }
+                const float phi = ((static_cast<float>(brightest % sky->width) + .5f) / sky->width - .5f) * math::PI * 2.f;
+                materialIblSunYaw = std::atan2(-std::cos(phi), -std::sin(phi)) * math::RAD_TO_DEG;
+                materialIblSunPitch = 90.f - (static_cast<float>(brightest / sky->width) + .5f) / sky->height * 180.f;
+            }
+        }
         if (++materialIblReadyFrames < 8)
             return true;
-        if (materialIblStage == 0u)
-        {
-            const auto& asset = app.m_editorFrameCtx->state.selectedMaterialAssetData;
-            Check(asset.PbrMetallic() == 0.f && asset.PbrRoughness() == 1.f,
-                  "Weiss preview uses metallic zero and roughness one");
-        }
 
-        struct Stage { const char* name; uint32_t flags; bool disableProbes; };
+        struct Stage { const char* name; uint32_t flags; bool disableProbes; uint32_t probeDebug = 0u; };
         const Stage stages[] = {
             {"full", 0u, false},
             {"without-specular", renderer::DBG_DISABLE_IBL_SPEC, false},
@@ -355,6 +725,10 @@ struct EditorLoadingSmokeTest final : IAppScene
             {"normals", renderer::DBG_VIEW_NORMALS, false},
             {"roughness", renderer::DBG_VIEW_ROUGHNESS, false},
             {"without-probes", 0u, true},
+            {"global-specular", renderer::DBG_VIEW_IBL_SPEC, true},
+            {"probe-index", 0u, false, 1u},
+            {"probe-weight", 0u, false, 2u},
+            {"sky-sun", 0u, false},
         };
         auto* device = context.renderLoop.GetRenderSystem().GetDevice();
         const auto texture = device->GetRenderTargetColorTexture(app.m_materialPreviewRT);
@@ -374,12 +748,34 @@ struct EditorLoadingSmokeTest final : IAppScene
                 output.write(reinterpret_cast<const char*>(pixels.data() + i), 3);
             Check(static_cast<bool>(output), stages[materialIblStage].name);
         }
+        if (device->ReadTexturePixels(device->GetRenderTargetColorTexture(app.m_sceneView.rt), pixels, width, height))
+        {
+            std::ofstream output(materialIblCaptures / (std::string("scene-") + stages[materialIblStage].name + ".ppm"),
+                                 std::ios::binary);
+            output << "P6\n" << width << ' ' << height << "\n255\n";
+            for (size_t i = 0u; i < pixels.size(); i += 4u)
+                output.write(reinterpret_cast<const char*>(pixels.data() + i), 3);
+            Check(static_cast<bool>(output), "scene lighting diagnostic capture");
+        }
         if (++materialIblStage == std::size(stages))
+        {
+            app.m_editorFrameCtx->state.selectedMaterialAssetDirty = false;
             context.renderLoop.GetWindow()->RequestClose();
+        }
         else
         {
             materialIblConstants->flags = stages[materialIblStage].flags;
             materialIblConstants->disableProbes = stages[materialIblStage].disableProbes;
+            materialIblConstants->probeDebug = stages[materialIblStage].probeDebug;
+            if (std::string_view(stages[materialIblStage].name) == "sky-sun")
+            {
+                auto& state = app.m_editorFrameCtx->state;
+                state.editorCamera.position = {0.f, 100.f, 0.f};
+                state.editorCamera.yawDeg = materialIblSunYaw;
+                state.editorCamera.pitchDeg = materialIblSunPitch;
+                state.showSkyboxBackground = true;
+                state.showEditorIcons = false;
+            }
             materialIblReadyFrames = 0;
         }
         return true;
@@ -1296,6 +1692,10 @@ struct EditorLoadingSmokeTest final : IAppScene
         ImGui::LoadIniSettingsFromMemory(ini);
     }
     std::string reloadProject;
+    bool externalScriptProject = false;
+    bool externalProjectExport = false;
+    bool externalExportOnly = false;
+    bool externalStepOk = false;
     std::filesystem::path reloadRoot;
     int reloadStage = 0;
     int reloadPlayFrames = 0;
@@ -1334,10 +1734,54 @@ struct EditorLoadingSmokeTest final : IAppScene
     bool UpdateScriptReload(AppSceneContext& context)
     {
         if (failures) { context.renderLoop.GetWindow()->RequestClose(); return true; }
-        if (std::chrono::steady_clock::now() - reloadStarted > std::chrono::minutes(4))
+        if (std::chrono::steady_clock::now() - reloadStarted > std::chrono::minutes(externalProjectExport ? 15 : 4))
         {
             Check(false, "script reload timed out");
             context.renderLoop.GetWindow()->RequestClose();
+            return true;
+        }
+        if (reloadStage >= 7)
+        {
+            if (app.m_runtimeBuildJob) return true;
+            const std::string backend = app.m_projectBackend == renderer::DeviceFactory::BackendType::DirectX11
+                ? "dx11" : app.m_projectBackend == renderer::DeviceFactory::BackendType::OpenGL ? "opengl" : "vulkan";
+            if (reloadStage == 7)
+            {
+                Check(externalStepOk, "testbuild of external project succeeds");
+                if (failures) return true;
+                const auto exe = PathFromUtf8(KROM_BUILD_DIR) / "bin" /
+                    PathFromUtf8(app.m_projectRuntimeTarget + "_" + backend + ".exe");
+                reloadStage = 8;
+                externalStepOk = false;
+                Check(app.StartBuildJob("External runtime smoke", {{exe,
+                    {PathToUtf8(reloadRoot / "krom-project.json"), "--warmup-shaders"}, reloadRoot, {}}},
+                    [this](bool ok) { externalStepOk = ok; }, "External runtime smoke"), "start external testbuild game");
+            }
+            else if (reloadStage == 8)
+            {
+                Check(externalStepOk, "external testbuild game starts and renders all scenes");
+                reloadStage = 9;
+                Check(app.ExportProjectBuild(), "start full external project export");
+            }
+            else if (reloadStage == 9)
+            {
+                const auto exported = reloadRoot / "Build" / ("runtime-Release-" + backend);
+                Check(std::filesystem::exists(exported / "krom-project.json") &&
+                    std::filesystem::exists(exported / "licenses/KROM-LICENSE.txt"), "external export contains project and licenses");
+                Check(app.m_editorFrameCtx->lastFileMessage.starts_with(Translate("export.success")),
+                    "exported game starts and completes shader warmup");
+                Check(app.LoadProjectFile(PathToUtf8(PathFromUtf8(KROM_SOURCE_DIR) / "projects/DemoProject/krom-project.json")),
+                    "return to DemoProject after external export");
+                reloadStage = 10;
+                externalStepOk = false;
+                Check(app.StartRuntimeBuild(PathFromUtf8(KROM_BUILD_DIR),
+                    [this](bool ok) { externalStepOk = ok; }, "krom_scripts_DemoProject"), "build DemoProject after external selection");
+            }
+            else
+            {
+                Check(externalStepOk, "DemoProject script build succeeds after external export");
+                context.renderLoop.GetWindow()->RequestClose();
+            }
             return true;
         }
         if (reloadStage == 0)
@@ -1357,6 +1801,18 @@ struct EditorLoadingSmokeTest final : IAppScene
             reloadUndoLabel = renderer::addons::editor::GetUndoEditorHistoryLabel(app.m_editorFrameCtx->state);
             Check(!reloadUndoLabel.empty(), "edit history exists before module swap");
             Check(!app.m_scriptModule.IsLoaded() && !app.m_runtimeBuildJob, "missing DLL stays a placeholder on project open");
+            if (externalExportOnly)
+            {
+                Check(renderer::addons::editor::RefreshCppScriptProject(*app.m_editorFrameCtx).ok,
+                    "generate external script bindings before the first runtime build");
+                app.m_buildExcludedScenes.insert("Broken");
+                Check(app.BuildAllScenes(), "build external project scenes");
+                reloadStage = 7;
+                externalStepOk = false;
+                Check(app.StartRuntimeBuild(PathFromUtf8(KROM_BUILD_DIR),
+                    [this](bool ok) { externalStepOk = ok; }), "start external runtime testbuild without a prior script build");
+                return true;
+            }
             RequestReloadBuild(1);
             return true;
         }
@@ -1418,15 +1874,30 @@ struct EditorLoadingSmokeTest final : IAppScene
             Check(app.SaveEditorScene(), "save edit scene with reloaded scripts");
             const auto other = reloadRoot / "Other";
             std::filesystem::create_directories(other / "Assets/Scenes");
-            std::ofstream(other / "krom-project.json") << R"({"name":"Other","runtimeTarget":"Other","sceneOrder":["One"]})";
+            std::ofstream(other / "krom-project.json") << "{\"name\":\"Other\",\"runtimeTarget\":\"" <<
+                (externalScriptProject ? app.m_projectRuntimeTarget : "Other") << "\",\"sceneOrder\":[\"One\"]}";
             std::ofstream(other / "Assets/Scenes/One.json") << R"({"scene":"One","entities":[]})";
-            Check(app.LoadProjectFile(PathToUtf8(other / "krom-project.json")), "switch to project without DLL");
+            Check(app.LoadProjectFile(PathToUtf8(other / "krom-project.json")), "switch to another project");
             Check(!app.m_scriptModule.IsLoaded() && app.m_scriptRegistry.GetFactoryCount() == 0, "project switch unloads previous module");
+            if (externalScriptProject)
+                Check(std::any_of(app.m_editorFrameCtx->state.consoleLogs.begin(), app.m_editorFrameCtx->state.consoleLogs.end(),
+                    [](const auto& log) { return log.message.find(Translate("script.dll_wrong_project")) != std::string::npos; }),
+                    "project open rejects existing same-target DLL owned by the other project");
             Check(app.LoadProjectFile(PathToUtf8(reloadRoot / "krom-project.json")), "reopen script project");
             Check(app.m_scriptModule.IsLoaded() && !app.m_runtimeBuildJob, "project open loads existing DLL without building");
             Check(ReloadProbe().IsValid() && app.m_world->Get<script::ScriptList>(ReloadProbe())->Instances()[0].script != nullptr,
                 "project open restores live script objects");
-            context.renderLoop.GetWindow()->RequestClose();
+            if (externalProjectExport)
+            {
+                // Broken.json is the loading-error fixture used by the base test.
+                app.m_buildExcludedScenes.insert("Broken");
+                Check(app.BuildAllScenes(), "build external project scenes");
+                reloadStage = 7;
+                externalStepOk = false;
+                Check(app.StartRuntimeBuild(PathFromUtf8(KROM_BUILD_DIR),
+                    [this](bool ok) { externalStepOk = ok; }), "start external runtime testbuild");
+            }
+            else context.renderLoop.GetWindow()->RequestClose();
         }
         return true;
     }
@@ -1435,7 +1906,15 @@ struct EditorLoadingSmokeTest final : IAppScene
     {
         std::printf("%s: %s\n", success ? "PASS" : "FAIL", message);
         std::fflush(stdout);
-        if (!success) ++failures;
+        if (!success)
+        {
+            ++failures;
+            if (app.m_editorFrameCtx)
+                for (const auto& log : app.m_editorFrameCtx->state.consoleLogs)
+                    if (log.level >= LogLevel::Error)
+                        std::printf("DIAGNOSTIC: %s\n", log.message.c_str());
+            std::fflush(stdout);
+        }
     }
     bool Switch(const char* name)
     {
@@ -2011,6 +2490,7 @@ struct EditorLoadingSmokeTest final : IAppScene
 
     bool Update(AppSceneContext& context, float) override
     {
+        if (sdkFlow) return UpdateSdkFlow(context);
         ++frames; // AppScene-Update ruht waehrend des Lade-Jobs.
         if (!autoExposureCaptures.empty())
             return UpdateAutoExposure(context);
@@ -2245,10 +2725,19 @@ struct EditorLoadingSmokeTest final : IAppScene
     }
     int Run()
     {
+        std::vector<std::pair<std::filesystem::path, std::string>> previousSelections;
+        std::vector<std::filesystem::path> buildDirs = {PathFromUtf8(KROM_BUILD_DIR)};
+        if (externalProjectExport) buildDirs.push_back(PathFromUtf8(KROM_BUILD_DIR).parent_path() / "runtime-Release");
+        for (const auto& directory : buildDirs)
+        {
+            std::ifstream previousSelection(directory / "krom-project-root.txt", std::ios::binary);
+            previousSelections.emplace_back(directory, std::string((std::istreambuf_iterator<char>(previousSelection)), {}));
+        }
         const auto id = std::to_string(std::chrono::steady_clock::now().time_since_epoch().count());
-        // Temporaere Projektkopie im projects-Glob: testet auch Ninjas automatische
-        // Aufnahme neuer Projekte, ohne die externe Projektoption zu aendern.
-        const auto root = reloadProject.empty() ? std::filesystem::temp_directory_path() / ("krom-editor-loading-" + id)
+        // Test either automatic in-tree discovery or an external Unicode/space path.
+        const auto root = externalScriptProject
+            ? std::filesystem::temp_directory_path() / PathFromUtf8("krom-editor-Größe " + id)
+            : reloadProject.empty() ? std::filesystem::temp_directory_path() / ("krom-editor-loading-" + id)
             : PathFromUtf8(KROM_SOURCE_DIR) / "projects" / ("_reload_" + id);
         std::filesystem::create_directories(root / "Assets/Scenes");
         if (playUi)
@@ -2362,11 +2851,35 @@ struct EditorLoadingSmokeTest final : IAppScene
                 startupProjectFile = projectFile;
             else
                 Check(app.LoadProjectFile(projectFile), "project loaded");
+            if (externalProjectExport)
+            {
+                app.m_projectBackend = SelectAppBackend();
+                Check(app.SaveProjectFile(false), "save external project with test renderer");
+            }
             if (failures == 0) Check(app.Run(*this) == 0, "editor loop completed without crash");
         }
         app.Shutdown();
+        bool selectionRestored = true;
+#ifdef _WIN32
+        if (!reloadProject.empty())
+        {
+            const auto tools = build::GetBuildTools();
+            std::string output;
+            for (const auto& [directory, previousRoot] : previousSelections)
+            {
+                if (!std::filesystem::exists(directory / "CMakeCache.txt")) continue;
+                const bool restored = tools.Succeeded() && build::CaptureProcessOutput(
+                    {tools.tools.cmake, {"-S", KROM_SOURCE_DIR, "-B", PathToUtf8(directory),
+                        "-DKROM_PROJECT_ROOT=" + previousRoot}, PathFromUtf8(KROM_SOURCE_DIR), tools.tools.environment}, output).Succeeded();
+                selectionRestored = selectionRestored && restored;
+                if (!restored) std::printf("%s\n", output.c_str());
+            }
+            Check(selectionRestored, "restore original CMake project selection before removing test project");
+        }
+#endif
         std::error_code ec;
-        std::filesystem::remove_all(root, ec); // nur eigenes, eindeutig benanntes Testprojekt
+        if (selectionRestored)
+            std::filesystem::remove_all(root, ec); // nur eigenes, eindeutig benanntes Testprojekt
         return failures == 0 ? 0 : 1;
     }
 
@@ -2489,6 +3002,14 @@ struct EditorLoadingSmokeTest final : IAppScene
 int main(int argc, char** argv)
 {
     engine::app::EditorLoadingSmokeTest test;
+    if (argc > 1 && std::string_view(argv[1]) == "--sdk-project-flow")
+        return test.TestSdkProjectFlow();
+    if (argc > 1 && std::string_view(argv[1]) == "--sdk-build-guards")
+        return test.TestSdkBuildGuards();
+    if (argc > 1 && std::string_view(argv[1]) == "--sdk-invalid-manifest")
+        return test.TestInvalidSdkManifest();
+    if (argc > 1 && std::string_view(argv[1]) == "--ini-path")
+        return test.TestIniPath();
     if (argc > 1 && std::string_view(argv[1]) == "--scene-rename")
         return test.TestSceneRename();
     test.directSwitch = argc > 1 && std::string_view(argv[1]) == "--without-progress";
@@ -2511,10 +3032,11 @@ int main(int argc, char** argv)
         test.autoExposureCaptures = engine::PathFromUtf8(argv[3]);
         std::filesystem::create_directories(test.autoExposureCaptures);
     }
-    if (argc > 3 && std::string_view(argv[1]) == "--material-ibl")
+    if (argc > 3 && (std::string_view(argv[1]) == "--material-ibl" || std::string_view(argv[1]) == "--material-specular"))
     {
         test.perfProject = argv[2];
         test.materialIblCaptures = engine::PathFromUtf8(argv[3]);
+        test.materialSpecularProbe = std::string_view(argv[1]) == "--material-specular";
         std::filesystem::create_directories(test.materialIblCaptures);
     }
     if (argc > 2 && std::string_view(argv[1]) == "--material-preview")
@@ -2533,8 +3055,16 @@ int main(int argc, char** argv)
         test.perfProject = argv[2];
         test.compileStatus = true;
     }
-    if (argc > 2 && std::string_view(argv[1]) == "--script-reload")
+    if (argc > 2 && (std::string_view(argv[1]) == "--script-reload" ||
+                     std::string_view(argv[1]) == "--external-script-reload" ||
+                     std::string_view(argv[1]) == "--external-project-export" ||
+                     std::string_view(argv[1]) == "--external-export-only"))
+    {
         test.reloadProject = argv[2];
+        test.externalScriptProject = std::string_view(argv[1]) != "--script-reload";
+        test.externalExportOnly = std::string_view(argv[1]) == "--external-export-only";
+        test.externalProjectExport = std::string_view(argv[1]) == "--external-project-export" || test.externalExportOnly;
+    }
     test.visualProgress = argc == 1 || std::string_view(argv[1]) == "--visual-progress";
     return test.Run();
 }

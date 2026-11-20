@@ -267,4 +267,8 @@ float KromGraphRoughness(float fallback)
 {
     return KromGraphScalar(((int(graphOutputs.w) >> 5) & 31) - 1, fallback);
 }
+float KromGraphSpecular(float fallback)
+{
+    return KromGraphScalar(int(graphUV[7].w) - 1, fallback);
+}
 #endif

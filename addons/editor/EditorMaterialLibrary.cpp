@@ -756,6 +756,7 @@ bool ParseEditorMaterialAssetSource(const std::string& source,
         }
         else if (parts[0] == "metallicFactor" && parts.size() >= 2) loaded.metallicFactor = std::stof(parts[1]);
         else if (parts[0] == "roughnessFactor" && parts.size() >= 2) loaded.roughnessFactor = std::stof(parts[1]);
+        else if (parts[0] == "specularFactor" && parts.size() >= 2) loaded.specularFactor = std::stof(parts[1]);
         else if (parts[0] == "alphaCutoff" && parts.size() >= 2) loaded.alphaCutoff = std::stof(parts[1]);
         else if (parts[0] == "normalScale" && parts.size() >= 2) loaded.normalScale = std::stof(parts[1]);
         else if (parts[0] == "occlusionStrength" && parts.size() >= 2) loaded.occlusionStrength = std::stof(parts[1]);
@@ -832,6 +833,7 @@ bool ParseEditorMaterialAssetSource(const std::string& source,
     outAsset.baseColorFactor          = loaded.baseColorFactor;
     outAsset.metallicFactor           = loaded.metallicFactor;
     outAsset.roughnessFactor          = loaded.roughnessFactor;
+    outAsset.specularFactor           = loaded.specularFactor;
     outAsset.emissiveFactor           = loaded.emissiveFactor;
     outAsset.emissiveStrength         = loaded.emissiveStrength;
     outAsset.alphaCutoff              = loaded.alphaCutoff;
@@ -1213,6 +1215,7 @@ MaterialHandle CreatePbrMaterialFromAsset(EditorFrameContext& ctx,
     TextureHandle emissiveTex  = LoadRuntimeTexture(ctx, asset.emissiveTexture.path);
 
     auto builder = master.CreateInstance(name);
+    builder.Specular(asset.PbrSpecular());
     if (baseColorTex.IsValid()) builder.BaseColor(baseColorTex);
     else                        builder.BaseColor(asset.baseColorFactor);
 
@@ -1612,6 +1615,7 @@ void UpdateRuntimeMaterialParameters(EditorFrameContext& ctx,
         ctx.materials.SetVec4(runtimeMaterial, "emissiveFactor", emissiveVec4);
         ctx.materials.SetFloat(runtimeMaterial, "metallicFactor", asset.PbrMetallic());
         ctx.materials.SetFloat(runtimeMaterial, "roughnessFactor", asset.PbrRoughness());
+        ctx.materials.SetFloat(runtimeMaterial, "specularFactor", asset.PbrSpecular());
         ctx.materials.SetFloat(runtimeMaterial, "normalStrength", asset.PbrNormalStrength());
         ctx.materials.SetFloat(runtimeMaterial, "occlusionStrength", asset.PbrOcclusion());
         ctx.materials.SetFloat(runtimeMaterial, "opacityFactor", asset.baseColorFactor.w);
@@ -2842,6 +2846,8 @@ bool DrawSurfaceScalars(EditorFrameContext& ctx, assets::MaterialAsset& asset, E
             scalarField(TranslateLabel("material.metallic", "Metallic"), asset.metallicFactor, 1.f)) dirty = true;
         if (supports("roughnessFactor") &&
             scalarField(TranslateLabel("material.roughness", "Roughness"), asset.roughnessFactor, 1.f)) dirty = true;
+        if (currentTemplate == EditorMaterialTemplate::PbrLit &&
+            scalarField(TranslateLabel("material.specular", "Specular").c_str(), asset.specularFactor, 1.f)) dirty = true;
         if ((supports("normalScale") || (isCustom && declared.count("normalStrength"))) &&
             scalarField(TranslateLabel("material.normal_strength", "Normal Strength"), asset.normalScale, 4.f)) dirty = true;
         if (supports("occlusionStrength") &&

@@ -1,0 +1,8 @@
+#pragma once
+namespace engine::app::build {
+inline constexpr const char* ExecutableSuffix = "@CMAKE_EXECUTABLE_SUFFIX@";
+inline constexpr const char* ModulePrefix = "";
+inline constexpr const char* ModuleSuffix = "@CMAKE_SHARED_LIBRARY_SUFFIX@";
+inline constexpr const char* StaticLibraryPrefix = "@CMAKE_STATIC_LIBRARY_PREFIX@";
+inline constexpr const char* StaticLibrarySuffix = "@CMAKE_STATIC_LIBRARY_SUFFIX@";
+}

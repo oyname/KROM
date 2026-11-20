@@ -30,6 +30,8 @@ struct ShadowSettings
     ShadowFilter filter       = ShadowFilter::PCF3x3;
     uint32_t     resolution   = 2048u;
     uint32_t     cascadeCount = 1u;
+    // Directional: world units, stable across cascade sizes and camera distance.
+    // Point/spot: normalized shadow depth.
     float        bias         = 0.001f;
     float        normalBias   = 0.002f;
     float        maxDistance  = 100.0f;

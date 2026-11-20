@@ -10,6 +10,7 @@
 #include "addons/editor/EditorProjectHistory.hpp"
 #include "addons/editor/EditorLocalization.hpp"
 #include "core/AtomicTextFile.hpp"
+#include "renderer/RenderFrameConstants.hpp"
 
 #include <algorithm>
 #include <cstdio>
@@ -474,22 +475,7 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
             }
         }
 
-        if (!ctx.projectsRootDirectory.empty())
-        {
-            std::error_code ec;
-            const std::filesystem::path chosen =
-                std::filesystem::weakly_canonical(PathFromUtf8(ctx.state.projectParentDirBuffer.data()), ec);
-            const std::filesystem::path expected =
-                std::filesystem::weakly_canonical(PathFromUtf8(ctx.projectsRootDirectory), ec);
-            if (chosen != expected)
-            {
-                ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(1.f, 0.7f, 0.2f, 1.f));
-                ImGui::PushTextWrapPos(ImGui::GetCursorPosX() + 480.f);
-                ImGui::TextUnformatted(TranslateWithValue("project.runtime_root", ctx.projectsRootDirectory).c_str());
-                ImGui::PopTextWrapPos();
-                ImGui::PopStyleColor();
-            }
-        }
+
 
         const char* backendItems = "Vulkan\0DirectX11\0OpenGL\0";
         ImGui::TextUnformatted("Backend");
@@ -2576,6 +2562,17 @@ static void DrawEditorViewportSettings(EditorFrameContext& ctx)
         value_ui::Checkbox(LocalizedLabel("toolbar.preview").c_str(), &ctx.state.showCameraPreview);
         value_ui::Checkbox(LocalizedLabel("toolbar.particles").c_str(), &ctx.state.playAllParticles);
         // Reflection probe diagnostics (not saved).
+        const char* iblViews[] = { Translate("settings.ibl_debug_normal"), Translate("settings.ibl_debug_diffuse"),
+                                  Translate("settings.ibl_debug_specular") };
+        const uint32_t iblFlags[] = { 0u, DBG_VIEW_IBL_DIFF, DBG_VIEW_IBL_SPEC };
+        int iblView = ctx.state.editorDebugFlags == DBG_VIEW_IBL_DIFF ? 1
+                    : ctx.state.editorDebugFlags == DBG_VIEW_IBL_SPEC ? 2 : 0;
+        if (value_ui::Combo(LocalizedLabel("settings.ibl_debug").c_str(), &iblView, iblViews, IM_ARRAYSIZE(iblViews)))
+        {
+            ctx.state.editorDebugFlags = iblFlags[iblView];
+            if (ctx.setEditorDebugFlags)
+                ctx.setEditorDebugFlags(iblFlags[iblView]);
+        }
         const char* probeViews[] = { Translate("probe.debug_none"), Translate("probe.debug_index"),
                                      Translate("probe.debug_weight"), Translate("probe.debug_so") };
         int probeView = static_cast<int>(std::min(ctx.state.probeDebugView, 3u));

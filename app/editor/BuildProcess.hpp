@@ -30,6 +30,8 @@ ProcessResult RunProcess(const ProcessCommand& command, const ProcessOutput& out
                          const std::atomic<bool>* cancel = nullptr,
                          std::chrono::milliseconds timeout = {});
 ProcessResult CaptureProcessOutput(const ProcessCommand& command, std::string& output);
+// Launch a game without waiting or retaining a kill-on-close build job.
+ProcessResult LaunchProcess(const ProcessCommand& command);
 
 // Windows toolchain bootstrap only. Builds themselves never run through a shell.
 // toolset ("14.44.35207", digits and dots only) is passed as -vcvars_ver; empty

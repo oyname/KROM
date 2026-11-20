@@ -12,6 +12,7 @@
 #include "addons/probes/ProbeData.hpp"
 #include "addons/probes/ProbeSerialization.hpp"
 #include "assets/AssetRegistry.hpp"
+#include "assets/TextureImporter.hpp"
 #include "core/PathUtf8.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
@@ -22,6 +23,8 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -227,6 +230,168 @@ void TestDiffuseIrradianceFiltersHighFrequencyEnvironment(test::TestContext& ctx
     CHECK(ctx, maxError < 0.01f);
 }
 
+void TestPureSkyBakeMeasurements(test::TestContext& ctx)
+{
+    assets::TextureImportRequest request{};
+    request.sourcePath = std::filesystem::path(__FILE__).parent_path().parent_path()
+                       / "assets/autumn_field_puresky_2k.hdr";
+    if (const char* path = std::getenv("KROM_IBL_MEASURE_HDR"))
+        request.sourcePath = PathFromUtf8(path);
+    std::ifstream input(request.sourcePath, std::ios::binary);
+    request.fileBytes.assign(std::istreambuf_iterator<char>(input), {});
+    assets::TextureAsset texture{};
+    CHECK(ctx, assets::TextureImporter::Import(request, texture));
+    if (texture.pixelData.empty()) return;
+    renderer::IBLBakeDiagnostics diagnostics{};
+    renderer::IBLBakeParams params{};
+    params.environmentSize = 128u;
+    params.irradianceSize = 8u;
+    params.prefilterBaseSize = 128u;
+    params.prefilterSamples = 64u;
+    params.diagnostics = &diagnostics;
+    const auto baked = renderer::IBLBaker::BakeFromTexture(texture, 1.f, params);
+    CHECK(ctx, baked.IsValid());
+    if (!baked.IsValid()) return;
+    std::printf("# puresky sun: sky median %.6f, removed peak %.6f, solid angle %.9f sr, original peak now %.6f\n",
+        diagnostics.skyMedianLuminance, diagnostics.removedSunPeakLuminance,
+        diagnostics.removedSunSolidAngle, diagnostics.sourcePeakAfterFiltering);
+    for (const auto& stage : {std::pair{"source", diagnostics.source},
+                             std::pair{"compressed", diagnostics.compressed},
+                             std::pair{"lighting", diagnostics.lighting}})
+        std::printf("# puresky %s: mean %.6f, max %.6f, changed %.6f%%\n", stage.first,
+            stage.second.meanLuminance, stage.second.maxLuminance, stage.second.changedPixelFraction * 100.0);
+    size_t offset = 0u;
+    for (uint32_t mip = 0u, size = baked.prefilterBaseSize; mip < baked.prefilterMipCount;
+         ++mip, size = std::max(size / 2u, 1u))
+    {
+        float maximum = 0.f;
+        for (size_t pixel = 0u; pixel < static_cast<size_t>(6u) * size * size; ++pixel)
+        {
+            uint16_t h[4];
+            std::memcpy(h, baked.prefilterData.data() + offset + pixel * 8u, 8u);
+            maximum = std::max(maximum, HalfToFloatTest(h[0]) * .2126f
+                + HalfToFloatTest(h[1]) * .7152f + HalfToFloatTest(h[2]) * .0722f);
+        }
+        if (mip == 0u || mip == 2u)
+            std::printf("# puresky prefilter mip %u: max luminance %.6f\n", mip, maximum);
+        offset += static_cast<size_t>(6u) * size * size * 8u;
+    }
+}
+
+renderer::IBLBakeParams SunTestParams()
+{
+    renderer::IBLBakeParams params{};
+    params.environmentSize = 64u;
+    params.irradianceSize = 8u;
+    params.prefilterBaseSize = 32u;
+    params.prefilterMipCount = 4u;
+    params.prefilterSamples = 32u;
+    return params;
+}
+
+float MaximumCubeChannel(const std::vector<uint8_t>& bytes)
+{
+    float maximum = 0.f;
+    for (size_t i = 0u; i + 8u <= bytes.size(); i += 8u)
+    {
+        uint16_t h[4];
+        std::memcpy(h, bytes.data() + i, 8u);
+        for (int channel = 0; channel < 3; ++channel)
+            maximum = std::max(maximum, HalfToFloatTest(h[channel]));
+    }
+    return maximum;
+}
+
+assets::TextureAsset SyntheticSunTexture(bool sun)
+{
+    assets::TextureAsset texture{};
+    texture.width = 256u;
+    texture.height = 128u;
+    texture.format = assets::TextureFormat::RGBA16F;
+    texture.pixelData.resize(static_cast<size_t>(texture.width) * texture.height * 8u);
+    for (uint32_t y = 0u; y < texture.height; ++y)
+        for (uint32_t x = 0u; x < texture.width; ++x)
+        {
+            const uint16_t value = sun && x >= 125u && x < 131u && y >= 29u && y < 35u ? 0x5400u : 0x3C00u;
+            const uint16_t rgba[] = {value, value, value, 0x3C00u}; // radiance 64 or 1
+            std::memcpy(texture.pixelData.data() + (static_cast<size_t>(y) * texture.width + x) * 8u, rgba, 8u);
+        }
+    return texture;
+}
+
+void TestSeparateVisibleSkyAndLighting(test::TestContext& ctx)
+{
+    const auto baked = renderer::IBLBaker::BakeFromTexture(SyntheticSunTexture(true), 1.f, SunTestParams());
+    CHECK(ctx, baked.IsValid());
+    CHECK_GT(ctx, MaximumCubeChannel(baked.environmentData), 20.f);
+    CHECK(ctx, MaximumCubeChannel(baked.prefilterData) < 12.f);
+    const auto uniform = renderer::IBLBaker::BakeFromTexture(SyntheticSunTexture(false), 1.f, SunTestParams());
+    CHECK(ctx, std::fabs(MaximumCubeChannel(uniform.environmentData) - 1.f) < .001f);
+    CHECK(ctx, std::fabs(MaximumCubeChannel(uniform.prefilterData) - 1.f) < .001f);
+    CHECK(ctx, std::fabs(MaximumCubeChannel(uniform.irradianceData) - math::PI) < .003f);
+}
+
+void TestProceduralSunOnlyInVisibleSky(test::TestContext& ctx)
+{
+    renderer::ProceduralSkyDesc sky{};
+    sky.sunAngularRadius = .15f;
+    sky.sunIntensity = 64.f;
+    const auto sun = renderer::IBLBaker::BakeFromProceduralSky(sky, 1.f, SunTestParams());
+    sky.sunIntensity = 0.f;
+    const auto noSun = renderer::IBLBaker::BakeFromProceduralSky(sky, 1.f, SunTestParams());
+    CHECK(ctx, sun.IsValid() && noSun.IsValid());
+    CHECK(ctx, sun.environmentData != noSun.environmentData);
+    CHECK_GT(ctx, MaximumCubeChannel(sun.environmentData), 20.f);
+    CHECK(ctx, sun.irradianceData == noSun.irradianceData);
+    CHECK(ctx, sun.prefilterData == noSun.prefilterData);
+}
+
+void TestSunRemovalSwitchAndSkyRegions(test::TestContext& ctx)
+{
+    const auto source = SyntheticSunTexture(true);
+    auto params = SunTestParams();
+    const auto removed = renderer::IBLBaker::BakeFromTexture(source, 1.f, params);
+    params.removeSunFromLighting = false;
+    const auto kept = renderer::IBLBaker::BakeFromTexture(source, 1.f, params);
+    CHECK(ctx, removed.environmentData == kept.environmentData);
+    CHECK(ctx, MaximumCubeChannel(removed.prefilterData) < 1.01f);
+    CHECK(ctx, MaximumCubeChannel(removed.irradianceData) < math::PI + .01f);
+    CHECK_GT(ctx, MaximumCubeChannel(kept.prefilterData), 1.5f);
+    CHECK(ctx, renderer::IBLBaker::HashTextureSource(source, 1.f, true)
+            != renderer::IBLBaker::HashTextureSource(source, 1.f, false));
+    CHECK_EQ(ctx, renderer::IBLBaker::HashTextureSource(source, 1.f),
+                  renderer::IBLBaker::HashTextureSource(source, 1.f, true));
+
+    for (int shape = 0; shape < 3; ++shape)
+    {
+        auto texture = SyntheticSunTexture(false);
+        for (uint32_t y = 0u; y < texture.height; ++y)
+            for (uint32_t x = 0u; x < texture.width; ++x)
+            {
+                // Large cloud, seam-crossing disc, then a small polar cap.
+                const bool bright = shape == 0 ? x >= 80u && x < 180u && y >= 20u && y < 60u
+                                  : shape == 1 ? (x < 3u || x >= 253u) && y >= 29u && y < 35u
+                                               : y < 3u;
+                if (bright)
+                {
+                    const uint16_t rgba[] = {0x5400u, 0x5400u, 0x5400u, 0x3C00u};
+                    std::memcpy(texture.pixelData.data() + (static_cast<size_t>(y) * texture.width + x) * 8u, rgba, 8u);
+                }
+            }
+        params.removeSunFromLighting = true;
+        const auto filtered = renderer::IBLBaker::BakeFromTexture(texture, 1.f, params);
+        if (shape == 0)
+        {
+            params.removeSunFromLighting = false;
+            const auto unfiltered = renderer::IBLBaker::BakeFromTexture(texture, 1.f, params);
+            CHECK(ctx, filtered.prefilterData == unfiltered.prefilterData);
+            CHECK(ctx, filtered.irradianceData == unfiltered.irradianceData);
+        }
+        else
+            CHECK(ctx, MaximumCubeChannel(filtered.prefilterData) < 1.01f);
+    }
+}
+
 void TestInputHash(test::TestContext& ctx)
 {
     auto makeWorld = [](bool reversed, float meshX, ecs::World*& out, EntityID& outProbe,
@@ -408,6 +573,10 @@ int RunProbeTests()
         .Add(".kprobe round trip and versions", TestProbeFileRoundTrip)
         .Add("Bake from cube faces",           TestBakeFromCubeFaces)
         .Add("Diffuse irradiance filters high-frequency environments", TestDiffuseIrradianceFiltersHighFrequencyEnvironment)
+        .Add("Pure sky bake measurements", TestPureSkyBakeMeasurements)
+        .Add("Separate visible sky and lighting", TestSeparateVisibleSkyAndLighting)
+        .Add("Procedural sun only in visible sky", TestProceduralSunOnlyInVisibleSky)
+        .Add("Sun removal switch, broad clouds, seams and poles", TestSunRemovalSwitchAndSkyRegions)
         .Add("Input hash",                     TestInputHash)
         .Add("Fit box from scene triangles",   TestFitProbeBox)
         .Add("Probe data path",                TestProbeDataPath)

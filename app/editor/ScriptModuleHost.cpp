@@ -1,4 +1,8 @@
 #include "app/editor/ScriptModuleHost.hpp"
+#include "app/editor/BuildProcess.hpp"
+#include "app/editor/BuildTools.hpp"
+#include "platform/DynamicModule.hpp"
+#include "BuildTargetNames.hpp"
 #include "addons/editor/EditorLocalization.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "core/PathUtf8.hpp"
@@ -94,45 +98,9 @@ std::string NinjaPathKey(std::string_view path)
     return key;
 }
 
-#ifdef _WIN32
-// Konsolenprogramm ohne Fenster starten und die komplette Ausgabe einlesen.
-bool CaptureProcessOutput(std::wstring commandLine, std::string& output)
-{
-    SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
-    HANDLE readPipe = nullptr, writePipe = nullptr;
-    if (!CreatePipe(&readPipe, &writePipe, &security, 0)) return false;
-    SetHandleInformation(readPipe, HANDLE_FLAG_INHERIT, 0);
-    STARTUPINFOW startup{};
-    startup.cb = sizeof(startup);
-    startup.dwFlags = STARTF_USESTDHANDLES;
-    startup.hStdOutput = writePipe;
-    startup.hStdError = writePipe;
-    PROCESS_INFORMATION process{};
-    const BOOL started = CreateProcessW(nullptr, commandLine.data(), nullptr, nullptr, TRUE,
-                                        CREATE_NO_WINDOW, nullptr, nullptr, &startup, &process);
-    CloseHandle(writePipe);
-    if (!started) { CloseHandle(readPipe); return false; }
-    char buffer[65536];
-    DWORD count = 0;
-    while (ReadFile(readPipe, buffer, sizeof(buffer), &count, nullptr) && count)
-        output.append(buffer, count);
-    CloseHandle(readPipe);
-    WaitForSingleObject(process.hProcess, INFINITE);
-    DWORD exitCode = 1;
-    GetExitCodeProcess(process.hProcess, &exitCode);
-    CloseHandle(process.hThread);
-    CloseHandle(process.hProcess);
-    return exitCode == 0;
-}
-#endif
-
 void CloseModule(void* module)
 {
-#ifdef _WIN32
-    if (module) FreeLibrary(static_cast<HMODULE>(module));
-#else
-    (void)module;
-#endif
+    platform::UnloadDynamicModule(module);
 }
 
 void ForwardLog(LogLevel level, const char* message)
@@ -167,14 +135,16 @@ ScriptModuleHost::~ScriptModuleHost()
 
 std::filesystem::path ScriptModuleHost::LibraryPath(const fs::path& buildDir, const std::string& target)
 {
-    return buildDir / "bin" / PathFromUtf8("krom_scripts_" + target + ".dll");
+    if (const auto path = build::TargetPath(buildDir, "krom_scripts_" + target); !path.empty()) return path;
+    return buildDir / "bin" / PathFromUtf8(std::string(build::ModulePrefix) + "krom_scripts_" + target + build::ModuleSuffix);
 }
 
 bool ScriptModuleHost::NeedsBuild(const fs::path& root, const fs::path& library) const
 {
     if (!fs::exists(library)) return true;
     const auto stamp = fs::last_write_time(library);
-    for (const char* name : {"engine_core.lib", "engine_script.lib"})
+    for (const auto& name : {std::string(build::StaticLibraryPrefix) + "engine_core" + build::StaticLibrarySuffix,
+                             std::string(build::StaticLibraryPrefix) + "engine_script" + build::StaticLibrarySuffix})
     {
         const auto dependency = library.parent_path().parent_path() / "lib" / name;
         if (fs::exists(dependency) && fs::last_write_time(dependency) > stamp) return true;
@@ -267,7 +237,8 @@ bool ScriptModuleHost::CheckEngineLibraries(const fs::path& buildDir, const fs::
     std::error_code ec;
     const auto exeTime = fs::last_write_time(exe, ec);
     if (ec) { error = Translate("script.editor_timestamp_failed"); return false; }
-    for (const char* name : {"engine_core.lib", "engine_script.lib"})
+    for (const auto& name : {std::string(build::StaticLibraryPrefix) + "engine_core" + build::StaticLibrarySuffix,
+                             std::string(build::StaticLibraryPrefix) + "engine_script" + build::StaticLibrarySuffix})
     {
         const auto path = buildDir / "lib" / name;
         const auto time = fs::last_write_time(path, ec);
@@ -283,7 +254,8 @@ bool ScriptModuleHost::CheckEngineLibraries(const fs::path& buildDir, const fs::
 
 std::vector<fs::path> ScriptModuleHost::FindStaleSharedHeaders(
     std::string_view editorInputs, std::string_view deps, const std::string& scriptTarget,
-    const fs::path& buildDir, const fs::path& sourceDir, fs::file_time_type editorTime)
+    const fs::path& buildDir, const fs::path& sourceDir, fs::file_time_type editorTime,
+    const fs::path& projectRoot)
 {
     auto forEachLine = [](std::string_view text, auto&& visit) {
         while (!text.empty())
@@ -318,8 +290,14 @@ std::vector<fs::path> ScriptModuleHost::FindStaleSharedHeaders(
             current->insert(NinjaPathKey(line.substr(first)));
     });
     // Nur Engine-Quellen: Projekt-Scripts und Code ausserhalb des Repos ignorieren.
-    const auto source = sourceDir.lexically_normal();
-    const auto projects = (sourceDir / "projects").lexically_normal();
+    auto canonical = [](const fs::path& path) {
+        std::error_code ec;
+        auto resolved = fs::weakly_canonical(path, ec);
+        return ec ? path.lexically_normal() : resolved;
+    };
+    const auto source = canonical(sourceDir);
+    const auto projects = canonical(sourceDir / "projects");
+    const auto activeProject = projectRoot.empty() ? fs::path{} : canonical(projectRoot);
     auto under = [](const fs::path& path, const fs::path& base) {
         const auto relative = path.lexically_relative(base);
         return !relative.empty() && *relative.begin() != "..";
@@ -330,8 +308,9 @@ std::vector<fs::path> ScriptModuleHost::FindStaleSharedHeaders(
         if (!editorHeaders.count(header)) continue;
         auto path = PathFromUtf8(header);
         if (path.is_relative()) path = buildDir / path;
-        path = path.lexically_normal();
-        if (!under(path, source) || under(path, projects)) continue;
+        path = canonical(path);
+        if (!under(path, source) || under(path, projects) ||
+            (!activeProject.empty() && under(path, activeProject))) continue;
         std::error_code ec;
         const auto time = fs::last_write_time(path, ec);
         if (!ec && time > editorTime) stale.push_back(path);
@@ -341,7 +320,8 @@ std::vector<fs::path> ScriptModuleHost::FindStaleSharedHeaders(
 }
 
 bool ScriptModuleHost::CheckSharedEngineHeaders(const fs::path& ninja, const fs::path& buildDir,
-    const fs::path& sourceDir, const fs::path& editorExe, const std::string& scriptTarget, std::string& error)
+    const fs::path& sourceDir, const fs::path& editorExe, const std::string& scriptTarget, std::string& error,
+    const fs::path& projectRoot)
 {
 #ifdef _WIN32
     std::error_code ec;
@@ -350,15 +330,14 @@ bool ScriptModuleHost::CheckSharedEngineHeaders(const fs::path& ninja, const fs:
     if (ec) { error = Translate("script.editor_timestamp_failed"); return false; }
     const auto exe = editorExe.lexically_normal().lexically_relative(buildDir.lexically_normal());
     if (exe.empty() || *exe.begin() == "..") return true; // EXE nicht aus diesem Buildverzeichnis
-    const std::wstring base = L"\"" + ninja.native() + L"\" -C \"" + buildDir.native() + L"\" -t ";
     std::string inputs, deps;
-    if (!CaptureProcessOutput(base + L"inputs \"" + exe.generic_wstring() + L"\"", inputs) ||
-        !CaptureProcessOutput(base + L"deps", deps))
+    if (!build::CaptureProcessOutput({ninja, {"-C", PathToUtf8(buildDir), "-t", "inputs", PathToGenericUtf8(exe)}, buildDir}, inputs).Succeeded() ||
+        !build::CaptureProcessOutput({ninja, {"-C", PathToUtf8(buildDir), "-t", "deps"}, buildDir}, deps).Succeeded())
     {
         error = Translate("script.ninja_dependencies_failed");
         return false;
     }
-    const auto stale = FindStaleSharedHeaders(inputs, deps, scriptTarget, buildDir, sourceDir, editorTime);
+    const auto stale = FindStaleSharedHeaders(inputs, deps, scriptTarget, buildDir, sourceDir, editorTime, projectRoot);
     if (stale.empty()) return true;
     std::string dependencies = PathToUtf8(stale.front().filename());
     if (stale.size() > 1)
@@ -366,7 +345,7 @@ bool ScriptModuleHost::CheckSharedEngineHeaders(const fs::path& ninja, const fs:
     error = TranslateWithValue("script.engine_changed", dependencies);
     return false;
 #else
-    (void)ninja; (void)buildDir; (void)sourceDir; (void)editorExe; (void)scriptTarget; (void)error;
+    (void)ninja; (void)buildDir; (void)sourceDir; (void)editorExe; (void)scriptTarget; (void)error; (void)projectRoot;
     return true;
 #endif
 }
@@ -382,7 +361,8 @@ bool ScriptModuleHost::Swap(const fs::path& library, ecs::World& world,
     {
         static std::atomic<uint64_t> serial{0};
         const auto stamp = fs::last_write_time(library);
-        for (const char* name : {"engine_core.lib", "engine_script.lib"})
+        for (const auto& name : {std::string(build::StaticLibraryPrefix) + "engine_core" + build::StaticLibrarySuffix,
+                             std::string(build::StaticLibraryPrefix) + "engine_script" + build::StaticLibrarySuffix})
         {
             const auto dependency = library.parent_path().parent_path() / "lib" / name;
             if (fs::exists(dependency) && fs::last_write_time(dependency) > stamp)
@@ -411,13 +391,22 @@ bool ScriptModuleHost::Swap(const fs::path& library, ecs::World& world,
         const auto pdb = ReferencedPdb(library);
         if (!pdb.empty() && fs::exists(library.parent_path() / pdb))
             fs::copy_file(library.parent_path() / pdb, copyDirectory / pdb);
-        candidate = LoadLibraryExW(copy.c_str(), nullptr, LOAD_LIBRARY_SEARCH_DLL_LOAD_DIR | LOAD_LIBRARY_SEARCH_DEFAULT_DIRS);
-        if (!candidate) throw std::runtime_error(TranslateWithValue("script.dll_load_failed", std::to_string(GetLastError())));
-        const auto module = static_cast<HMODULE>(candidate);
-        const auto version = reinterpret_cast<script::ScriptModuleVersionFn>(GetProcAddress(module, "KromScriptModuleApiVersion"));
-        const auto abi = reinterpret_cast<script::ScriptModuleAbiFn>(GetProcAddress(module, "KromScriptModuleAbi"));
-        const auto init = reinterpret_cast<script::ScriptModuleInitFn>(GetProcAddress(module, "KromScriptModuleInit"));
-        const auto registerScripts = reinterpret_cast<script::RegisterGameScriptsFn>(GetProcAddress(module, "KromRegisterGameScripts"));
+        std::string loadError;
+        candidate = platform::LoadDynamicModule(copy, loadError);
+        if (!candidate) throw std::runtime_error(TranslateWithValue("script.dll_load_failed", loadError));
+        const auto module = candidate;
+        if (!projectRoot.empty())
+        {
+            const auto origin = reinterpret_cast<const char* (*)()>(platform::FindDynamicSymbol(module, "KromScriptModuleProjectRoot"));
+            const char* root = origin ? origin() : nullptr;
+            std::error_code ec;
+            if (!root || !*root || !fs::equivalent(PathFromUtf8(root), projectRoot, ec) || ec)
+                throw std::runtime_error(Translate("script.dll_wrong_project"));
+        }
+        const auto version = reinterpret_cast<script::ScriptModuleVersionFn>(platform::FindDynamicSymbol(module, "KromScriptModuleApiVersion"));
+        const auto abi = reinterpret_cast<script::ScriptModuleAbiFn>(platform::FindDynamicSymbol(module, "KromScriptModuleAbi"));
+        const auto init = reinterpret_cast<script::ScriptModuleInitFn>(platform::FindDynamicSymbol(module, "KromScriptModuleInit"));
+        const auto registerScripts = reinterpret_cast<script::RegisterGameScriptsFn>(platform::FindDynamicSymbol(module, "KromRegisterGameScripts"));
         if (!version || version() != script::ScriptModuleAbiVersion || !abi || !init || !registerScripts ||
             !script::CompatibleScriptModuleAbi(abi()))
             throw std::runtime_error(Translate("script.dll_incompatible"));

@@ -117,6 +117,7 @@ cbuffer PerMaterial : register(b2)
     float  boxTileSize;
     float  clearcoatFactor;     // 0 = no clear coat layer (pbr_clearcoat.hlsl)
     float  clearcoatRoughness;
+    float  specularFactor;      // byte 116; 0.5 = dielectric F0 0.04
 #ifdef KROM_MATERIAL_GRAPH
     float4 graphOutputs;
     float4 graphNodes[16];
@@ -186,14 +187,16 @@ float G_Smith(float NoV, float NoL, float roughness)
     return G_SchlickGGX(NoV, roughness) * G_SchlickGGX(NoL, roughness);
 }
 
-float3 F_Schlick(float HoV, float3 F0)
+#include "pbr_specular.hlsl"
+
+float3 F_Schlick(float HoV, float3 F0, float F90)
 {
-    return F0 + (1.0f - F0) * pow(1.0f - HoV, 5.0f);
+    return F0 + (F90 - F0) * pow(1.0f - HoV, 5.0f);
 }
 
-float3 F_SchlickRoughness(float NoV, float3 F0, float roughness)
+float3 F_SchlickRoughness(float NoV, float3 F0, float roughness, float F90)
 {
-    float3 inv = max(float3(1.0f - roughness, 1.0f - roughness, 1.0f - roughness), F0);
+    float3 inv = max(((1.0f - roughness) * F90).xxx, F0);
     return F0 + (inv - F0) * pow(1.0f - NoV, 5.0f);
 }
 
@@ -437,7 +440,9 @@ uint ChoosePointShadowFace(float3 lightToPoint)
 
 #include "pbr_shadow_poisson.hlsl"
 
-float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthValue, float4 atlasRect)
+#include "shadow_receiver.hlsl"
+
+float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthValue, float4 atlasRect, float4x4 shadowVP)
 {
     float result = 1.0f;
 
@@ -455,19 +460,12 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
         if (insideAtlas)
         {
             float2 atlasUv = atlasRect.xy + localUv * atlasRect.zw;
-            float ddxDepth = ddx(depth);
-            float ddyDepth = ddy(depth);
-            float ddxUvX = ddx(atlasUv.x);
-            float ddyUvY = ddy(atlasUv.y);
-            float2 dDepth_dUV = float2(
-                abs(ddxUvX) > 1e-7f ? ddxDepth / ddxUvX : 0.0f,
-                abs(ddyUvY) > 1e-7f ? ddyDepth / ddyUvY : 0.0f
-            );
-            dDepth_dUV = clamp(dDepth_dUV, -1.0f, 1.0f);
+
+            float2 dDepth_dUV = KromShadowDepthGradient(depth, atlasUv);
             // Nur ein winziger Epsilon-Floor gegen reines Z-Fighting — der konstante
             // Bias wird vom Slider gesteuert. Acne faengt der slope-scaled Term
             // (dDepth_dUV) adaptiv ab; ein grosser Floor wuerde Peter-Panning erzwingen.
-            float baseBias = max(biasValue, 0.00005f);
+            float baseBias = KromShadowReceiverBias(biasValue, shadowVP);
             float visibility = 0.0f;
 
             if (shadowFilterMode == 1u)
@@ -523,15 +521,16 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
 
 #include "pbr_clearcoat.hlsl"
 
-float3 EvalSpecularGGX(float3 N, float3 V, float3 L, float3 albedoValue, float metallic, float roughness)
+float3 EvalSpecularGGX(float3 N, float3 V, float3 L, float3 albedoValue, float metallic, float roughness, float specularLevel)
 {
     float3 H = SafeNormalize(V + L);
     float NoV = max(dot(N, V), 1e-4f);
     float NoL = max(dot(N, L), 0.0f);
     float NoH = max(dot(N, H), 0.0f);
     float HoV = max(dot(H, V), 0.0f);
-    float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedoValue, metallic);
-    float3 F = F_Schlick(HoV, F0);
+    float3 F0 = KromSpecularF0(albedoValue, metallic, specularLevel);
+    float F90 = KromSpecularF90(metallic, specularLevel);
+    float3 F = F_Schlick(HoV, F0, F90);
     float D = D_GGX(NoH, roughness);
     if (shadingHeightCorrelatedVisibility)
         return max(D * V_SmithGGXCorrelated(NoV, NoL, roughness) * F * NoL, 0.0f.xxx);
@@ -613,6 +612,7 @@ float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
 
     float metallic = saturate(metallicFactor);
     float roughness = saturate(roughnessFactor);
+    float specular = saturate(specularFactor);
     float ao = 1.0f;
 #ifdef KROM_ORM_MAP
     float3 ormSample = orm.Sample(sLinear, ormUV).rgb;
@@ -631,6 +631,7 @@ float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
 #ifdef KROM_MATERIAL_GRAPH
     metallic = KromGraphMetallic(metallic);
     roughness = KromGraphRoughness(roughness);
+    specular = KromGraphSpecular(specular);
 #endif
     roughness = clamp(roughness, 0.04f, 1.0f);
     if (debugFlags & DBG_DISABLE_AO)
@@ -648,8 +649,9 @@ float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
 
     float3 V = SafeNormalize(cameraPositionWS.xyz - IN.positionWS);
     float NoV = max(dot(N, V), 1e-4f);
-    float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedoValue, metallic);
-    float3 F_a = F_SchlickRoughness(NoV, F0, roughness);
+    float3 F0 = KromSpecularF0(albedoValue, metallic, specular);
+    float F90 = KromSpecularF90(metallic, specular);
+    float3 F_a = F_SchlickRoughness(NoV, F0, roughness, F90);
     float3 kD_a = (1.0f.xxx - F_a) * (1.0f - metallic);
 
     // Clear coat layer (material): own roughness, geometric normal.
@@ -703,7 +705,7 @@ LocalProbeIBL localProbes;
             if (probeCount != 0u)
                 prefilt = localProbes.specular + prefilt * localProbes.remaining;
             float2 brdfSamp = tBRDFLut.Sample(sClamp, float2(NoV, roughness)).rg;
-            iblSpecularWeight = (F_a * brdfSamp.x + brdfSamp.y) * energyCompensation;
+            iblSpecularWeight = (F_a * brdfSamp.x + F90 * brdfSamp.y) * energyCompensation;
             iblSpecular = prefilt * iblSpecularWeight;
         }
     }
@@ -914,7 +916,7 @@ LocalProbeIBL localProbes;
             {
                 const GpuShadowViewData shadowView = shadowViews[shadowViewIndexSel];
                 KromPreparePcss(shadowView.viewProj, shadowView.rect, IN.positionWS, L);
-                shadowVisibility = SampleShadowAtlas(shadowPosLCS, shadowBiasSel, shadowStrengthSel, shadowView.rect);
+                shadowVisibility = SampleShadowAtlas(shadowPosLCS, shadowBiasSel, shadowStrengthSel, shadowView.rect, shadowView.viewProj);
             }
         }
         // Contact shadows multiply onto the shadow map of the main light only.
@@ -938,12 +940,12 @@ LocalProbeIBL localProbes;
         {
             const float LoH_i = saturate(dot(SafeNormalize(V + L), L));
             if (shadingPerLightDiffuseFresnel)
-                kD_i = (1.0f.xxx - F_Schlick(LoH_i, F0)) * (1.0f - metallic);
+                kD_i = (1.0f.xxx - F_Schlick(LoH_i, F0, F90)) * (1.0f - metallic);
             if (shadingBurleyDiffuse)
                 diffuseShape = KromBurleyDiffuseFactor(NoV, NoL_i, LoH_i, roughness);
         }
         float3 lightDiffuse = (kD_i * albedoValue * (diffuseShape / PI)) * NoL_i * lightColor;
-        float3 lightSpecular = EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness) * energyCompensation * lightColor;
+        float3 lightSpecular = EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness, specular) * energyCompensation * lightColor;
         if (coatStrength > 0.0f)
         {
             float coatF;

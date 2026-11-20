@@ -1,5 +1,6 @@
 #include "addons/animation/AnimationComponents.hpp"
 #include "TestFramework.hpp"
+#include <limits>
 
 
 
@@ -6063,6 +6064,48 @@ static void TestLiveScriptInspectorValues(test::TestContext& ctx)
     CHECK(ctx, !ReadLiveEditorScriptField(editor, instance, fields[0], value));
 }
 
+static void TestPbrSpecularMaterialInput(test::TestContext& ctx)
+{
+    using Node = assets::MaterialNodeType;
+    assets::AssetRegistry registry;
+    assets::AssetPipeline pipeline(registry);
+    const auto old = pipeline.LoadMaterialSource("template pbr-lit\nmetallicFactor 0\nroughnessFactor 0.5\n");
+    CHECK(ctx, old.IsValid());
+    CHECK_EQ(ctx, registry.materials.Get(old)->PbrSpecular(), 0.5f);
+    assets::MaterialAsset material;
+    material.templateName = "pbr-lit";
+    material.specularFactor = 0.25f;
+    const auto loaded = pipeline.LoadMaterialSource(assets::SerializeMaterialProperties(material));
+    CHECK_EQ(ctx, registry.materials.Get(loaded)->PbrSpecular(), 0.25f);
+    material.specularFactor = -1.f;
+    CHECK_EQ(ctx, material.PbrSpecular(), 0.f);
+    material.specularFactor = 2.f;
+    CHECK_EQ(ctx, material.PbrSpecular(), 1.f);
+    material.specularFactor = std::numeric_limits<float>::quiet_NaN();
+    CHECK_EQ(ctx, material.PbrSpecular(), 0.5f);
+    material.specularFactor = 0.5f;
+    material.graph.nodes = {{1, Node::Value, 0, 0, {0.75f, 0.f, 0.f}},
+                            {2, Node::Value, 0, 0, {0.5f, 0.f, 0.f}},
+                            {3, Node::Multiply, 1, 2}};
+    material.graph.specular = 1;
+    CHECK_EQ(ctx, material.PbrSpecular(), 0.75f);
+    CHECK_EQ(ctx, assets::CompileMaterialGraph(material.graph).specularOutput, -1);
+    CHECK_EQ(ctx, material.graph.CardValueMaximum(1), 1.f);
+    material.graph.specular = 3;
+    const auto graph = assets::CompileMaterialGraph(material.graph);
+    CHECK(ctx, graph.Active() && graph.specularOutput >= 0);
+    CHECK_EQ(ctx, graph.instructions[graph.specularOutput].w, 3.f);
+    const auto linked = pipeline.LoadMaterialSource(assets::SerializeMaterialProperties(material));
+    CHECK_EQ(ctx, registry.materials.Get(linked)->graph.specular, 3u);
+    CHECK_EQ(ctx, assets::CompileMaterialGraph(registry.materials.Get(linked)->graph).specularOutput, graph.specularOutput);
+    assets::MaterialGraph oldGraph;
+    oldGraph.specular = 99;
+    oldGraph.Read("graphOutputs 0 0 0 0 0 0 0 0 0 1 0 0");
+    CHECK_EQ(ctx, oldGraph.specular, 0u);
+    material.graph.specular = 99;
+    CHECK(ctx, !assets::CompileMaterialGraph(material.graph).valid);
+}
+
 int RunEditorCommandTests()
 
 {
@@ -6072,6 +6115,7 @@ int RunEditorCommandTests()
 
 
     test::TestSuite suite("EditorCommands");
+    suite.Add("PBR Specular input defaults, serialization and graph links", TestPbrSpecularMaterialInput);
     suite.Add("Hierarchy state and folder focus", TestHierarchyStateAndFolderFocus);
     suite.Add("Inspector reveals script asset in browser", TestInspectorRevealsScriptAsset);
     suite.Add("Inspector entity reference reveals target and preserves dropdown assignment", TestInspectorRevealsEntityReference);

@@ -86,6 +86,7 @@ struct MaterialGraph
     uint32_t orm = 0;
     uint32_t metallic = 0;
     uint32_t roughness = 0;
+    uint32_t specular = 0;
     uint32_t normalStrength = 0;
     uint32_t occlusion = 0;
     uint32_t emissiveStrength = 0;
@@ -146,7 +147,7 @@ struct MaterialGraph
     {
         if (id == 0)
             return 0.f;
-        if (id == metallic || id == roughness)
+        if (id == metallic || id == roughness || id == specular)
             return 1.f;
         if (id == normalStrength || id == occlusion)
             return 4.f;
@@ -174,7 +175,7 @@ struct MaterialGraph
         out << "graphOutputs " << baseColor << ' ' << emissive << ' ' << normal << ' ' << orm
             << ' ' << metallic << ' ' << roughness << ' ' << normalStrength << ' ' << occlusion
             << ' ' << emissiveStrength << ' ' << (rawMeshUV ? 1 : 0)
-            << ' ' << uvScaleLink << ' ' << uvOffsetLink << '\n';
+            << ' ' << uvScaleLink << ' ' << uvOffsetLink << ' ' << specular << '\n';
         for (const auto& node : nodes)
             out << "graphNode " << node.id << ' ' << static_cast<int>(node.type)
                 << ' ' << node.a << ' ' << node.b
@@ -194,6 +195,7 @@ struct MaterialGraph
         in >> key;
         if (key == "graphOutputs")
         {
+            specular = 0; // The appended field is absent in older material files.
             rawMeshUV = false; // set again by the trailing flag of newer files
             uint32_t base = 0, emission = 0;
             if (in >> base >> emission)
@@ -214,6 +216,8 @@ struct MaterialGraph
                     int raw = 0; // Absent in older files: their graphs saw the transformed UV.
                     rawMeshUV = (in >> raw) && raw == 1;
                     in >> uvScaleLink >> uvOffsetLink;
+                    if (uint32_t specularId = 0; in >> specularId)
+                        specular = specularId;
                 }
             }
         }
@@ -314,6 +318,7 @@ struct CompiledMaterialGraph
     std::array<bool, kMaterialGraphMaxTextures> textureLinear{}; // Used only as data, not as color.
     std::array<bool, kMaterialGraphMaxTextures> textureNormal{}; // Linear normal import, including DX green conversion.
     int normalOutput = -1; // Encoded tangent-space RGB; -1 keeps the direct normal texture.
+    int specularOutput = -1; // graphUV[7].w stores index + 1; zero keeps specularFactor.
     std::array<math::Vec4, kMaterialGraphMaxTextures> textureUV{
         math::Vec4{1.f, 1.f, 0.f, 0.f}, math::Vec4{1.f, 1.f, 0.f, 0.f},
         math::Vec4{1.f, 1.f, 0.f, 0.f}, math::Vec4{1.f, 1.f, 0.f, 0.f}}; // scale.xy, offset.xy
@@ -587,6 +592,8 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
     };
     const int metallic = perPixel(graph.metallic);
     const int roughness = perPixel(graph.roughness);
+    const int specular = perPixel(graph.specular);
+    result.specularOutput = specular;
     // Normal and ORM use their own texture bindings, and only need a UV instruction.
     const auto linkedUV = [&](uint32_t textureNode) -> int {
         const auto* node = graph.Find(textureNode);
@@ -612,7 +619,7 @@ inline CompiledMaterialGraph CompileMaterialGraph(const MaterialGraph& graph)
     const int directScale = visit(visit, graph.uvScaleLink);
     const int directOffset = visit(visit, graph.uvOffsetLink);
     result.directUVLinks = {static_cast<float>(directScale + 1), static_cast<float>(directOffset + 1)};
-    result.valid = base >= -1 && emission >= -1 && metallic >= -1 && roughness >= -1 &&
+    result.valid = base >= -1 && emission >= -1 && metallic >= -1 && roughness >= -1 && specular >= -1 &&
         normalOutput >= -1 && normalUV >= -1 && ormUV >= -1 && directScale >= -1 && directOffset >= -1;
     if (!result.valid && result.error == MaterialGraphError::None)
         result.error = MaterialGraphError::InvalidLink;

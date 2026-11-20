@@ -33,6 +33,12 @@ namespace {
     return ShadowViewport{0.f, 0.f, size, size};
 }
 
+[[nodiscard]] uint32_t ViewResolution(const ShadowRequest& request) noexcept
+{
+    return std::max(1u, request.effectiveResolution != 0u
+        ? request.effectiveResolution : request.settings.resolution);
+}
+
 [[nodiscard]] ShadowScissorRect MakeScissor(uint32_t resolution) noexcept
 {
     const uint32_t size = std::max(1u, resolution);
@@ -165,27 +171,43 @@ void ShadowViewBuilder::BuildDirectional(const LightComponent& light,
         for (const math::Vec3& c : corners)
             radius = std::max(radius, (c - sphereCenter).Length());
 
-        const uint32_t resolution = std::max(1u, outRequest.settings.resolution);
+        // Reserve a texel for center snapping and the PCF footprint. Quantizing
+        // the radius prevents floating point noise from resizing a stable slice.
+        const uint32_t resolution = ViewResolution(outRequest);
+        radius = std::ceil(radius * 16.f) / 16.f;
+        if (resolution > 4u)
+            radius *= static_cast<float>(resolution) / static_cast<float>(resolution - 4u);
         const float texelSize = (2.0f * radius) / static_cast<float>(resolution);
 
         // Zentrum entlang der Licht-XY-Achsen auf Texel-Grid einrasten.
-        const float cR = std::floor(math::Vec3::Dot(axisR, sphereCenter) / texelSize) * texelSize;
-        const float cU = std::floor(math::Vec3::Dot(axisU, sphereCenter) / texelSize) * texelSize;
+        const float cR = std::round(math::Vec3::Dot(axisR, sphereCenter) / texelSize) * texelSize;
+        const float cU = std::round(math::Vec3::Dot(axisU, sphereCenter) / texelSize) * texelSize;
         const float cF = math::Vec3::Dot(lightDir, sphereCenter);
         const math::Vec3 snappedCenter = axisR * cR + axisU * cU + lightDir * cF;
 
-        const float eyeDistance = std::max(radius * 2.5f, 10.0f);
+        // Include upstream casters in depth, including backends without depth
+        // clamp. A fixed radius*6 range both wasted precision and lost casters.
+        float minAlongLight = std::numeric_limits<float>::max();
+        float maxAlongLight = -std::numeric_limits<float>::max();
+        auto includeDepth = [&](const math::Vec3& corner)
+        {
+            const float distance = math::Vec3::Dot(lightDir, corner - snappedCenter);
+            minAlongLight = std::min(minAlongLight, distance);
+            maxAlongLight = std::max(maxAlongLight, distance);
+        };
+        for (const auto& corner : corners) includeDepth(corner);
+        std::array<math::Vec3, 8> casterCorners{};
+        BuildAABBCorners(SanitizeBounds(casterBoundsWorld), casterCorners);
+        for (const auto& corner : casterCorners) includeDepth(corner);
+        constexpr float kDepthMargin = 2.f;
+        const float eyeDistance = std::max(0.f, -minAlongLight) + kDepthMargin;
         const math::Vec3 eye = snappedCenter - lightDir * eyeDistance;
 
         ShadowView view{};
         view.view = math::Mat4::LookAtRH(eye, snappedCenter, lightUp0);
 
-        // Tiefenbereich aus Cascade-Ecken UND Szenen-Castern (für Caster, die vor
-        // der Cascade stehen und hineincasten) im Light-Space.
-        // Stable CSM depth range: do not resize from per-frame caster bounds.
-        const float zSpan = std::max(radius * 6.0f, 20.0f);
         view.nearPlane = 0.1f;
-        view.farPlane  = std::max(view.nearPlane + 1.0f, zSpan);
+        view.farPlane = std::max(view.nearPlane + 1.f, eyeDistance + maxAlongLight + kDepthMargin);
         view.proj = math::Mat4::OrthoRH(-radius, radius, -radius, radius, view.nearPlane, view.farPlane);
         FinalizeView(view, resolution);
         outRequest.views.push_back(view);
@@ -210,7 +232,14 @@ void ShadowViewBuilder::BuildDirectional(const LightComponent& light,
 
     const math::Vec3 dir = TransformForward(worldTransform);
     const math::Vec3 up = (std::fabs(dir.y) < 0.999f) ? math::Vec3::Up() : math::Vec3::Right();
-    const float eyeDistance = std::max(sceneRadius * 2.5f, 10.0f);
+    float eyeDistance = std::max(sceneRadius * 2.5f, 10.0f);
+    if (hasReceiverBounds)
+    {
+        std::array<math::Vec3, 8> casterCorners{};
+        BuildAABBCorners(SanitizeBounds(casterBoundsWorld), casterCorners);
+        for (const auto& corner : casterCorners)
+            eyeDistance = std::max(eyeDistance, -math::Vec3::Dot(dir, corner - sceneCenter) + 2.f);
+    }
     const math::Vec3 eye = sceneCenter - dir * eyeDistance;
 
     ShadowView view{};
@@ -248,7 +277,7 @@ void ShadowViewBuilder::BuildDirectional(const LightComponent& light,
 
     constexpr float kXYMargin = 0.5f;
     constexpr float kZMargin = 2.0f;
-    const uint32_t resolution = std::max(1u, outRequest.settings.resolution);
+    const uint32_t resolution = ViewResolution(outRequest);
     const float worldUnitsPerTexelX = ((extentX * 2.0f) + (kXYMargin * 2.0f)) / static_cast<float>(resolution);
     const float worldUnitsPerTexelY = ((extentY * 2.0f) + (kXYMargin * 2.0f)) / static_cast<float>(resolution);
     const float snappedCenterX = std::round(centerX / worldUnitsPerTexelX) * worldUnitsPerTexelX;
@@ -283,7 +312,7 @@ void ShadowViewBuilder::BuildSpot(const LightComponent& light,
     view.farPlane = std::max(1.0f, maxShadowDistance);
     const float fovRadians = std::max(light.spotOuterDeg * 2.0f * math::DEG_TO_RAD, 0.1f);
     view.proj = math::Mat4::PerspectiveFovRH(fovRadians, 1.0f, view.nearPlane, view.farPlane);
-    FinalizeView(view, std::max(1u, outRequest.settings.resolution));
+    FinalizeView(view, ViewResolution(outRequest));
     outRequest.views.push_back(view);
 }
 
@@ -297,7 +326,7 @@ void ShadowViewBuilder::BuildPoint(const LightComponent& light,
     // Konsistent mit BuildSpot: farPlane = maxDistance, nicht range-limitiert.
     const float farPlane = std::max(1.0f, maxShadowDistance);
     const math::Mat4 proj = math::Mat4::PerspectiveFovRH(math::HALF_PI, 1.0f, nearPlane, farPlane);
-    const uint32_t resolution = std::max(1u, outRequest.settings.resolution);
+    const uint32_t resolution = ViewResolution(outRequest);
 
     static const std::array<math::Vec3, 6> kDirections = {
         math::Vec3{ 1.f,  0.f,  0.f},

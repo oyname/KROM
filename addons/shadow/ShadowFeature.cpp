@@ -70,7 +70,9 @@ struct alignas(16) GpuShadowViewData
     // constantFactor bleibt 0: auf DX11+D32_FLOAT ist DepthBias ein INT und
     // hat bei Float-Tiefenpuffern keine Wirkung; Vulkan/GL wuerden abweichende
     // Einheiten benoetigen.
-    return { .constantFactor = 0.0f, .slopeFactor = 3.0f };
+    // One slope unit covers rasterization error. Three units pushed wall
+    // surfaces several texels away and exposed joints in distant cascades.
+    return { .constantFactor = 0.0f, .slopeFactor = 1.0f };
 }
 
 [[nodiscard]] float AdjustShadowReceiverBias(const engine::renderer::IDevice* device,
@@ -169,8 +171,12 @@ public:
                 shadow->atlasViewCountHint);
             const uint32_t gridDim = std::max(1u, static_cast<uint32_t>(
                 std::ceil(std::sqrt(static_cast<float>(atlasViewCount)))));
-            const float tileScale = 1.0f / static_cast<float>(gridDim);
             const uint32_t activeShadowResolution = context.GetActiveShadowResolution();
+            // Match the integer-sized viewport tiles, including capped atlas
+            // sizes that are not divisible by gridDim (e.g. 4096 / 3).
+            const uint32_t tileSize = std::max(1u, activeShadowResolution / gridDim);
+            const float tileScale = static_cast<float>(tileSize) /
+                                    static_cast<float>(std::max(1u, activeShadowResolution));
             const float atlasTexelSize = shadowViewCount > 0u && activeShadowResolution > 0u
                 ? (1.0f / static_cast<float>(activeShadowResolution))
                 : 0.0f;

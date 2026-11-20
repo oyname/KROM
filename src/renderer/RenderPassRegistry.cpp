@@ -25,17 +25,14 @@ RenderPassRegistry::RenderPassRegistry()
     editorGizmoLocks.cullModeLocked   = true;  editorGizmoLocks.cullModeValue   = CullMode::None;
 
     // Shadow: DepthTest und DepthWrite müssen ON sein — sonst keine Shadow Map.
-    // CullMode::Front (Front-Face-Culling) ist der Industriestandard gegen
-    // Peter-Panning: es werden die RÜCKseiten der Caster in die Shadow-Map
-    // gerendert, wodurch die gespeicherte Tiefe hinter dem Objekt liegt. Dadurch
-    // klebt der Schatten an der Objektkante (kein Durchscheinen am Kontaktpunkt)
-    // und Self-Shadow-Acne wandert ins Objektinnere. Funktioniert für solide,
-    // geschlossene Geometrie; rein einseitige (thin) Caster casten dann von ihrer
-    // Rückseite — für übliche Wände/Boxen ist das korrekt.
+    // Store the nearest surface from either side. Rendering only back faces
+    // stores the far wall surface and opens light leaks at wall/floor joints;
+    // single-sided walls can disappear altogether. Receiver and raster bias
+    // handle acne without discarding the actual occluding surface.
     PassLocks shadowLocks{};
     shadowLocks.depthTestLocked  = true;  shadowLocks.depthTestValue  = true;
     shadowLocks.depthWriteLocked = true;  shadowLocks.depthWriteValue = true;
-    shadowLocks.cullModeLocked   = true;  shadowLocks.cullModeValue   = CullMode::Front;
+    shadowLocks.cullModeLocked   = true;  shadowLocks.cullModeValue   = CullMode::None;
 
     m_passes = {
         { StandardRenderPasses::Opaque(),      "forward.opaque",      RenderPassSortMode::FrontToBack,    {} },

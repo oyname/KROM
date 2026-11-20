@@ -288,6 +288,7 @@ struct MaterialAsset : AssetBase
     math::Vec4                baseColorFactor{1.f, 1.f, 1.f, 1.f};
     float                     metallicFactor  = 1.f;
     float                     roughnessFactor = 1.f;
+    float                     specularFactor = 0.5f; // Unreal convention: dielectric F0 = 0.08 * specular.
     math::Vec3                emissiveFactor{0.f, 0.f, 0.f};
     float                     emissiveStrength = 1.f;
     float                     alphaCutoff = 0.5f;
@@ -314,6 +315,11 @@ struct MaterialAsset : AssetBase
 
     [[nodiscard]] float PbrMetallic() const { return graph.ResolveValue(graph.metallic, metallicFactor, 1.f); }
     [[nodiscard]] float PbrRoughness() const { return graph.ResolveValue(graph.roughness, roughnessFactor, 1.f); }
+    [[nodiscard]] float PbrSpecular() const
+    {
+        const float value = graph.ResolveValue(graph.specular, specularFactor, 1.f);
+        return std::isfinite(value) ? std::clamp(value, 0.f, 1.f) : 0.5f;
+    }
     [[nodiscard]] float PbrNormalStrength() const { return graph.ResolveValue(graph.normalStrength, normalScale, 4.f); }
     [[nodiscard]] float PbrOcclusion() const { return graph.ResolveValue(graph.occlusion, occlusionStrength, 4.f); }
     [[nodiscard]] float PbrEmissiveStrength() const { return graph.ResolveValue(graph.emissiveStrength, emissiveStrength, kHardScalarMaximum); }

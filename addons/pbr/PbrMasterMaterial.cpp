@@ -175,6 +175,7 @@ MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
     //   float  boxTileSize     @ 104 (0 = mesh UVs)
     //   float  clearcoatFactor @ 108 (0 = no clear coat layer)
     //   float  clearcoatRoughness @ 112
+    //   float  specularFactor @ 116 (graph remains aligned to 128)
     desc.parameters = {
         MakeVec4Param("baseColorFactor",    {1.f, 1.f, 1.f, 1.f}),
         MakeVec4Param("emissiveFactor",     {0.f, 0.f, 0.f, 0.f}),
@@ -197,6 +198,7 @@ MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
         MakeFloatParam("boxTileSize",       0.0f),
         MakeFloatParam("clearcoatFactor",   0.0f),
         MakeFloatParam("clearcoatRoughness", 0.0f),
+        MakeFloatParam("specularFactor",    0.5f),
         MakeTextureParam("albedo"),
         MakeTextureParam("normal"),
         MakeTextureParam("orm"),

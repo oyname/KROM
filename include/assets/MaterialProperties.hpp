@@ -54,6 +54,8 @@ inline std::string SerializeMaterialProperties(const assets::MaterialAsset& asse
         << asset.emissiveFactor.z << "\n";
     out << "metallicFactor " << asset.metallicFactor << "\n";
     out << "roughnessFactor " << asset.roughnessFactor << "\n";
+    if (asset.templateName == "pbr-lit")
+        out << "specularFactor " << asset.specularFactor << "\n";
     out << "normalScale " << asset.normalScale << "\n";
     out << "occlusionStrength " << asset.occlusionStrength << "\n";
     out << "emissiveStrength " << asset.emissiveStrength << "\n";

@@ -183,6 +183,7 @@ struct EditorState
     std::string            environmentTexturePath;
     float                  environmentIntensity        = 0.2f;
     bool                   environmentEnableIBL        = false;  // IBL-Beleuchtung (Irradiance/Prefilter)
+    bool                   environmentRemoveSunFromLighting = true;
     bool                   showSkyboxBackground        = false;  // Skybox-Cubemap als sichtbarer Hintergrund
     std::array<float, 4>   backgroundColor             = {0.0f, 0.0f, 0.0f, 1.0f};
     math::Vec3             ambientColor                = {0.06f, 0.06f, 0.08f};
@@ -408,7 +409,7 @@ struct EditorFrameContext
     std::function<void()> resetProjectSettingsDraft;
     std::function<bool(const ProjectSettings&)> saveProjectSettings;
     std::function<void()> syncSceneState;
-    std::function<bool(const std::string&, float, bool)> setEditorEnvironment;
+    std::function<bool(const std::string&, float, bool, bool)> setEditorEnvironment;
     std::function<void()> clearEditorEnvironment;
     std::function<void(const math::Vec3&, float)> setEditorAmbientLight;
     std::function<void(const std::array<float, 4>&)> setEditorBackgroundColor;
@@ -449,8 +450,8 @@ struct EditorFrameContext
     // laeuft; danach den Bericht (eine Zeile je Werkzeug) und ob alles gefunden wurde.
     std::function<void(const EditorPreferences&)> startBuildToolsCheck;
     std::function<bool(std::string& report, bool& ok)> buildToolsCheckResult;
-    // Ordner, in dem CMake Projekte findet (<Engine>/projects). Nur dort bekommt ein
-    // Projekt Runtime-Targets — Play und Export funktionieren sonst nicht.
+    // Vorgabe fuer Projektlisten und neue Projekte (<Engine>/projects).
+    // Projekte koennen auch in anderen Verzeichnissen liegen.
     std::string projectsRootDirectory;
     std::string           lastFileMessage;
     std::string           currentProjectName;
