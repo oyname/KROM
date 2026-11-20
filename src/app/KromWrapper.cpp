@@ -1105,6 +1105,7 @@ engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(State& state,
     TextureHandle emissiveTex = LoadRuntimeTexture(state, asset.emissiveTexture.path);
 
     auto builder = master.CreateInstance(name ? name : "KromPBR");
+    builder.Specular(asset.PbrSpecular());
     if (baseColorTex.IsValid()) builder.BaseColor(baseColorTex);
     else builder.BaseColor(asset.baseColorFactor);
 

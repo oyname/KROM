@@ -54,6 +54,10 @@ inline constexpr SlotDef kSlots[] = {
       ShaderVariantFlag::ChannelMap,
       "orm",       "metallicFactor",  "metallicChannel",   "metallicBias",  nullptr,          "metallicFactor"  },
 
+    { "specular", "Specular", PbrSlotDesc::DataType::Float, false, {0.5f,0,0,0}, {0,0,0,0}, {1,1,1,1},
+      ShaderVariantFlag::None,
+      nullptr, nullptr, nullptr, nullptr, nullptr, "specularFactor" },
+
     { "occlusion", "Occlusion",  PbrSlotDesc::DataType::Float, true, {1,0,0,0},    {0,0,0,0}, {1,1,1,1},
       ShaderVariantFlag::ChannelMap,
       "orm",       "occlusionStrength","occlusionChannel", "occlusionBias", nullptr,          "occlusionStrength"},

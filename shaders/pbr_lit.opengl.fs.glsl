@@ -72,6 +72,7 @@ layout(std140) uniform PerMaterial
     float  boxTileSize;
     float  clearcoatFactor;     // layout only: OpenGL (frozen) renders no clear coat
     float  clearcoatRoughness;
+    float  specularFactor;      // byte 116; 0.5 = dielectric F0 0.04
 #ifdef KROM_MATERIAL_GRAPH
     vec4 graphOutputs;
     vec4 graphNodes[16];
@@ -149,14 +150,16 @@ float G_Smith(float NoV, float NoL, float roughness)
     return G_SchlickGGX(NoV, roughness) * G_SchlickGGX(NoL, roughness);
 }
 
-vec3 F_Schlick(float HoV, vec3 F0)
+#include "pbr_specular.opengl.glsl"
+
+vec3 F_Schlick(float HoV, vec3 F0, float F90)
 {
-    return F0 + (1.0 - F0) * pow(1.0 - HoV, 5.0);
+    return F0 + (F90 - F0) * pow(1.0 - HoV, 5.0);
 }
 
-vec3 F_SchlickRoughness(float NoV, vec3 F0, float roughness)
+vec3 F_SchlickRoughness(float NoV, vec3 F0, float roughness, float F90)
 {
-    vec3 inv = max(vec3(1.0 - roughness), F0);
+    vec3 inv = max(vec3((1.0 - roughness) * F90), F0);
     return F0 + (inv - F0) * pow(1.0 - NoV, 5.0);
 }
 
@@ -466,7 +469,7 @@ float SampleShadowAtlas(vec4 positionLightCS, float biasValue, float strengthVal
     return mix(1.0, visibility, clamp(strengthValue, 0.0, 1.0));
 }
 
-vec3 EvalSpecularGGX(vec3 N, vec3 V, vec3 L, vec3 albedoValue, float metallic, float roughness)
+vec3 EvalSpecularGGX(vec3 N, vec3 V, vec3 L, vec3 albedoValue, float metallic, float roughness, float specularLevel)
 {
     float NoL = max(dot(N, L), 0.0);
     if (NoL <= 0.0)
@@ -482,8 +485,9 @@ vec3 EvalSpecularGGX(vec3 N, vec3 V, vec3 L, vec3 albedoValue, float metallic, f
     float NoH = max(dot(N, H), 0.0);
     float HoV = clamp(dot(H, V), 0.0, 1.0);
 
-    vec3 F0 = mix(vec3(0.04), albedoValue, metallic);
-    vec3 F = F_Schlick(HoV, F0);
+    vec3 F0 = KromSpecularF0(albedoValue, metallic, specularLevel);
+    float F90 = KromSpecularF90(metallic, specularLevel);
+    vec3 F = F_Schlick(HoV, F0, F90);
     float D = D_GGX(NoH, roughness);
     if (shadingHeightCorrelatedVisibility)
     {
@@ -549,6 +553,7 @@ void main()
     // --- ORM / Channel-Map ---
     float metallic  = clamp(metallicFactor,  0.0, 1.0);
     float roughness = clamp(roughnessFactor, 0.0, 1.0);
+    float specular = clamp(specularFactor, 0.0, 1.0);
     float ao        = 1.0;
 #ifdef KROM_ORM_MAP
     vec3 ormSample = texture(orm, ormUV).rgb;
@@ -567,6 +572,7 @@ void main()
 #ifdef KROM_MATERIAL_GRAPH
     metallic  = KromGraphMetallic(metallic);
     roughness = KromGraphRoughness(roughness);
+    specular = KromGraphSpecular(specular);
 #endif
     roughness = clamp(roughness, 0.04, 1.0);
 
@@ -589,8 +595,9 @@ void main()
     // --- View / BRDF-Basisgroessen ---
     vec3  V   = SafeNormalize(cameraPositionWS.xyz - vPositionWS);
     float NoV = max(dot(N, V), 1e-4);
-    vec3  F0  = mix(vec3(0.04), albedoValue, metallic);
-    vec3  F_a = F_SchlickRoughness(NoV, F0, roughness);
+    vec3  F0  = KromSpecularF0(albedoValue, metallic, specular);
+    float F90 = KromSpecularF90(metallic, specular);
+    vec3  F_a = F_SchlickRoughness(NoV, F0, roughness, F90);
     vec3  kD_a = (vec3(1.0) - F_a) * (1.0 - metallic);
 
     // Multi-scatter energy compensation for the specular lobes (shading option).
@@ -633,7 +640,7 @@ void main()
             if (probeCount != 0u)
                 prefilt = localProbes.specular + prefilt * localProbes.remaining;
             vec2 brdfSamp = texture(tBRDFLut, vec2(NoV, roughness)).rg;
-            iblSpecular   = prefilt * (F_a * brdfSamp.x + brdfSamp.y) * energyCompensation;
+            iblSpecular   = prefilt * (F_a * brdfSamp.x + F90 * brdfSamp.y) * energyCompensation;
         }
     }
 #else
@@ -769,9 +776,9 @@ void main()
         // Diffuse weight: view-angle Fresnel for all lights, or per light from the half vector.
         vec3 kD_i = kD_a;
         if (shadingPerLightDiffuseFresnel)
-            kD_i = (vec3(1.0) - F_Schlick(clamp(dot(SafeNormalize(V + L), V), 0.0, 1.0), F0)) * (1.0 - metallic);
+            kD_i = (vec3(1.0) - F_Schlick(clamp(dot(SafeNormalize(V + L), V), 0.0, 1.0), F0, F90)) * (1.0 - metallic);
         totalDirectDiffuse  += (kD_i * albedoValue / PI) * NoL_i * lightColor;
-        totalDirectSpecular += EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness) * energyCompensation * lightColor;
+        totalDirectSpecular += EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness, specular) * energyCompensation * lightColor;
     }
 
     // --- Emissive ---

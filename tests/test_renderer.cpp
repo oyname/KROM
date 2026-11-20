@@ -916,6 +916,7 @@ static void TestPbrMasterMaterial(test::TestContext& ctx)
         CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("boxTileSize"), 104u);
         CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("clearcoatFactor"), 108u);
         CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("clearcoatRoughness"), 112u);
+        CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("specularFactor"), 116u);
         CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("graphOutputs"), 128u);
         CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("graphNode7"), 256u);
 
@@ -944,6 +945,16 @@ static void TestPbrMasterMaterial(test::TestContext& ctx)
     const float metalVal = *reinterpret_cast<const float*>(cbData.data() + metalOff);
     CHECK(ctx, std::fabs(roughVal - 0.15f) < 1e-5f);
     CHECK(ctx, std::fabs(metalVal - 0.9f)  < 1e-5f);
+    const uint32_t specularOff = cbLayout.GetOffset("specularFactor");
+    CHECK_EQ(ctx, specularOff, 116u);
+    float defaultSpecular = 0.f;
+    std::memcpy(&defaultSpecular, cbData.data() + specularOff, sizeof(float));
+    CHECK_EQ(ctx, defaultSpecular, 0.5f);
+    const auto matte = master.CreateInstance("SpecularZero").Specular(0.f).Build();
+    CHECK(ctx, matte.IsValid());
+    float matteSpecular = 1.f;
+    std::memcpy(&matteSpecular, materials.GetCBData(matte).data() + specularOff, sizeof(float));
+    CHECK_EQ(ctx, matteSpecular, 0.f);
 
     // Same permutation must be served from cache (same base handle)
     MaterialHandle inst2 = master.CreateInstance("TestInst2")

@@ -33,6 +33,7 @@ cbuffer PerMaterial : register(b2)
     float  boxTileSize;
     float  clearcoatFactor;     // 0 = no clear coat layer (pbr_clearcoat.hlsl)
     float  clearcoatRoughness;
+    float  specularFactor;      // byte 116; 0.5 = dielectric F0 0.04
 #ifdef KROM_MATERIAL_GRAPH
     float4 graphOutputs;
     float4 graphNodes[16];

@@ -892,6 +892,8 @@
   "material.emissive": "Leuchtfarbe",
   "material.metallic": "Metallanteil",
   "material.roughness": "Rauheit",
+  "material.specular": "Specular",
+  "material.specular_tip": "Reflexionsstärke bei Nichtmetallen: 0 = aus, 0,5 = Standard (4 % F0), 1 = 8 % F0. Roughness steuert die Unschärfe. Metalle und Klarlack behalten ihre eigene Reflexion.",
   "material.normal_strength": "Normalenstärke",
   "material.occlusion": "Verdeckung",
   "material.clearcoat": "Klarlack",

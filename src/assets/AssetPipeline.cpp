@@ -724,6 +724,7 @@ namespace engine::assets {
             }
             else if (parts[0] == "metallicFactor" && parts.size() >= 2) loaded.metallicFactor = std::stof(parts[1]);
             else if (parts[0] == "roughnessFactor" && parts.size() >= 2) loaded.roughnessFactor = std::stof(parts[1]);
+            else if (parts[0] == "specularFactor" && parts.size() >= 2) loaded.specularFactor = std::stof(parts[1]);
             else if (parts[0] == "alphaCutoff" && parts.size() >= 2) loaded.alphaCutoff = std::stof(parts[1]);
             else if (parts[0] == "normalScale" && parts.size() >= 2) loaded.normalScale = std::stof(parts[1]);
             else if (parts[0] == "occlusionStrength" && parts.size() >= 2) loaded.occlusionStrength = std::stof(parts[1]);

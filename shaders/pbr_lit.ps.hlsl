@@ -99,6 +99,7 @@ cbuffer PerMaterial : register(b2)
     float  boxTileSize;
     float  clearcoatFactor;     // 0 = no clear coat layer (pbr_clearcoat.hlsl)
     float  clearcoatRoughness;
+    float  specularFactor;      // byte 116; 0.5 = dielectric F0 0.04
 #ifdef KROM_MATERIAL_GRAPH
     float4 graphOutputs;
     float4 graphNodes[16];
@@ -170,14 +171,16 @@ float G_Smith(float NoV, float NoL, float roughness)
     return G_SchlickGGX(NoV, roughness) * G_SchlickGGX(NoL, roughness);
 }
 
-float3 F_Schlick(float HoV, float3 F0)
+#include "pbr_specular.hlsl"
+
+float3 F_Schlick(float HoV, float3 F0, float F90)
 {
-    return F0 + (1.0f - F0) * pow(1.0f - HoV, 5.0f);
+    return F0 + (F90 - F0) * pow(1.0f - HoV, 5.0f);
 }
 
-float3 F_SchlickRoughness(float NoV, float3 F0, float roughness)
+float3 F_SchlickRoughness(float NoV, float3 F0, float roughness, float F90)
 {
-    float3 inv = max(float3(1.0f - roughness, 1.0f - roughness, 1.0f - roughness), F0);
+    float3 inv = max(((1.0f - roughness) * F90).xxx, F0);
     return F0 + (inv - F0) * pow(1.0f - NoV, 5.0f);
 }
 
@@ -528,7 +531,7 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
 
 #include "pbr_clearcoat.hlsl"
 
-float3 EvalSpecularGGX(float3 N, float3 V, float3 L, float3 albedoValue, float metallic, float roughness)
+float3 EvalSpecularGGX(float3 N, float3 V, float3 L, float3 albedoValue, float metallic, float roughness, float specularLevel)
 {
     float NoL = max(dot(N, L), 0.0f);
     if (NoL <= 0.0f)
@@ -544,8 +547,9 @@ float3 EvalSpecularGGX(float3 N, float3 V, float3 L, float3 albedoValue, float m
     float NoH = max(dot(N, H), 0.0f);
     float HoV = saturate(dot(H, V));
 
-    float3 F0 = lerp(float3(0.04f, 0.04f, 0.04f), albedoValue, metallic);
-    float3 F = F_Schlick(HoV, F0);
+    float3 F0 = KromSpecularF0(albedoValue, metallic, specularLevel);
+    float F90 = KromSpecularF90(metallic, specularLevel);
+    float3 F = F_Schlick(HoV, F0, F90);
     float D = D_GGX(NoH, roughness);
     if (shadingHeightCorrelatedVisibility)
         return max(D * V_SmithGGXCorrelated(NoV, NoL, roughness) * F * NoL, 0.0f.xxx);
@@ -626,6 +630,7 @@ float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
     // --- ORM / Channel-Map ---
     float metallic  = saturate(metallicFactor);
     float roughness = saturate(roughnessFactor);
+    float specular = saturate(specularFactor);
     float ao        = 1.0f;
 #ifdef KROM_ORM_MAP
     float3 ormSample = orm.Sample(sLinear, ormUV).rgb;
@@ -644,6 +649,7 @@ float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
 #ifdef KROM_MATERIAL_GRAPH
     metallic  = KromGraphMetallic(metallic);
     roughness = KromGraphRoughness(roughness);
+    specular = KromGraphSpecular(specular);
 #endif
     roughness = clamp(roughness, 0.04f, 1.0f);
 
@@ -666,8 +672,9 @@ float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
     // --- View / BRDF-Basisgroessen ---
     float3 V   = SafeNormalize(cameraPositionWS.xyz - IN.positionWS);
     float  NoV = max(dot(N, V), 1e-4f);
-    float3 F0  = lerp(float3(0.04f, 0.04f, 0.04f), albedoValue, metallic);
-    float3 F_a = F_SchlickRoughness(NoV, F0, roughness);
+    float3 F0  = KromSpecularF0(albedoValue, metallic, specular);
+    float F90 = KromSpecularF90(metallic, specular);
+    float3 F_a = F_SchlickRoughness(NoV, F0, roughness, F90);
     float3 kD_a = (1.0f.xxx - F_a) * (1.0f - metallic);
 
     // Clear coat layer (material): own roughness, geometric normal.
@@ -722,7 +729,7 @@ LocalProbeIBL localProbes;
             if (probeCount != 0u)
                 prefilt = localProbes.specular + prefilt * localProbes.remaining;
             float2 brdfSamp = tBRDFLut.Sample(sClamp, float2(NoV, roughness)).rg;
-            iblSpecularWeight = (F_a * brdfSamp.x + brdfSamp.y) * energyCompensation;
+            iblSpecularWeight = (F_a * brdfSamp.x + F90 * brdfSamp.y) * energyCompensation;
             iblSpecular     = prefilt * iblSpecularWeight;
         }
     }
@@ -947,12 +954,12 @@ LocalProbeIBL localProbes;
         {
             const float LoH_i = saturate(dot(SafeNormalize(V + L), L));
             if (shadingPerLightDiffuseFresnel)
-                kD_i = (1.0f.xxx - F_Schlick(LoH_i, F0)) * (1.0f - metallic);
+                kD_i = (1.0f.xxx - F_Schlick(LoH_i, F0, F90)) * (1.0f - metallic);
             if (shadingBurleyDiffuse)
                 diffuseShape = KromBurleyDiffuseFactor(NoV, NoL_i, LoH_i, roughness);
         }
         float3 lightDiffuse = (kD_i * albedoValue * (diffuseShape / PI)) * NoL_i * lightColor;
-        float3 lightSpecular = EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness) * energyCompensation * lightColor;
+        float3 lightSpecular = EvalSpecularGGX(N, V, L, albedoValue, metallic, roughness, specular) * energyCompensation * lightColor;
         if (coatStrength > 0.0f)
         {
             float coatF;

@@ -892,6 +892,8 @@
   "material.emissive": "Emissive",
   "material.metallic": "Metallic",
   "material.roughness": "Roughness",
+  "material.specular": "Specular",
+  "material.specular_tip": "Reflection strength for non-metals: 0 = off, 0.5 = default (4% F0), 1 = 8% F0. Roughness controls blur. Metals and clear coat keep their own reflectance.",
   "material.normal_strength": "Normal Strength",
   "material.occlusion": "Occlusion",
   "material.clearcoat": "Clear coat",

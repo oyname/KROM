@@ -1,6 +1,8 @@
 // Optionaler GPU-Test: --headless automatisiert, ohne Argumente sichtbare
 // ImGui-Anzeige fuer 40 s. Kein plattformspezifischer UI-Code.
 #include "app/KromEditorApp.hpp"
+#include <map>
+#include <numeric>
 #include "app/editor/EnginePaths.hpp"
 #include "app/editor/BuildTools.hpp"
 #include "addons/animation/AnimationComponents.hpp"
@@ -470,8 +472,152 @@ struct EditorLoadingSmokeTest final : IAppScene
     float materialIblSunPitch = 0.f;
     std::chrono::steady_clock::time_point materialIblStart{};
 
+    bool materialSpecularProbe = false;
+    bool materialSpecularReady = false;
+    assets::MaterialAsset materialSpecularOriginal;
+    std::map<std::string, std::vector<uint8_t>> materialSpecularPixels;
+
+    bool UpdateMaterialSpecular(AppSceneContext& context)
+    {
+        struct Stage { const char* name; uint32_t flags; float specular; float metallic = 0.f;
+                       float roughness = .5f; bool graph = false; };
+        static constexpr Stage stages[] = {
+            {"default-full", 0u, -1.f}, {"half-full", 0u, .5f},
+            {"half-ibl", renderer::DBG_VIEW_IBL_SPEC, .5f},
+            {"zero-ibl", renderer::DBG_VIEW_IBL_SPEC, 0.f},
+            {"one-ibl", renderer::DBG_VIEW_IBL_SPEC, 1.f},
+            {"graph-zero-ibl", renderer::DBG_VIEW_IBL_SPEC, 1.f, 0.f, .5f, true},
+            {"half-direct", renderer::DBG_VIEW_DIRECT_SPEC, .5f},
+            {"zero-direct", renderer::DBG_VIEW_DIRECT_SPEC, 0.f},
+            {"zero-diffuse", renderer::DBG_VIEW_IBL_DIFF, 0.f},
+            {"metal-zero", renderer::DBG_VIEW_IBL_SPEC, 0.f, 1.f},
+            {"metal-one", renderer::DBG_VIEW_IBL_SPEC, 1.f, 1.f},
+            {"rough-low", renderer::DBG_VIEW_IBL_SPEC, .5f, 0.f, .05f},
+            {"rough-high", renderer::DBG_VIEW_IBL_SPEC, .5f, 0.f, 1.f},
+            {"zero-full", 0u, 0.f}, {"one-full", 0u, 1.f},
+            {"graph-zero-full", 0u, 1.f, 0.f, .5f, true},
+            {"f0-zero", renderer::DBG_VIEW_FRESNEL_F0, 0.f},
+            {"f0-half", renderer::DBG_VIEW_FRESNEL_F0, .5f},
+            {"f0-one", renderer::DBG_VIEW_FRESNEL_F0, 1.f},
+        };
+        auto& runtime = context.renderLoop.GetRenderSystem().GetShaderRuntime();
+        if (!materialIblConstants)
+        {
+            materialIblStart = std::chrono::steady_clock::now();
+            auto& registry = context.renderLoop.GetRenderSystem().GetFeatureRegistry();
+            materialIblConstants = std::make_shared<MaterialIblConstants>();
+            Check(registry.RegisterFrameConstantsContributor(*registry.GetFeatures().front(), materialIblConstants),
+                  "register specular material diagnostic");
+            renderer::addons::editor::OpenMaterialAsset(*app.m_editorFrameCtx,
+                app.GetCurrentAssetRoot() / "Materials/Weiss.mat");
+        }
+        if (std::chrono::steady_clock::now() - materialIblStart > std::chrono::minutes(5))
+        {
+            Check(false, "specular diagnostic completed within five minutes");
+            app.m_editorFrameCtx->state.selectedMaterialAssetDirty = false;
+            context.renderLoop.GetWindow()->RequestClose();
+            return true;
+        }
+        if (frames < 20 || !app.m_editorFrameCtx->state.selectedMaterialAssetLoaded || runtime.HasPendingShaderCompiles())
+        {
+            materialIblReadyFrames = 0;
+            return true;
+        }
+        auto applyStage = [&]() {
+            const auto& stage = stages[materialIblStage];
+            auto& state = app.m_editorFrameCtx->state;
+            auto& asset = state.selectedMaterialAssetData;
+            asset = materialSpecularOriginal;
+            asset.metallicFactor = stage.metallic;
+            asset.roughnessFactor = stage.roughness;
+            if (stage.specular >= 0.f) asset.specularFactor = stage.specular;
+            asset.clearcoatFactor = 0.f;
+            asset.graph.metallic = asset.graph.roughness = asset.graph.specular = 0u;
+            if (stage.graph)
+            {
+                using Node = assets::MaterialNodeType;
+                asset.graph.nodes.push_back({100, Node::Value, 0, 0, {0.f, 0.f, 0.f}});
+                asset.graph.nodes.push_back({101, Node::Value, 0, 0, {1.f, 1.f, 1.f}});
+                asset.graph.nodes.push_back({102, Node::Multiply, 100, 101});
+                asset.graph.specular = 102;
+            }
+            state.selectedMaterialAssetDirty = true;
+            state.tonemap.exposureMode = renderer::addons::forward::ExposureMode::Fixed;
+            state.tonemap.exposureEv = 0.f;
+            materialIblConstants->flags = stage.flags;
+            materialIblReadyFrames = 0;
+        };
+        if (!materialSpecularReady)
+        {
+            materialSpecularReady = true;
+            materialSpecularOriginal = app.m_editorFrameCtx->state.selectedMaterialAssetData;
+            Check(materialSpecularOriginal.PbrSpecular() == .5f, "old material defaults to Specular 0.5");
+            applyStage();
+            return true;
+        }
+        if (++materialIblReadyFrames < 8) return true;
+        auto* device = context.renderLoop.GetRenderSystem().GetDevice();
+        uint32_t width = 0u, height = 0u;
+        std::vector<uint8_t> pixels;
+        const auto texture = device->GetRenderTargetColorTexture(app.m_materialPreviewRT);
+        const bool read = device->ReadTexturePixels(texture, pixels, width, height)
+            && width > 0u && height > 0u && pixels.size() == static_cast<size_t>(width) * height * 4u;
+        Check(read, "specular GPU readback");
+        if (read)
+        {
+            std::ofstream output(materialIblCaptures / (std::string(stages[materialIblStage].name) + ".ppm"), std::ios::binary);
+            output << "P6\n" << width << ' ' << height << "\n255\n";
+            auto& sphere = materialSpecularPixels[stages[materialIblStage].name];
+            const float radius = width * .34f;
+            for (uint32_t y = 0u; y < height; ++y)
+                for (uint32_t x = 0u; x < width; ++x)
+                {
+                    const size_t index = (static_cast<size_t>(y) * width + x) * 4u;
+                    output.write(reinterpret_cast<const char*>(pixels.data() + index), 3);
+                    const float dx = static_cast<float>(x) - width * .5f;
+                    const float dy = static_cast<float>(y) - height * .5f;
+                    if (dx * dx + dy * dy < radius * radius)
+                        sphere.insert(sphere.end(), pixels.begin() + index, pixels.begin() + index + 3u);
+                }
+            Check(static_cast<bool>(output), stages[materialIblStage].name);
+        }
+        if (++materialIblStage == std::size(stages))
+        {
+            const auto energy = [&](const char* name) {
+                const auto& pixels = materialSpecularPixels.at(name);
+                return std::accumulate(pixels.begin(), pixels.end(), uint64_t{0});
+            };
+            const bool complete = materialSpecularPixels.size() == std::size(stages);
+            Check(complete, "all specular diagnostic images captured");
+            if (complete)
+            {
+                Check(energy("half-ibl") > 0u, "Specular 0.5 has environment reflection");
+                Check(energy("zero-ibl") == 0u, "Specular zero removes the complete environment lobe");
+                Check(energy("graph-zero-ibl") == 0u, "per-pixel graph zero removes environment reflection");
+                Check(energy("half-direct") > 0u, "direct-light specular reference is lit");
+                Check(energy("zero-direct") == 0u, "Specular zero removes direct specular");
+                Check(energy("zero-diffuse") > 0u, "diffuse HDR lighting remains enabled at Specular zero");
+                Check(energy("one-ibl") > energy("half-ibl"), "Specular one increases dielectric reflection");
+                Check(energy("f0-zero") == 0u && energy("f0-one") > energy("f0-half"), "dielectric F0 responds to Specular");
+                Check(materialSpecularPixels.at("default-full") == materialSpecularPixels.at("half-full"),
+                      "old material and explicit Specular 0.5 render identically");
+                Check(materialSpecularPixels.at("zero-full") == materialSpecularPixels.at("graph-zero-full"),
+                      "constant and per-pixel zero render identically");
+                Check(materialSpecularPixels.at("metal-zero") == materialSpecularPixels.at("metal-one"),
+                      "Specular does not change metal reflectance");
+                Check(materialSpecularPixels.at("rough-low") != materialSpecularPixels.at("rough-high"),
+                      "Roughness still changes reflection blur");
+            }
+            app.m_editorFrameCtx->state.selectedMaterialAssetDirty = false;
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        else applyStage();
+        return true;
+    }
+
     bool UpdateMaterialIbl(AppSceneContext& context)
     {
+        if (materialSpecularProbe) return UpdateMaterialSpecular(context);
         auto& runtime = context.renderLoop.GetRenderSystem().GetShaderRuntime();
         if (!materialIblConstants)
         {
@@ -2886,10 +3032,11 @@ int main(int argc, char** argv)
         test.autoExposureCaptures = engine::PathFromUtf8(argv[3]);
         std::filesystem::create_directories(test.autoExposureCaptures);
     }
-    if (argc > 3 && std::string_view(argv[1]) == "--material-ibl")
+    if (argc > 3 && (std::string_view(argv[1]) == "--material-ibl" || std::string_view(argv[1]) == "--material-specular"))
     {
         test.perfProject = argv[2];
         test.materialIblCaptures = engine::PathFromUtf8(argv[3]);
+        test.materialSpecularProbe = std::string_view(argv[1]) == "--material-specular";
         std::filesystem::create_directories(test.materialIblCaptures);
     }
     if (argc > 2 && std::string_view(argv[1]) == "--material-preview")

@@ -17,6 +17,40 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## PBR: Specular-Materialeingang (Codex, 2026-11-20)
+
+Auf ausdruecklichen Nutzerauftrag implementiert. Roughness steuert weiterhin die
+Unschaerfe; der neue Specular-Eingang steuert die Staerke der Basisreflexion von Nichtmetallen.
+
+- Materialgraph: Specular-Kartenfeld und verknuepfbarer Eingang (Wert oder per-pixel Graph).
+  Bereich 0..1, Standard 0.5. `specularFactor` wird in `.mat` und Overrides gespeichert;
+  alte Dateien ohne Feld behalten 0.5. Editor, AssetPipeline und Runtime-Wrapper verwenden
+  denselben Wert. C++-Builder: `.Specular(float)`.
+- Unreal-Konvention: dielektrisches F0 = 0.08 * Specular. 0.5 ergibt das bisherige F0 0.04.
+  Bei 0 verschwinden auch der Fresnel-Rand und der additive BRDF-LUT-Anteil. Dadurch
+  sind direkte Basisreflexion, globale/lokale IBL-Reflexion und SSR-Gewichtung bei Metallic 0
+  null; diffuses HDR-Licht bleibt erhalten. Metalle und die eigenstaendige Klarlackschicht
+  behalten ihre Reflexion. Specular ist kein Unschaerferegler.
+- CB: neues Float bei Byte 116 in vorhandener Auffuellung; `graphOutputs` bleibt bei 128.
+  Per-pixel Specular-Index (+1) in `graphUV[7].w`. Das Graph-Dateiformat haengt den neuen
+  Ausgang hinten an; alte Dateien bleiben lesbar. HLSL classic/Forward+ und GLSL sowie
+  die gemeinsamen GLSL-Blocklayouts sind angepasst.
+- Gesamter Debug-Testlauf: 481 Tests in 20 Suiten bestanden (Physik/Audio aus), einschliesslich
+  Material-Defaults, Speicherung, Bereichsgrenzen, Graph und CB-Layout. Alle Shader-Varianten
+  einschliesslich Normalgraph, Depth-Prepass und SSR kompilieren.
+- Optionaler GPU-Test `--material-specular <project.json> <capture-dir>`: 19 Aufnahmen pro
+  Backend, feste Belichtung, isolierte Vorschaukugel, Datei bleibt unveraendert. DX11,
+  Vulkan und OpenGL bestanden: Specular 0 wirklich schwarz in IBL-/Direkt-Specular, diffuses
+  HDR-Licht bleibt an, dynamischer Graph-Nullwert stimmt mit Konstantwert ueberein,
+  Metall bleibt unveraendert und Roughness aendert die Unschaerfe. Mit der echten
+  `studio.hdr` zusaetzlich auf DX11 bestanden.
+- Vergleich zum Stand vor diesem Eingang bei Standardwert 0.5: auf DX11 und Vulkan
+  die komplette Vorschau pixelgleich (mittlere absolute RGB8-Abweichung 0).
+  Debug-Editoren fuer alle drei Backends und Runtime-Wrapper gebaut.
+- Belege: `out/specular-tests.log`, `out/specular-{dx11,vulkan,opengl}.log`,
+  `out/specular-studio-dx11.log`. Bildvergleich links 0 / Mitte 0.5 / rechts 1:
+  `out/specular-studio-0-half-1.png`; Unschärfe: `out/specular-studio-roughness.png`.
+
 ## Sonne aus der IBL: Phase 0 (Codex, 2026-11-20)
 
 Auf ausdruecklichen Nutzerauftrag implementiert; die Rollenregel oben ist fuer diesen Auftrag aufgehoben.

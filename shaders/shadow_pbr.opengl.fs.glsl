@@ -31,6 +31,7 @@ layout(std140) uniform PerMaterial
     float  boxTileSize;
     float  clearcoatFactor;     // layout only: OpenGL (frozen) renders no clear coat
     float  clearcoatRoughness;
+    float  specularFactor;      // byte 116; 0.5 = dielectric F0 0.04
 #ifdef KROM_MATERIAL_GRAPH
     vec4 graphOutputs;
     vec4 graphNodes[16];
