@@ -328,6 +328,21 @@ void TestSeparateVisibleSkyAndLighting(test::TestContext& ctx)
     CHECK(ctx, std::fabs(MaximumCubeChannel(uniform.irradianceData) - math::PI) < .003f);
 }
 
+void TestProceduralSunOnlyInVisibleSky(test::TestContext& ctx)
+{
+    renderer::ProceduralSkyDesc sky{};
+    sky.sunAngularRadius = .15f;
+    sky.sunIntensity = 64.f;
+    const auto sun = renderer::IBLBaker::BakeFromProceduralSky(sky, 1.f, SunTestParams());
+    sky.sunIntensity = 0.f;
+    const auto noSun = renderer::IBLBaker::BakeFromProceduralSky(sky, 1.f, SunTestParams());
+    CHECK(ctx, sun.IsValid() && noSun.IsValid());
+    CHECK(ctx, sun.environmentData != noSun.environmentData);
+    CHECK_GT(ctx, MaximumCubeChannel(sun.environmentData), 20.f);
+    CHECK(ctx, sun.irradianceData == noSun.irradianceData);
+    CHECK(ctx, sun.prefilterData == noSun.prefilterData);
+}
+
 void TestInputHash(test::TestContext& ctx)
 {
     auto makeWorld = [](bool reversed, float meshX, ecs::World*& out, EntityID& outProbe,
@@ -511,6 +526,7 @@ int RunProbeTests()
         .Add("Diffuse irradiance filters high-frequency environments", TestDiffuseIrradianceFiltersHighFrequencyEnvironment)
         .Add("Pure sky bake measurements", TestPureSkyBakeMeasurements)
         .Add("Separate visible sky and lighting", TestSeparateVisibleSkyAndLighting)
+        .Add("Procedural sun only in visible sky", TestProceduralSunOnlyInVisibleSky)
         .Add("Input hash",                     TestInputHash)
         .Add("Fit box from scene triangles",   TestFitProbeBox)
         .Add("Probe data path",                TestProbeDataPath)

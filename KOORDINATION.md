@@ -51,6 +51,14 @@ Branch `codex/remove-sun-from-ibl`. Keine Aenderung der Filter oder der Material
 - Debug-Build erfolgreich, Probes-Suite 11/11 (`out/ibl-phase1-tests.log`).
   Vulkan-Vergleich der Phase 0 ebenfalls ohne Absturz abgeschlossen.
 
+### Phase 2: prozeduraler Himmel (2026-11-20)
+
+- `BuildProceduralSkyImage(sky, includeSun)` zeichnet die Scheibe nur fuer die sichtbare
+  Skybox. Gradient und Intensitaet bleiben in beiden Quellen identisch.
+- Test mit/ohne Sonnenscheibe: sichtbare Cubes verschieden, Irradiance und Prefilter
+  bytegleich. Bereits gemeinsam mit Phase 1 gebaut und getestet: Probes-Suite 12/12,
+  `out/ibl-phase12-tests.log`. Keine neue Cache-Version innerhalb dieser gemeinsamen Auslieferung.
+
 ## Windows-Release-SDK und Plattformgrenzen (Codex, 2026-11-20)
 
 Auf ausdruecklichen Nutzerauftrag implementiert. Die Sperren des nachfolgenden

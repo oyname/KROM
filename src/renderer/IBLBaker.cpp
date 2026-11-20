@@ -444,7 +444,7 @@ namespace engine::renderer {
             return img;
         }
 
-        [[nodiscard]] static FloatImage BuildProceduralSkyImage(const ProceduralSkyDesc& sky) noexcept
+        [[nodiscard]] static FloatImage BuildProceduralSkyImage(const ProceduralSkyDesc& sky, bool includeSun) noexcept
         {
             FloatImage img{ kSkySourceWidth, kSkySourceHeight,
                 std::vector<Float3>(static_cast<size_t>(kSkySourceWidth)*kSkySourceHeight) };
@@ -469,7 +469,7 @@ namespace engine::renderer {
                     else
                     { const float t = SmoothStep01(-d.y*4.f); color = horizon*(1.f-t)+ground*t; }
                     const float cosA = Dot(d, sunDir);
-                    if (cosA >= cosSunR)
+                    if (includeSun && cosA >= cosSunR)
                     {
                         const float rng = 1.f - cosSunR;
                         const float t   = (rng > 1e-6f) ? SmoothStep01((cosA-cosSunR)/rng) : 1.f;
@@ -817,10 +817,14 @@ namespace engine::renderer {
                                                    float intensity,
                                                    const IBLBakeParams& params)
     {
-        FloatImage source = BuildProceduralSkyImage(sky);
+        FloatImage source = BuildProceduralSkyImage(sky, true);
+        FloatImage lighting = BuildProceduralSkyImage(sky, false);
         if (intensity != 1.f)
+        {
             for (Float3& px : source.pixels) px *= intensity;
-        return BakeFromSource(source, source, params);
+            for (Float3& px : lighting.pixels) px *= intensity;
+        }
+        return BakeFromSource(source, lighting, params);
     }
 
     IBLBakedData IBLBaker::BakeFromCubeFaces(const float* rgbFaces,
