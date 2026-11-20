@@ -36,11 +36,20 @@ Branch `codex/remove-sun-from-ibl`. Keine Aenderung der Filter oder der Material
   Room 2s sichtbare Oberflaechen zeigen in Probe-Gewicht schwarz; keine flaechige Probe-Abdeckung.
   Kleine Szenendifferenzen enthalten auch Animation/Emissive; kein Beweis fuer Sonnenlicht aus Probes.
 - Debug-Build DX11/Vulkan/OpenGL-Libraries erfolgreich, kompletter Testlauf erfolgreich
-  (577 Tests in 20 Suiten; Physik/Audio aus). Zusaetzlicher Probes-Lauf 10/10.
+  (477 Tests in 20 Suiten; Physik/Audio aus). Zusaetzlicher Probes-Lauf 10/10.
   Messlogs und GPU-Bilder lokal unter `out/ibl-phase0-*`, `out/ibl-before-dx11-r1/`.
 - Codebefund fuer spaetere Probe-Arbeit: `ProbeCapture::Begin` uebernimmt `backgroundMode`
   der Basisansicht, zeichnet also gegebenenfalls die sichtbare Skybox. Phase 4 bleibt fuer
   den aktuellen Vorschau-Befund aus; neue Probe-Bakes mit sichtbarer Sonne gesondert beachten.
+
+### Phase 1: getrennte Quellen (2026-11-20)
+
+- `BakeFromSource` baut den sichtbaren Environment-Cube aus der Originalquelle und
+  Irradiance/Prefilter aus der bisherigen gefilterten Quelle. Materialshader unveraendert.
+- Globale Bake-Version 8 invalidiert Version 7. Synthetischer Sonnen-HDR behaelt eine
+  Spitze >20 im sichtbaren Himmel, der Prefilter bleibt <12; konstanter Himmel bleibt konstant.
+- Debug-Build erfolgreich, Probes-Suite 11/11 (`out/ibl-phase1-tests.log`).
+  Vulkan-Vergleich der Phase 0 ebenfalls ohne Absturz abgeschlossen.
 
 ## Windows-Release-SDK und Plattformgrenzen (Codex, 2026-11-20)
 

@@ -275,6 +275,59 @@ void TestPureSkyBakeMeasurements(test::TestContext& ctx)
     }
 }
 
+renderer::IBLBakeParams SunTestParams()
+{
+    renderer::IBLBakeParams params{};
+    params.environmentSize = 64u;
+    params.irradianceSize = 8u;
+    params.prefilterBaseSize = 32u;
+    params.prefilterMipCount = 4u;
+    params.prefilterSamples = 32u;
+    return params;
+}
+
+float MaximumCubeChannel(const std::vector<uint8_t>& bytes)
+{
+    float maximum = 0.f;
+    for (size_t i = 0u; i + 8u <= bytes.size(); i += 8u)
+    {
+        uint16_t h[4];
+        std::memcpy(h, bytes.data() + i, 8u);
+        for (int channel = 0; channel < 3; ++channel)
+            maximum = std::max(maximum, HalfToFloatTest(h[channel]));
+    }
+    return maximum;
+}
+
+assets::TextureAsset SyntheticSunTexture(bool sun)
+{
+    assets::TextureAsset texture{};
+    texture.width = 256u;
+    texture.height = 128u;
+    texture.format = assets::TextureFormat::RGBA16F;
+    texture.pixelData.resize(static_cast<size_t>(texture.width) * texture.height * 8u);
+    for (uint32_t y = 0u; y < texture.height; ++y)
+        for (uint32_t x = 0u; x < texture.width; ++x)
+        {
+            const uint16_t value = sun && x >= 125u && x < 131u && y >= 29u && y < 35u ? 0x5400u : 0x3C00u;
+            const uint16_t rgba[] = {value, value, value, 0x3C00u}; // radiance 64 or 1
+            std::memcpy(texture.pixelData.data() + (static_cast<size_t>(y) * texture.width + x) * 8u, rgba, 8u);
+        }
+    return texture;
+}
+
+void TestSeparateVisibleSkyAndLighting(test::TestContext& ctx)
+{
+    const auto baked = renderer::IBLBaker::BakeFromTexture(SyntheticSunTexture(true), 1.f, SunTestParams());
+    CHECK(ctx, baked.IsValid());
+    CHECK_GT(ctx, MaximumCubeChannel(baked.environmentData), 20.f);
+    CHECK(ctx, MaximumCubeChannel(baked.prefilterData) < 12.f);
+    const auto uniform = renderer::IBLBaker::BakeFromTexture(SyntheticSunTexture(false), 1.f, SunTestParams());
+    CHECK(ctx, std::fabs(MaximumCubeChannel(uniform.environmentData) - 1.f) < .001f);
+    CHECK(ctx, std::fabs(MaximumCubeChannel(uniform.prefilterData) - 1.f) < .001f);
+    CHECK(ctx, std::fabs(MaximumCubeChannel(uniform.irradianceData) - math::PI) < .003f);
+}
+
 void TestInputHash(test::TestContext& ctx)
 {
     auto makeWorld = [](bool reversed, float meshX, ecs::World*& out, EntityID& outProbe,
@@ -457,6 +510,7 @@ int RunProbeTests()
         .Add("Bake from cube faces",           TestBakeFromCubeFaces)
         .Add("Diffuse irradiance filters high-frequency environments", TestDiffuseIrradianceFiltersHighFrequencyEnvironment)
         .Add("Pure sky bake measurements", TestPureSkyBakeMeasurements)
+        .Add("Separate visible sky and lighting", TestSeparateVisibleSkyAndLighting)
         .Add("Input hash",                     TestInputHash)
         .Add("Fit box from scene triangles",   TestFitProbeBox)
         .Add("Probe data path",                TestProbeDataPath)

@@ -695,17 +695,21 @@ namespace engine::renderer {
         // Core bake (shared entry point)
         // =====================================================================
         [[nodiscard]] static IBLBakedData BakeFromEnvironmentCube(const FloatCubeImage& envCube,
-                                                                   const IBLBakeParams& params);
+                                                                   const IBLBakeParams& params,
+                                                                   const FloatCubeImage* visibleCube = nullptr);
 
-        [[nodiscard]] static IBLBakedData BakeFromSource(const FloatImage& source,
+        [[nodiscard]] static IBLBakedData BakeFromSource(const FloatImage& visible,
+                                                          const FloatImage& lighting,
                                                           const IBLBakeParams& params)
         {
-            const FloatCubeImage envCube = BuildEnvironmentCube(source, params.environmentSize, params.jobSystem);
-            return BakeFromEnvironmentCube(envCube, params);
+            const FloatCubeImage visibleCube = BuildEnvironmentCube(visible, params.environmentSize, params.jobSystem);
+            const FloatCubeImage lightingCube = BuildEnvironmentCube(lighting, params.environmentSize, params.jobSystem);
+            return BakeFromEnvironmentCube(lightingCube, params, &visibleCube);
         }
 
         [[nodiscard]] static IBLBakedData BakeFromEnvironmentCube(const FloatCubeImage& envCube,
-                                                                   const IBLBakeParams& params)
+                                                                   const IBLBakeParams& params,
+                                                                   const FloatCubeImage* visibleCube)
         {
             jobs::JobSystem* js = params.jobSystem;
 
@@ -719,7 +723,7 @@ namespace engine::renderer {
             const FloatCubeImage irrCube = BuildIrradianceCube(envMips,
                 params.irradianceSize, params.irradianceSamples, js);
 
-            data.environmentData = PackCubeRGBA16F(envCube);
+            data.environmentData = PackCubeRGBA16F(visibleCube ? *visibleCube : envCube);
             data.irradianceData  = PackCubeRGBA16F(irrCube);
 
             uint32_t mipSize = params.prefilterBaseSize;
@@ -797,7 +801,7 @@ namespace engine::renderer {
         FloatImage source = DecodeAsset(asset);
         if (intensity != 1.f)
             for (Float3& px : source.pixels) px *= intensity;
-        const FloatImage original = params.diagnostics ? source : FloatImage{};
+        const FloatImage original = source;
         if (params.diagnostics)
             params.diagnostics->source = MeasureSource(source, original);
         CompressDominantHighlightsForIBL(source);
@@ -806,7 +810,7 @@ namespace engine::renderer {
         RemoveDominantSunHotspotForIBL(source);
         if (params.diagnostics)
             params.diagnostics->lighting = MeasureSource(source, original);
-        return BakeFromSource(source, params);
+        return BakeFromSource(original, source, params);
     }
 
     IBLBakedData IBLBaker::BakeFromProceduralSky(const ProceduralSkyDesc& sky,
@@ -816,7 +820,7 @@ namespace engine::renderer {
         FloatImage source = BuildProceduralSkyImage(sky);
         if (intensity != 1.f)
             for (Float3& px : source.pixels) px *= intensity;
-        return BakeFromSource(source, params);
+        return BakeFromSource(source, source, params);
     }
 
     IBLBakedData IBLBaker::BakeFromCubeFaces(const float* rgbFaces,
