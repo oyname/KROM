@@ -305,6 +305,7 @@ private:
     bool m_initialized = false;
     // ImGui retains IniFilename until DestroyContext(), including its final save.
     std::string m_imguiIniPath;
+    std::filesystem::path m_lastRuntimeBuildDir;
     std::filesystem::path m_projectRoot;
     std::string           m_projectName;
     std::string           m_projectRuntimeTarget;

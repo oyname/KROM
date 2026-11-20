@@ -42,6 +42,88 @@ using renderer::addons::editor::Translate;
 
 struct EditorLoadingSmokeTest final : IAppScene
 {
+    bool sdkFlow = false;
+    int sdkStep = 0;
+    int sdkPlayFrames = 0;
+    bool sdkBuildOk = false;
+    std::chrono::steady_clock::time_point sdkStarted;
+    std::filesystem::path sdkProject;
+
+    int TestSdkProjectFlow()
+    {
+        const auto& paths = GetEnginePaths();
+        if (!paths.sdk || !paths.BuildsAvailable()) { std::printf("SDK unavailable: %s\n", paths.error.c_str()); return 1; }
+        KromEditorAppConfig config;
+        config.backend = SelectAppBackend();
+        config.visible = false;
+        config.enableDebugLayer = false;
+        if (!app.Initialize(config)) return 1;
+        sdkFlow = true;
+        sdkStarted = std::chrono::steady_clock::now();
+        Check(app.CreateEditorProject("SDKProbe", PathToUtf8(paths.userDataDir.parent_path()), config.backend), "create project with installed SDK");
+        sdkProject = app.m_projectRoot;
+        std::filesystem::create_directories(sdkProject / "Assets/Scripts");
+        std::ofstream(sdkProject / "Assets/Scripts/SdkProbe.hpp") <<
+            "#pragma once\n#include \"krom.h\"\nclass SdkProbe final : public engine::script::ComponentScript {\n"
+            "public: void OnUpdate(engine::script::IScriptContext&) override; };\n// KROM_SCRIPT(SdkProbe)\n";
+        std::ofstream(sdkProject / "Assets/Scripts/SdkProbe.cpp") <<
+            "#include \"SdkProbe.hpp\"\nvoid SdkProbe::OnUpdate(engine::script::IScriptContext& ctx) { ctx.SetPosition({4.f, 0.f, 0.f}); }\n";
+        const auto entity = renderer::addons::editor::CreateEmptyEntity(*app.m_editorFrameCtx, "SDK Probe");
+        app.m_world->Add<script::ScriptList>(entity).AddNameOnly("SdkProbe");
+        app.m_projectSettings.testBuild = 1;
+        Check(!app.m_editorFrameCtx->playGame() && app.m_editorFrameCtx->lastFileMessage == Translate("build.sdk_release_only"), "SDK rejects Debug before testbuild preparation");
+        app.m_projectSettings.testBuild = 3;
+        app.m_projectSettings.exportBuild = 1;
+        Check(!app.ExportProjectBuild() && app.m_editorFrameCtx->lastFileMessage == Translate("build.sdk_release_only"), "SDK rejects RelWithDebInfo export");
+        app.m_projectSettings.exportBuild = 0;
+        if (failures == 0) Check(app.Run(*this) == 0, "installed SDK editor loop completed");
+        app.Shutdown();
+        return failures ? 1 : 0;
+    }
+
+    bool UpdateSdkFlow(AppSceneContext& context)
+    {
+        if (std::chrono::steady_clock::now() - sdkStarted > std::chrono::minutes(10)) Check(false, "SDK flow timeout");
+        if (failures) {
+            if (app.m_editorFrameCtx) {
+                std::printf("SDK status: %s\n", app.m_editorFrameCtx->lastFileMessage.c_str());
+                for (const auto& line : app.m_editorState.consoleLogs) std::printf("%s\n", line.message.c_str());
+            }
+            context.renderLoop.GetWindow()->RequestClose(); return true;
+        }
+        if (app.m_runtimeBuildJob) return true;
+        if (sdkStep == 0) {
+            sdkStep = 1;
+            Check(app.StartEditorPlay(), "SDK starts project-local script build");
+        } else if (sdkStep == 1) {
+            Check(app.m_playActive && app.m_scriptModule.IsLoaded(), "SDK script DLL loads and Play starts");
+            if (++sdkPlayFrames < 5) return true;
+            const auto probe = FindPlayUiEntity("SDK Probe");
+            Check(probe.IsValid() && app.m_world->Get<TransformComponent>(probe)->localPosition.x == 4.f, "SDK script executes through editor ABI");
+            app.StopEditorPlay();
+            Check(!app.m_lastRuntimeBuildDir.empty() && app.m_lastRuntimeBuildDir.lexically_relative(sdkProject).begin()->string() == ".krom", "SDK build remains inside project/.krom");
+            sdkStep = 2;
+            Check(app.BuildAllScenes(), "SDK builds project scenes");
+            Check(app.StartRuntimeBuild({}, [this](bool ok) { sdkBuildOk = ok; }), "SDK starts runtime testbuild");
+        } else if (sdkStep == 2) {
+            Check(sdkBuildOk, "SDK runtime links imported Release libraries");
+            if (failures) return true;
+            sdkStep = 3; sdkBuildOk = false;
+            const auto exe = build::TargetPath(app.m_lastRuntimeBuildDir, "krom_runtime_" + app.m_projectRuntimeTarget + "_" +
+                (app.m_projectBackend == renderer::DeviceFactory::BackendType::DirectX11 ? "dx11" : "vulkan"));
+            Check(!exe.empty() && app.StartBuildJob("SDK runtime smoke", {{exe, {PathToUtf8(sdkProject / "krom-project.json"), "--warmup-shaders"}, sdkProject}},
+                [this](bool ok) { sdkBuildOk = ok; }, "SDK runtime smoke"), "SDK testbuild starts and renders project");
+        } else if (sdkStep == 3) {
+            Check(sdkBuildOk, "SDK testbuild completed");
+            sdkStep = 4;
+            Check(app.ExportProjectBuild(), "SDK starts Release export");
+        } else {
+            Check(app.m_editorFrameCtx->lastFileMessage.starts_with(Translate("export.success")), "SDK exported game starts and completes shader warmup");
+            context.renderLoop.GetWindow()->RequestClose();
+        }
+        return true;
+    }
+
     // Run a copy of this executable beside a test manifest. No GPU, compiler
     // discovery or real project is needed: the guards must run before all of it.
     int TestSdkBuildGuards()
@@ -2164,6 +2246,7 @@ struct EditorLoadingSmokeTest final : IAppScene
 
     bool Update(AppSceneContext& context, float) override
     {
+        if (sdkFlow) return UpdateSdkFlow(context);
         ++frames; // AppScene-Update ruht waehrend des Lade-Jobs.
         if (!autoExposureCaptures.empty())
             return UpdateAutoExposure(context);
@@ -2675,6 +2758,8 @@ struct EditorLoadingSmokeTest final : IAppScene
 int main(int argc, char** argv)
 {
     engine::app::EditorLoadingSmokeTest test;
+    if (argc > 1 && std::string_view(argv[1]) == "--sdk-project-flow")
+        return test.TestSdkProjectFlow();
     if (argc > 1 && std::string_view(argv[1]) == "--sdk-build-guards")
         return test.TestSdkBuildGuards();
     if (argc > 1 && std::string_view(argv[1]) == "--sdk-invalid-manifest")

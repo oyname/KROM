@@ -61,31 +61,25 @@ clearly rather than using development-tree or CWD fallbacks. Source and engine b
 paths are empty in SDK mode. With an open project, the existing project asset,
 scene and shader-cache paths are preserved.
 
-## Current capability
+## SDK v2
 
-This step does not yet ship an SDK. Script builds/loading, editor Play, runtime
-test builds and export are blocked in SDK mode with a translated message, before
-build preparation or export staging. Editing and saving project content remains
-available. Install rules, imported CMake targets, project generation, SDK ABI
-policy and the packaging script are separate follow-up steps. Compiler/ABI
-checks in source mode remain unchanged.
+A complete Release SDK uses `schemaVersion: 2` and additionally records
+`sdkBuildId` (64 hex digits), `system` (`Windows`), `architecture` (`x64`),
+`compilerFamily` (`MSVC`), `compilerVersion` (`_MSC_FULL_VER`, as a string),
+`standardLibrary` (`msvc`), `toolset`, `runtime` (`MD`) and `configuration`
+(`Release`). The manifest must match the editor binary. CMake package and project
+template must exist. V1 remains a path-only preview with builds disabled.
 
-## Verification
+V2 builds Script DLLs and runtimes against installed libraries with
+`find_package(Krom CONFIG REQUIRED)`. Build outputs are isolated under
+`<project>/.krom/build/<sdkBuildId-prefix>/win64/<compiler-version>/Release/`. No engine
+source build is involved. CMake writes actual target paths into
+`target-paths/Release/`; the editor reads these instead of guessing DLL/EXE names.
 
-- `krom_engine_paths_tests`: source-mode parity, both manifest locations and
-  precedence, malformed/unreadable manifests, relocation, foreign CWD, flat/bin
-  layouts, Unicode paths/escapes and separate writable destinations.
-- `krom_editor_loading_tests --sdk-build-guards`: run a **copy** of this test
-  executable beside a minimal manifest and empty assets/shaders/editor directories;
-  verifies editor build/reload guards
-  without initializing graphics or invoking tools.
-- `krom_editor_loading_tests --sdk-invalid-manifest`: run a copy beside an invalid
-  manifest; verifies startup fails before rendering initialization.
-- `krom_editor_loading_tests[_{dx11,opengl}] --ini-path`: initializes a hidden
-  editor and checks that ImGui saves to the user directory. Redirect
-  `LOCALAPPDATA` to a temporary Unicode path for an isolated check. This also
-  works with an SDK copy containing assets, shaders and editor resources.
-- Build all three editor backends to verify shared path and ImGui changes.
+Script loading verifies API version 7, SDK build ID, compiler family,
+architecture, pointer size, CRT, iterator-debug level and debug mode. The SDK
+allows the same or a newer compiler in the explicitly supported MSVC v143 range
+19.30 through 19.49. Source builds retain exact compiler matching. SDK Debug and
+RelWithDebInfo builds are rejected before preparing output.
 
-A complete read-only-installation test and a clean offline VM test remain part
-of the later SDK packaging acceptance test.
+See [SDK_DISTRIBUTION.md](SDK_DISTRIBUTION.md) for packaging and acceptance tests.

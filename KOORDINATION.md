@@ -17,6 +17,54 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Windows-Release-SDK und Plattformgrenzen (Codex, 2026-11-20)
+
+Auf ausdruecklichen Nutzerauftrag implementiert. Die Sperren des nachfolgenden
+Schritt-1-Eintrags gelten weiter fuer alte v1-Manifeste; ein vollstaendiges
+v2-Paket erlaubt Script, Play, Release-Testbuild und Release-Export.
+
+- `KROM_BUILD_SDK`: Windows x64 MSVC v143, Release /MD ohne IPO, /GL oder /LTCG.
+  `install()` exportiert Engine-/Jolt-Archive, Header, Runtime-Einstiegspunkte,
+  Ressourcen, Werkzeuge und Redistributables. `KromConfig.cmake` ist verschiebbar;
+  der Verbraucher braucht keinen Engine-Quellbaum und kein FetchContent.
+- Eine zentrale SDK-Vorlage verwendet `find_package(Krom)` und die gleichen
+  Projekt-Target-Helfer wie der Quellbaum. Der Editor baut unter
+  `<Projekt>/.krom/build/<SDK-ID-Praefix16>/win64/<Compiler>/Release`.
+  Die volle Build-ID bleibt in Manifest, CMake-Cache und Modul-ABI verbindlich.
+- ABI 7: Architektur, Compilerfamilie und SDK-Build-ID explizit. Nur im SDK-Modus
+  sind gleiche/neuere MSVC-Versionen innerhalb der festgelegten v143-Grenze
+  erlaubt; Quellbaum-Scriptmodule verlangen weiter die exakte Compiler-Version.
+  CRT-/Iterator-Debug-/API-Merkmale bleiben exakt.
+- Prozessstart liegt in `BuildProcess`; der Modul-Lader in
+  `platform/DynamicModule` (Win32/POSIX). CMake liefert Target-Pfade und Suffixe.
+  Inventar der Windows-Abhaengigkeiten und Entscheidungen zu Archiv 06.11.,
+  Punkt 4: `doc/SDK_DISTRIBUTION.md`. Kein Linux/macOS-SDK zugesagt.
+- Paketierung: `tools/package_sdk.cmd` / `.ps1`, optional mit lokalen
+  Jolt/miniaudio-Quellen komplett ohne Producer-Downloads. Paketierte Verbraucher
+  benoetigen weder diese Quellen noch ein installiertes Vulkan SDK.
+- Die Paketpruefung deckte zusaetzlich Windows-Pfadgrenzen beim DLL-Laden und
+  Compiler-Objekten, OEM-Codepage-Probleme in langen CMake-Nachbefehlen und falsche
+  Szenenpfade beim Export eines frisch angelegten Projekts auf; diese sind behoben.
+  Szenenreferenzen werden beim Wechsel von Assets nach Content passend umgebogen.
+- Quellbaum-Regressionspruefung: alle drei Debug-Editoren gebaut und gestartet;
+  41 Pfadchecks, Build-Werkzeuge, 14 ABI-Checks, v1-Sperren/defektes Manifest und
+  externer Script-/Play-/Reload-/Fehler-/Abbruch-/Projektwechsel-Test bestanden.
+  Logs: `out/sdk-source-regression-tests.log`, `out/sdk-source-abi-tests.log`.
+- Finale lokale Paketabnahme bestanden: `out/sdk/Krom-windows-x64-3ebb3defe82a.zip`
+  (74.145.287 Bytes, MSVC 194435228). Aus genau diesem ZIP in einen neuen
+  Umlautpfad entpackt, Installation per ACL schreibgeschuetzt und Engine-Quellen/
+  Ressourcen am Originalort verborgen. DX11 und Vulkan: neues Projekt, Script-DLL
+  bauen/laden/ausfuehren, Play, Runtime bauen/starten und Release-Export samt
+  Shader-Warmup. OpenGL: Start/ImGui-Benutzerpfad bestanden. Kein Installationsfile
+  veraendert; Ordner und Berechtigungen anschliessend wiederhergestellt.
+  Vulkan-SDK-Umgebung/DXC_PATH und Vulkan-SDK-PATH-Eintraege waren entfernt;
+  DXC/DLLs kommen auch fuer den Runtime-Test aus dem Paket. Logs:
+  `out/sdk-acceptance-final-{dx11,vulkan,opengl}.log`. SDK-Ninja-Regeln enthalten
+  kein /GL oder /LTCG. Finale Pfadchecks auch im Quellbaum bestanden.
+- Eine saubere VM mit wirklich getrenntem Netzwerk und ein realer neuerer
+  MSVC-Toolset (einschliesslich CRT-Pruefung) bleiben externe Abnahmepunkte;
+  lokale Isolation/Compiler-Simulationen ersetzen sie nicht.
+
 ## EnginePaths / SDK-Vorbereitung, Schritt 1 (Codex, 2026-11-20)
 
 Auf ausdruecklichen Nutzerauftrag implementiert. `app/editor/EnginePaths.{hpp,cpp}`

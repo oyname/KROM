@@ -53,6 +53,11 @@ int wmain(int argc, wchar_t** argv)
         return value ? 0 : 5;
     }
     if (argc > 1 && std::wstring(argv[1]) == L"--exit") return 17;
+    if (argc > 2 && std::wstring(argv[1]) == L"--launched")
+    {
+        std::ofstream(std::filesystem::path(argv[2])) << "launched";
+        return 0;
+    }
     if (argc > 1 && std::wstring(argv[1]) == L"--sleep")
     {
         std::this_thread::sleep_for(std::chrono::seconds(20));
@@ -62,6 +67,12 @@ int wmain(int argc, wchar_t** argv)
     const auto executable = std::filesystem::absolute(argv[0]);
     const auto copy = scratch.path / "test tool.exe";
     std::filesystem::copy_file(executable, copy);
+    const auto launchedFile = scratch.path / PathFromUtf8("launched Größe.txt");
+    Check(LaunchProcess({copy, {"--launched", PathToUtf8(launchedFile)}, scratch.path}).Succeeded(),
+          "runtime process launches directly with Unicode arguments");
+    for (int i = 0; i < 100 && !std::filesystem::exists(launchedFile); ++i)
+        std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    Check(std::filesystem::exists(launchedFile), "launched process survives the launcher handle closing");
     const std::vector<std::string> arguments = {"", "hello world", "Größe", "trailing\\", "two\\\\\"quotes", "& % ! ^ ( )"};
     ProcessCommand echo{copy, {"--echo"}, scratch.path};
     echo.arguments.insert(echo.arguments.end(), arguments.begin(), arguments.end());
@@ -126,6 +137,10 @@ int wmain(int argc, wchar_t** argv)
     const auto projectB = scratch.path / "Projekt B";
     std::filesystem::create_directory(projectA);
     std::filesystem::create_directory(projectB);
+    writeCache(preferred);
+    std::ofstream(scratch.path / "CMakeCache.txt", std::ios::app) << "CMAKE_HOME_DIRECTORY:INTERNAL=" << PathToGenericUtf8(projectA) << '\n';
+    Check(CheckBuildCache(scratch.path, fakeTools, key, detail, projectA), "unchanged template source retains cache");
+    Check(!CheckBuildCache(scratch.path, fakeTools, key, detail, projectB), "moved SDK template invalidates old CMake home directory");
     const auto projectCache = scratch.path / "project-cache";
     std::filesystem::create_directory(projectCache);
     auto selectProject = [&](const std::filesystem::path& cached, const std::filesystem::path& generated) {

@@ -52,9 +52,11 @@ bool ToolsetMatchesCompiler(const std::string& toolset, uint32_t compilerVersion
 std::filesystem::path FindBuildExecutable(const std::filesystem::path& preferred,
                                          const std::string& name, const std::string& searchPath);
 std::string EnvironmentValue(const std::vector<std::string>& environment, const std::string& name);
-bool CompilerCompatible(uint32_t editorVersion, uint32_t buildVersion, bool scriptBuild);
+bool CompilerCompatible(uint32_t editorVersion, uint32_t buildVersion, bool scriptBuild, bool sdkBuild = false);
+std::filesystem::path TargetPath(const std::filesystem::path& buildDirectory, const std::string& target);
 bool CheckBuildCache(const std::filesystem::path& buildDirectory, const BuildTools& tools,
-                     std::string& errorKey, std::string& detail);
+                     std::string& errorKey, std::string& detail,
+                     const std::filesystem::path& sourceDirectory = {});
 // Both the cache and the last successful CMake generate must select this project.
 // A failed configure may already have changed the cache while leaving old targets.
 bool ProjectNeedsConfigure(const std::filesystem::path& buildDirectory,

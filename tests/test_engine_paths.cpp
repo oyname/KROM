@@ -142,5 +142,13 @@ int main()
     const auto nestedExe = sdk / "nested/bin/Editor.exe";
     Check(!ResolveEnginePaths(nestedExe, user, documents).sdk, "manifest search stops after immediate parent");
     Check(CurrentExecutablePath().is_absolute(), "native executable detection returns absolute path");
+    EnginePaths ready;
+    ready.sdk = true;
+    ready.sdkBuildId = std::string(64, 'a');
+    const auto project = scratch.path / PathFromUtf8("Projekt Größe");
+    Check(ready.ProjectBuildDir(project, "14.44.35207") == project / ".krom/build" /
+        std::string(16, 'a') / "win64/14.44.35207/Release", "SDK build cache separates build ID, platform, toolset and Release");
+    Check(ready.ProjectBuildDir(project, "../escape").empty() && ready.ProjectBuildDir("relative", "14.44").empty(),
+          "SDK build cache rejects relative project roots and invalid toolset paths");
     return failures ? 1 : 0;
 }

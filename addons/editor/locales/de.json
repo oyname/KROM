@@ -1,4 +1,5 @@
 {
+  "build.sdk_release_only": "Dieses SDK unterstützt nur Release. Bitte Release für Testbuild und Export wählen.",
   "build.sdk_unavailable": "Script-Build, Play, Testbuild und Export sind im SDK-Modus noch nicht verfügbar.",
   "language.label": "Sprache / Language",
   "language.save_failed": "Die Spracheinstellung konnte nicht gespeichert werden.",

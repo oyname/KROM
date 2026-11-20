@@ -1,6 +1,7 @@
 #pragma once
 
 #include <filesystem>
+#include <cstdint>
 #include <string>
 
 namespace engine::app {
@@ -23,8 +24,13 @@ struct EnginePaths
     std::filesystem::path userDataDir;
     std::filesystem::path shaderCacheDir;
     std::filesystem::path standaloneScenesDir;
+    std::string sdkBuildId;
+    std::string sdkToolset;
+    uint32_t sdkCompilerVersion = 0;
 
-    [[nodiscard]] bool BuildsAvailable() const noexcept { return !sdk && error.empty(); }
+    [[nodiscard]] bool BuildsAvailable() const noexcept { return error.empty() && (!sdk || !sdkBuildId.empty()); }
+    [[nodiscard]] std::filesystem::path ProjectBuildDir(const std::filesystem::path& project,
+                                                       const std::string& toolset) const;
     [[nodiscard]] std::filesystem::path RuntimeBuildDir(const char* configuration) const;
     [[nodiscard]] std::filesystem::path ProjectBrowseDir() const;
 };

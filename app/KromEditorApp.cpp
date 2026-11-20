@@ -7,6 +7,7 @@
 #include "renderer/runtime/MaterialRuntimeDesc.hpp"
 #include "app/KromEditorApp.hpp"
 #include "app/editor/BuildTools.hpp"
+#include "BuildTargetNames.hpp"
 #include "app/editor/EnginePaths.hpp"
 #include "renderer/ShaderToolPaths.hpp"
 
@@ -190,13 +191,14 @@ std::string RuntimeTargetName(const std::string& runtimeTarget,
 std::string RuntimeExecutableName(const std::string& runtimeTarget,
                                   engine::renderer::DeviceFactory::BackendType backend)
 {
-    return SanitizeRuntimeTargetName(runtimeTarget) + "_" + RuntimeBackendId(backend) + ".exe";
+    return SanitizeRuntimeTargetName(runtimeTarget) + "_" + RuntimeBackendId(backend) + engine::app::build::ExecutableSuffix;
 }
 
 std::filesystem::path RuntimeExecutablePath(const std::filesystem::path& buildDir,
                                             const std::string& runtimeTarget,
                                             engine::renderer::DeviceFactory::BackendType backend)
 {
+    if (const auto path = engine::app::build::TargetPath(buildDir, RuntimeTargetName(runtimeTarget, backend)); !path.empty()) return path;
     return buildDir / "bin" / PathFromUtf8(RuntimeExecutableName(runtimeTarget, backend));
 }
 
@@ -471,13 +473,13 @@ bool PrepareRuntimeBuild(const std::string& runtimeTarget,
         return false;
     }
     const bool scriptBuild = !scriptTarget.empty();
-    if (scriptBuild && !std::filesystem::exists(buildDir / "CMakeCache.txt"))
+    if (!GetEnginePaths().sdk && scriptBuild && !std::filesystem::exists(buildDir / "CMakeCache.txt"))
     {
         AddEditorConsoleLog(editorState, engine::LogLevel::Error, Translate("build.editor_folder_missing"));
         return false;
     }
     outRequest = {};
-    outRequest.sourceDir = GetEnginePaths().engineSourceDir;
+    outRequest.sourceDir = GetEnginePaths().sdk ? GetEnginePaths().projectTemplateDir : GetEnginePaths().engineSourceDir;
     outRequest.buildDir = buildDir;
     if (!projectRoot.empty())
     {
@@ -511,7 +513,7 @@ std::string BuildLogText(std::string text, const std::string& detail = {})
 }
 
 // Build worker: discovers the tools and turns the request into process steps.
-bool ResolveRuntimeBuildCommands(const RuntimeBuildRequest& request,
+bool ResolveRuntimeBuildCommands(RuntimeBuildRequest& request,
                                  const std::function<void(engine::LogLevel, std::string)>& log,
                                  std::vector<engine::app::build::ProcessCommand>& commands)
 {
@@ -528,12 +530,21 @@ bool ResolveRuntimeBuildCommands(const RuntimeBuildRequest& request,
     const auto discovery = GetBuildTools(editorCompiler, request.toolOverrides);
     if (!discovery.Succeeded()) return fail(discovery.errorKey, discovery.detail);
     const auto& tools = discovery.tools;
-    if (editorCompiler && !CompilerCompatible(editorCompiler, tools.compilerVersion, request.scriptBuild))
+    const auto& paths = GetEnginePaths();
+    if (paths.sdk)
+    {
+        if (request.configuration != "Release") return fail("build.sdk_release_only");
+        request.buildDir = paths.ProjectBuildDir(request.projectRoot,
+            std::to_string(tools.compilerVersion));
+        if (request.buildDir.empty()) return fail("build.directory_failed");
+        request.editorOwnedBuildDir = true;
+    }
+    if (editorCompiler && !CompilerCompatible(editorCompiler, tools.compilerVersion, request.scriptBuild, paths.sdk))
         return fail(request.scriptBuild ? "build.script_compiler_mismatch" : "build.compiler_too_old",
             "Editor: " + std::to_string(editorCompiler) + ", MSVC: " + std::to_string(tools.compilerVersion));
     std::string key, detail;
     std::error_code ec;
-    if (!CheckBuildCache(request.buildDir, tools, key, detail))
+    if (!CheckBuildCache(request.buildDir, tools, key, detail, request.sourceDir))
     {
         if (!request.editorOwnedBuildDir) return fail(key, detail);
         // The editor created this folder itself (e.g. before a Visual Studio update):
@@ -565,6 +576,7 @@ bool ResolveRuntimeBuildCommands(const RuntimeBuildRequest& request,
                 "-DCMAKE_MAKE_PROGRAM=" + PathToGenericUtf8(tools.ninja),
                 "-DCMAKE_CXX_COMPILER=" + PathToGenericUtf8(tools.compiler)};
         options.push_back("-DKROM_PROJECT_ROOT=" + PathToGenericUtf8(request.projectRoot));
+        if (paths.sdk) options.push_back("-DKrom_DIR=" + PathToGenericUtf8(paths.sdkCmakeDir));
         configure(std::move(options));
     }
     commands.push_back({tools.ninja, {"-C", PathToUtf8(request.buildDir), request.target},
@@ -649,25 +661,10 @@ bool LaunchRuntimeProcess(const std::filesystem::path& exePath,
                           const std::filesystem::path& projectFile,
                           bool editorLiveState)
 {
-#if defined(_WIN32)
-    if (!std::filesystem::exists(exePath) || !std::filesystem::exists(projectFile))
-        return false;
-    std::wstring command = L"cmd /c start \"KROM Play\" /D \"";
-    command += exePath.parent_path().wstring();
-    command += L"\" \"";
-    command += exePath.wstring();
-    command += L"\" \"";
-    command += projectFile.wstring();
-    command += L"\" 1";
-    if (editorLiveState)
-        command += L" --editor-live-state";
-    return _wsystem(command.c_str()) == 0;
-#else
-    (void)exePath;
-    (void)projectFile;
-    (void)editorLiveState;
-    return false;
-#endif
+    if (!std::filesystem::exists(exePath) || !std::filesystem::exists(projectFile)) return false;
+    engine::app::build::ProcessCommand command{exePath, {PathToUtf8(projectFile), "1"}, exePath.parent_path()};
+    if (editorLiveState) command.arguments.push_back("--editor-live-state");
+    return engine::app::build::LaunchProcess(command).Succeeded();
 }
 }
 
@@ -885,6 +882,7 @@ struct RuntimeBuildJob
     std::atomic<bool> cancel{ false };
     bool scriptBuild = false;
     bool ok = false;
+    std::filesystem::path resolvedBuildDir;
 
     std::string target;
     std::filesystem::path projectRoot;
@@ -2506,12 +2504,14 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     };
     m_editorFrameCtx->exportProject = [this]() {
         if (RejectUnavailableSdkBuild()) return false;
+        if (GetEnginePaths().sdk && m_projectSettings.exportBuild != 0) { ReportScriptBuildError(Translate("build.sdk_release_only")); return false; }
         if (!LeavePrefabMode())
             return false;
         return ExportProjectBuild();
     };
     m_editorFrameCtx->playGame = [this]() {
         if (RejectUnavailableSdkBuild()) return false;
+        if (GetEnginePaths().sdk && m_projectSettings.testBuild != 0 && m_projectSettings.testBuild != 3) { ReportScriptBuildError(Translate("build.sdk_release_only")); return false; }
         if (!LeavePrefabMode())
             return false;
         if (m_projectRoot.empty())
@@ -2549,7 +2549,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                         Translate(m_buildJobCancelled ? "build.cancelled" : "play.build_failed");
                 return;
             }
-            (void)LaunchPlayRuntime(buildDir);
+            (void)LaunchPlayRuntime(GetEnginePaths().sdk ? m_lastRuntimeBuildDir : buildDir);
         }, {}, profile ? profile : "Release");
     };
     m_editorFrameCtx->startPlay = [this]() {
@@ -2810,7 +2810,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 line("MSVC", (tools.toolset.empty() ? std::string("default") : tools.toolset) +
                     ", _MSC_FULL_VER " + std::to_string(tools.compilerVersion));
 #ifdef _MSC_FULL_VER
-                if (!build::CompilerCompatible(_MSC_FULL_VER, tools.compilerVersion, true))
+                if (!build::CompilerCompatible(_MSC_FULL_VER, tools.compilerVersion, true, GetEnginePaths().sdk))
                 {
                     ok = false;
                     report += Translate("build.script_compiler_mismatch") + std::string(" Editor: ") +
@@ -4186,6 +4186,7 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath, bool stageIn
     m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
 #endif
     m_projectRoot = projectRoot;
+    m_lastRuntimeBuildDir.clear();
     m_projectName = name;
     m_projectRuntimeTarget = SanitizeRuntimeTargetName(runtimeTarget);
     m_projectBackend = backend;
@@ -4497,6 +4498,7 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
     }
 
     m_projectRoot = projectRoot;
+    m_lastRuntimeBuildDir.clear();
 #ifdef _WIN32
     m_scriptModule.Unload(m_world.get(), m_scriptRegistry);
 #endif
@@ -6079,6 +6081,7 @@ bool KromEditorApp::CheckScriptEngineLibraries(std::string& error) const
         error = Translate("build.sdk_unavailable");
         return false;
     }
+    if (GetEnginePaths().sdk) return true;
     return ScriptModuleHost::CheckEngineLibraries(GetEnginePaths().engineBuildDir, CurrentExecutablePath(), error);
 }
 
@@ -6091,7 +6094,9 @@ bool KromEditorApp::ReloadProjectScriptModule(bool reportMissing)
     }
 #ifdef _WIN32
     if (!m_world || m_projectRoot.empty()) return true;
-    const auto library = ScriptModuleHost::LibraryPath(GetEnginePaths().engineBuildDir, m_projectRuntimeTarget);
+    const auto buildDir = GetEnginePaths().sdk ? m_lastRuntimeBuildDir : GetEnginePaths().engineBuildDir;
+    if (buildDir.empty()) return !reportMissing;
+    const auto library = ScriptModuleHost::LibraryPath(buildDir, m_projectRuntimeTarget);
     if (!std::filesystem::exists(library))
     {
         if (reportMissing) ReportScriptBuildError(Translate("script.library_missing") + PathToUtf8(library));
@@ -6102,9 +6107,9 @@ bool KromEditorApp::ReloadProjectScriptModule(bool reportMissing)
     // die neuer als die laufende EXE sind, wuerden abweichende Layouts bedeuten.
     // Ninja aus dem CMakeCache des Editor-Builds: keine Werkzeugsuche im Hauptthread.
     if (!CheckScriptEngineLibraries(error) ||
-        !ScriptModuleHost::CheckSharedEngineHeaders(build::CachedMakeProgram(GetEnginePaths().engineBuildDir),
+        (!GetEnginePaths().sdk && !ScriptModuleHost::CheckSharedEngineHeaders(build::CachedMakeProgram(GetEnginePaths().engineBuildDir),
             GetEnginePaths().engineBuildDir, GetEnginePaths().engineSourceDir, CurrentExecutablePath(),
-            "krom_scripts_" + m_projectRuntimeTarget, error, m_projectRoot) ||
+            "krom_scripts_" + m_projectRuntimeTarget, error, m_projectRoot)) ||
         !m_scriptModule.Swap(library, *m_world, m_scriptRegistry, error, m_projectRoot))
     {
         ReportScriptBuildError(error);
@@ -6131,6 +6136,17 @@ bool KromEditorApp::StartEditorPlay()
     if (!CheckScriptEngineLibraries(error)) { ReportScriptBuildError(error); return false; }
     const auto bindings = renderer::addons::editor::GenerateCppScriptBindings(*m_editorFrameCtx);
     if (!bindings.ok) { ReportScriptBuildError(bindings.message); return false; }
+    if (GetEnginePaths().sdk)
+    {
+        const auto buildStart = std::filesystem::file_time_type::clock::now();
+        return StartRuntimeBuild({}, [this, buildStart](bool ok) {
+            if (!ok) { ReportScriptBuildError(Translate("play.script_build_failed")); return; }
+            const auto library = ScriptModuleHost::LibraryPath(m_lastRuntimeBuildDir, m_projectRuntimeTarget);
+            if (m_scriptModule.SourceLibraryChanged(library) && !ReloadProjectScriptModule(true)) return;
+            m_scriptModule.MarkBuilt(m_projectRoot, library, buildStart);
+            (void)BeginEditorPlay();
+        }, "krom_scripts_" + m_projectRuntimeTarget);
+    }
     try
     {
         const auto buildDir = GetEnginePaths().engineBuildDir;
@@ -7401,6 +7417,7 @@ bool KromEditorApp::BuildAllScenes()
 bool KromEditorApp::ExportProjectBuild()
 {
     if (RejectUnavailableSdkBuild()) return false;
+    if (GetEnginePaths().sdk && m_projectSettings.exportBuild != 0) { ReportScriptBuildError(Translate("build.sdk_release_only")); return false; }
     if (m_projectRoot.empty())
     {
         if (m_editorFrameCtx)
@@ -7437,7 +7454,7 @@ bool KromEditorApp::ExportProjectBuild()
     plan.buildDir = RuntimeProfileDir(profile);
     plan.runtimeTarget = m_projectRuntimeTarget;
     plan.backend = m_projectBackend;
-    const std::string exportName = PathToUtf8(plan.buildDir.filename()) + "-" + RuntimeBackendId(plan.backend);
+    const std::string exportName = std::string("runtime-") + profile + "-" + RuntimeBackendId(plan.backend);
     plan.exportDir = m_projectRoot / "Build" / PathFromUtf8(exportName);
     plan.stagingDir = m_projectRoot / "Build" / PathFromUtf8(".staging-" + exportName);
     if (!StageProjectExport(plan))
@@ -7447,7 +7464,7 @@ bool KromEditorApp::ExportProjectBuild()
         return false;
     }
 
-    const bool started = StartRuntimeBuild(plan.buildDir, [this, plan](bool ok) {
+    const bool started = StartRuntimeBuild(plan.buildDir, [this, plan](bool ok) mutable {
         if (!ok)
         {
             // The previous export in plan.exportDir is still complete.
@@ -7458,6 +7475,7 @@ bool KromEditorApp::ExportProjectBuild()
                     Translate(m_buildJobCancelled ? "export.cancelled" : "export.build_failed");
             return;
         }
+        if (GetEnginePaths().sdk) plan.buildDir = m_lastRuntimeBuildDir;
         if (!FinishProjectExport(plan))
         {
             std::error_code ec;
@@ -7500,9 +7518,39 @@ bool KromEditorApp::StageProjectExport(const ProjectExportPlan& plan)
                 m_editorFrameCtx->lastFileMessage = Translate("export.project_read_failed");
             return false;
         }
-        projectJson = std::regex_replace(projectJson,
-            std::regex(R"("assetRoot"\s*:\s*"[^"]*")"),
-            "\"assetRoot\":\"" + exportAssetRoot + "\"");
+        std::string parseError;
+        const auto root = serialization::JsonParser::Parse(projectJson, parseError);
+        const auto* assets = root.Get("assetRoot");
+        if (!parseError.empty() || !root.IsObject() || (assets && !assets->IsString()))
+        {
+            if (m_editorFrameCtx)
+                m_editorFrameCtx->lastFileMessage = Translate("export.project_read_failed");
+            return false;
+        }
+        std::string sourcePrefix = assets ? assets->AsString() : "Assets";
+        std::replace(sourcePrefix.begin(), sourcePrefix.end(), '\\', '/');
+        if (!sourcePrefix.empty() && sourcePrefix.back() != '/') sourcePrefix += '/';
+        std::vector<std::pair<const serialization::JsonValue*, std::string>> edits;
+        if (assets) edits.emplace_back(assets, "\"" + exportAssetRoot + "\"");
+        auto rebaseScene = [&](const serialization::JsonValue& value) {
+            if (!value.IsString() || sourcePrefix.empty()) return;
+            std::string path = value.AsString();
+            std::replace(path.begin(), path.end(), '\\', '/');
+            if (path.starts_with(sourcePrefix))
+                edits.emplace_back(&value, "\"" + EscapeJsonString(path.substr(sourcePrefix.size())) + "\"");
+        };
+        if (const auto* scene = root.Get("editorScene")) rebaseScene(*scene);
+        for (const auto* key : {"sceneOrder", "buildExclude"})
+            if (const auto* list = root.Get(key); list && list->IsArray())
+                for (const auto& scene : list->arrayVal) rebaseScene(scene);
+        std::sort(edits.begin(), edits.end(), [](const auto& a, const auto& b) {
+            return a.first->stringOffset > b.first->stringOffset;
+        });
+        for (const auto& [value, text] : edits)
+            projectJson.replace(value->stringOffset, value->stringLength, text);
+        if (!assets)
+            projectJson.insert(projectJson.find('{') + 1,
+                "\n  \"assetRoot\":\"" + exportAssetRoot + "\"" + (root.objectVal.empty() ? "\n" : ","));
         std::ofstream out(plan.stagingDir / "krom-project.json", std::ios::binary | std::ios::trunc);
         out << projectJson;
         if (!out.good())
@@ -7744,14 +7792,15 @@ bool KromEditorApp::StartRuntimeBuild(const std::filesystem::path& buildDir,
     auto job = std::make_shared<RuntimeBuildJob>();
     job->scriptBuild = !scriptTarget.empty();
     job->target      = request.target;
-    job->worker = std::thread([job, request = std::move(request)]() {
+    job->worker = std::thread([job, request = std::move(request)]() mutable {
         const std::function<void(LogLevel, std::string)> log = [&job](LogLevel level, std::string line) {
             std::lock_guard<std::mutex> lock(job->mutex);
             job->logs.emplace_back(level, std::move(line));
         };
         std::vector<engine::app::build::ProcessCommand> commands;
-        const bool ok = ResolveRuntimeBuildCommands(request, log, commands) &&
-            RunRuntimeBuildCommands(commands, log,
+        const bool resolved = ResolveRuntimeBuildCommands(request, log, commands);
+        job->resolvedBuildDir = request.buildDir;
+        const bool ok = resolved && RunRuntimeBuildCommands(commands, log,
             [&job](std::string line) {
                 std::lock_guard<std::mutex> lock(job->mutex);
                 job->progress = std::move(line);
@@ -7866,6 +7915,7 @@ void KromEditorApp::PollRuntimeBuild()
     const bool ok = job.ok;
     const bool cancelled = job.cancel.load(std::memory_order_acquire);
     const bool sameProject = job.projectRoot == m_projectRoot;
+    if (sameProject && ok && !job.resolvedBuildDir.empty()) m_lastRuntimeBuildDir = job.resolvedBuildDir;
     std::function<void(bool)> onFinished = std::move(job.onFinished);
     m_runtimeBuildJob.reset();
 

@@ -1,0 +1,17 @@
+{
+  "schemaVersion": 2,
+  "sdkBuildId": "@KROM_SDK_BUILD_ID@",
+  "system": "Windows",
+  "architecture": "x64",
+  "compilerFamily": "MSVC",
+  "compilerVersion": "@KROM_SDK_COMPILER_VERSION@",
+  "standardLibrary": "msvc",
+  "toolset": "@KROM_SDK_TOOLSET@",
+  "runtime": "MD",
+  "configuration": "Release",
+  "assetsDir": "bin/assets",
+  "shadersDir": "bin/shaders",
+  "editorDir": "bin/editor",
+  "sdkCmakeDir": "cmake",
+  "projectTemplateDir": "templates/project"
+}

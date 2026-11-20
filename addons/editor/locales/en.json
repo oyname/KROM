@@ -1,4 +1,5 @@
 {
+  "build.sdk_release_only": "This SDK supports Release only. Select Release for test builds and export.",
   "build.sdk_unavailable": "Script builds, Play, test builds and export are not yet available in SDK mode.",
   "language.label": "Language / Sprache",
   "language.save_failed": "Could not save the language preference.",

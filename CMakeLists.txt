@@ -46,6 +46,8 @@ function(krom_apply_console_option target)
     endif()
 endfunction()
 
+include(cmake/KromSdkBuild.cmake)
+
 find_package(Threads REQUIRED)
 
 add_library(engine_base INTERFACE)
@@ -190,6 +192,7 @@ add_library(engine_core STATIC
     src/collision/SceneQueries.cpp
     # Platform
     src/platform/Window.cpp
+    src/platform/DynamicModule.cpp
     src/platform/StdFilesystem.cpp
     # Nativer Datei-Dialog: Win32-Impl auf Windows, Stub (gibt "" zurueck) auf Linux/macOS.
     # Fuer Linux: NativeFileDialog_Stub.cpp durch eine GTK- oder zenity-Implementierung ersetzen.
@@ -206,6 +209,10 @@ target_include_directories(engine_core
 )
 
 target_link_libraries(engine_core PUBLIC Threads::Threads)
+if(KROM_BUILD_SDK)
+    target_compile_definitions(engine_core PUBLIC KROM_SDK_BUILD_ID="${KROM_SDK_BUILD_ID}")
+endif()
+target_link_libraries(engine_core PRIVATE ${CMAKE_DL_LIBS})
 if(WIN32)
     # Ole32: benoetigt fuer CoInitializeEx / CoCreateInstance (IFileOpenDialog)
     target_link_libraries(engine_core PRIVATE Ole32)
@@ -525,17 +532,12 @@ if(TARGET engine_platform_glfw)
     endif()
 endif()
 
-function(krom_link_self_registering_addon target addon_target)
-    target_link_libraries(${target} PRIVATE ${addon_target})
-    if(MSVC)
-        target_link_options(${target} PRIVATE "/WHOLEARCHIVE:$<TARGET_FILE:${addon_target}>")
-    elseif(APPLE)
-        target_link_options(${target} PRIVATE "LINKER:-force_load,$<TARGET_FILE:${addon_target}>")
-    else()
-        target_link_options(${target} PRIVATE
-            "LINKER:--whole-archive,$<TARGET_FILE:${addon_target}>,--no-whole-archive")
-    endif()
-endfunction()
+
+
+set(KROM_PROJECT_SUPPORT_ROOT "${CMAKE_CURRENT_SOURCE_DIR}")
+set(KROM_ENGINE_RESOURCES_DIR "${CMAKE_CURRENT_SOURCE_DIR}")
+set(KROM_LICENSE_FILE "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE")
+include(cmake/KromProjectTargets.cmake)
 
 # All executables share bin/, so shaders/ and assets/ are copied once by a single
 # target. A POST_BUILD copy per executable let parallel builds write the same files
@@ -543,64 +545,13 @@ endfunction()
 #   shaders/ -> bin/shaders: engine shaders, needed by every executable; the editor
 #              export ships this folder with the game.
 #   assets/  -> bin/assets:  data of the example programs only.
-function(krom_copy_assets target)
-    if(NOT TARGET krom_copy_assets_to_bin)
-        # Multi-config generators (Visual Studio) put executables in bin/<config>/.
-        get_property(_krom_multi_config GLOBAL PROPERTY GENERATOR_IS_MULTI_CONFIG)
-        if(_krom_multi_config)
-            set(_krom_bin_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}/$<CONFIG>")
-        else()
-            set(_krom_bin_dest "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
-        endif()
-        set(_krom_copy_commands
-            COMMAND ${CMAKE_COMMAND} -E copy_directory
-                ${CMAKE_CURRENT_SOURCE_DIR}/shaders
-                ${_krom_bin_dest}/shaders)
-        if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/assets)
-            list(APPEND _krom_copy_commands
-                COMMAND ${CMAKE_COMMAND} -E copy_directory
-                    ${CMAKE_CURRENT_SOURCE_DIR}/assets
-                    ${_krom_bin_dest}/assets)
-        endif()
-        add_custom_target(krom_copy_assets_to_bin
-            ${_krom_copy_commands}
-            COMMENT "Copying shaders/ and assets/ to bin/")
-    endif()
-    add_dependencies(${target} krom_copy_assets_to_bin)
-endfunction()
+
 
 # Third-party notices (licenses/) plus the KROM license next to the game runtime;
 # the editor export copies this folder into the exported game.
-function(krom_copy_licenses target)
-    add_custom_command(TARGET ${target} POST_BUILD
-        COMMAND ${CMAKE_COMMAND} -E copy_directory
-            "${CMAKE_CURRENT_SOURCE_DIR}/licenses"
-            "$<TARGET_FILE_DIR:${target}>/licenses"
-        COMMAND ${CMAKE_COMMAND} -E copy_if_different
-            "${CMAKE_CURRENT_SOURCE_DIR}/LICENSE"
-            "$<TARGET_FILE_DIR:${target}>/licenses/KROM-LICENSE.txt")
-endfunction()
 
-function(krom_copy_d3dcompiler target)
-    if(NOT WIN32)
-        return()
-    endif()
 
-    set(_krom_d3dcompiler_candidates
-        "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64/d3dcompiler_47.dll"
-        "$ENV{WINDIR}/System32/D3DCompiler_47.dll"
-    )
-    foreach(_krom_d3dcompiler_path IN LISTS _krom_d3dcompiler_candidates)
-        if(EXISTS "${_krom_d3dcompiler_path}")
-            add_custom_command(TARGET ${target} POST_BUILD
-                COMMAND ${CMAKE_COMMAND} -E copy_if_different
-                    "${_krom_d3dcompiler_path}"
-                    "$<TARGET_FILE_DIR:${target}>/d3dcompiler_47.dll"
-            )
-            return()
-        endif()
-    endforeach()
-endfunction()
+
 
 # Spiel-Runtimes ausserhalb von Debug (Export): kein Konsolenfenster und die
 # MSVC-Laufzeit-DLLs app-lokal neben der EXE, damit das Spiel ohne installiertes
@@ -613,21 +564,7 @@ if(MSVC)
     set(KROM_MSVC_RUNTIME_DLLS ${CMAKE_INSTALL_SYSTEM_RUNTIME_LIBS})
 endif()
 
-function(krom_apply_release_runtime_options target)
-    if(NOT WIN32)
-        return()
-    endif()
-    if(KROM_SHOW_CONSOLE)
-        target_link_options(${target} PRIVATE
-            "$<$<NOT:$<CONFIG:Debug>>:/SUBSYSTEM:WINDOWS;/ENTRY:mainCRTStartup>")
-    endif()
-    foreach(_krom_dll IN LISTS KROM_MSVC_RUNTIME_DLLS)
-        get_filename_component(_krom_dll_name "${_krom_dll}" NAME)
-        add_custom_command(TARGET ${target} POST_BUILD
-            COMMAND "$<$<NOT:$<CONFIG:Debug>>:${CMAKE_COMMAND};-E;copy_if_different;${_krom_dll};$<TARGET_FILE_DIR:${target}>/${_krom_dll_name}>"
-            COMMAND_EXPAND_LISTS)
-    endforeach()
-endfunction()
+
 
 include(cmake/KromProjects.cmake)
 krom_collect_projects(KROM_PROJECT_ROOTS)
@@ -650,93 +587,9 @@ function(krom_resolve_project_script_root out_var)
     endif()
 endfunction()
 
-function(krom_link_project_scripts target)
-    if(ARGC GREATER 1)
-        set(_krom_project_root "${ARGV1}")
-    else()
-        krom_resolve_project_script_root(_krom_project_root)
-    endif()
-    if(NOT _krom_project_root)
-        return()
-    endif()
 
-    # Entwicklungs-Default fuer Runtimes ohne Argument und ohne krom-project.json neben der EXE.
-    target_compile_definitions(${target} PRIVATE
-        KROM_DEFAULT_PROJECT_FILE="${_krom_project_root}/krom-project.json")
 
-    file(GLOB_RECURSE _krom_project_script_sources CONFIGURE_DEPENDS
-        "${_krom_project_root}/Assets/Scripts/*.cpp"
-        "${_krom_project_root}/Assets/Scripts/*.cxx"
-        "${_krom_project_root}/scripts/*.cpp"
-        "${_krom_project_root}/scripts/*.cxx")
-    file(GLOB_RECURSE _krom_project_script_headers CONFIGURE_DEPENDS
-        "${_krom_project_root}/Assets/Scripts/*.hpp"
-        "${_krom_project_root}/Assets/Scripts/*.h"
-        "${_krom_project_root}/scripts/*.hpp"
-        "${_krom_project_root}/scripts/*.h")
 
-    set(_krom_project_bindings "${_krom_project_root}/generated/ScriptBindings.cpp")
-    if(EXISTS "${_krom_project_bindings}")
-        list(APPEND _krom_project_script_sources "${_krom_project_bindings}")
-    endif()
-
-    if(NOT _krom_project_script_sources AND NOT _krom_project_script_headers)
-        return()
-    endif()
-
-    target_sources(${target} PRIVATE ${_krom_project_script_sources} ${_krom_project_script_headers})
-    target_include_directories(${target} PRIVATE
-        "${_krom_project_root}"
-        "${_krom_project_root}/Assets/Scripts"
-        "${_krom_project_root}/scripts"
-        "${_krom_project_root}/generated")
-    # KromRegisterGameScripts ist nur in den generierten Bindings definiert.
-    if(EXISTS "${_krom_project_bindings}")
-        target_compile_definitions(${target} PRIVATE KROM_HAS_GAME_SCRIPTS=1)
-    else()
-        message(WARNING "  ${target}: ${_krom_project_bindings} fehlt - Projekt-Scripts werden nicht registriert. "
-                        "Im Editor die Script-Bindings neu generieren.")
-    endif()
-    message(STATUS "  ${target}: Projekt-Scripts eingebunden aus ${_krom_project_root}")
-endfunction()
-
-function(krom_add_project_script_module project_root)
-    krom_read_project_runtime_target("${project_root}" _project)
-    set(_target "krom_scripts_${_project}")
-    file(GLOB_RECURSE _scripts CONFIGURE_DEPENDS
-        "${project_root}/Assets/Scripts/*.cpp" "${project_root}/Assets/Scripts/*.cxx"
-        "${project_root}/Assets/Scripts/*.h" "${project_root}/Assets/Scripts/*.hpp"
-        "${project_root}/scripts/*.cpp" "${project_root}/scripts/*.cxx"
-        "${project_root}/scripts/*.h" "${project_root}/scripts/*.hpp")
-    file(GLOB _bindings CONFIGURE_DEPENDS "${project_root}/generated/ScriptBindings.cpp")
-    add_library(${_target} SHARED EXCLUDE_FROM_ALL ${_scripts} ${_bindings}
-        addons/script/ScriptModuleEntry.cpp)
-    krom_enable_unicode_link(${_target})
-    target_include_directories(${_target} PRIVATE "${project_root}"
-        "${project_root}/Assets/Scripts" "${project_root}/scripts" "${project_root}/generated")
-    target_link_libraries(${_target} PRIVATE engine_script)
-    target_compile_definitions(${_target} PRIVATE KROM_SCRIPT_PROJECT_ROOT="${project_root}")
-    set_target_properties(${_target} PROPERTIES PREFIX "")
-    if(_bindings)
-        target_compile_definitions(${_target} PRIVATE KROM_HAS_GAME_SCRIPTS=1)
-    endif()
-    if(MSVC)
-        target_link_options(${_target} PRIVATE /EXPORT:KromRegisterGameScripts)
-        # Auch die Link-Ausgabe braucht je Build einen eigenen PDB-Namen:
-        # Debugger koennen trotz Schattenkopie die originale PDB offen halten.
-        set(_pdb_response "${CMAKE_CURRENT_BINARY_DIR}/script_pdb/${_target}.rsp")
-        set(_pdb_script "${CMAKE_CURRENT_SOURCE_DIR}/cmake/WriteScriptModulePdb.cmake")
-        add_custom_command(TARGET ${_target} PRE_LINK
-            COMMAND "${CMAKE_COMMAND}"
-                "-DKROM_SCRIPT_PDB_DIR=$<TARGET_FILE_DIR:${_target}>"
-                "-DKROM_SCRIPT_PDB_TARGET=${_target}"
-                "-DKROM_SCRIPT_PDB_RESPONSE=${_pdb_response}"
-                -P "${_pdb_script}"
-            VERBATIM)
-        set_property(TARGET ${_target} APPEND PROPERTY LINK_DEPENDS "${_pdb_script}")
-        target_link_options(${_target} PRIVATE /INCREMENTAL:NO "@${_pdb_response}" /PDBALTPATH:%_PDB%)
-    endif()
-endfunction()
 
 if(WIN32 AND KROM_BUILD_EDITOR)
     foreach(_root IN LISTS KROM_PROJECT_ROOTS)
@@ -744,30 +597,7 @@ if(WIN32 AND KROM_BUILD_EDITOR)
     endforeach()
 endif()
 
-function(krom_add_project_runtime target output_name platform_target backend_addon backend_define project_root)
-    add_executable(${target} examples/editor_scene_runtime.cpp)
-    krom_enable_unicode_link(${target})
-    set_target_properties(${target} PROPERTIES OUTPUT_NAME "${output_name}")
-    krom_apply_console_option(${target})
 
-    if(${platform_target} STREQUAL "engine_platform_win32")
-        target_link_libraries(${target} PRIVATE engine_krom_wrapper_win32)
-    elseif(${platform_target} STREQUAL "engine_platform_glfw")
-        target_link_libraries(${target} PRIVATE engine_krom_wrapper_glfw)
-    endif()
-
-    krom_link_self_registering_addon(${target} ${backend_addon})
-    target_include_directories(${target} PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-    target_compile_definitions(${target} PRIVATE ${backend_define}=1)
-    krom_link_project_scripts(${target} "${project_root}")
-    krom_apply_release_runtime_options(${target})
-
-    krom_copy_assets(${target})
-    krom_copy_licenses(${target})
-    if("${backend_define}" STREQUAL "KROM_APP_BACKEND_DX11")
-        krom_copy_d3dcompiler(${target})
-    endif()
-endfunction()
 
 function(krom_add_project_runtimes_for_backend platform_target backend_addon backend_define backend_id)
     foreach(_krom_project_root IN LISTS KROM_PROJECT_ROOTS)
@@ -784,6 +614,8 @@ add_library(krom_editor_build_tools STATIC
     app/editor/BuildTools.cpp)
 target_include_directories(krom_editor_build_tools PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR} ${CMAKE_CURRENT_SOURCE_DIR}/include)
+configure_file(cmake/BuildTargetNames.hpp.in generated/BuildTargetNames.hpp @ONLY)
+target_include_directories(krom_editor_build_tools PUBLIC "${CMAKE_CURRENT_BINARY_DIR}/generated")
 
 add_library(krom_editor_paths STATIC app/editor/EnginePaths.cpp)
 target_include_directories(krom_editor_paths PUBLIC
@@ -791,6 +623,9 @@ target_include_directories(krom_editor_paths PUBLIC
 target_compile_definitions(krom_editor_paths PRIVATE
     KROM_SOURCE_DIR="${CMAKE_CURRENT_SOURCE_DIR}"
     KROM_BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}")
+if(KROM_BUILD_SDK)
+    target_compile_definitions(krom_editor_paths PRIVATE KROM_SDK_BUILD_ID="${KROM_SDK_BUILD_ID}")
+endif()
 if(WIN32)
     target_link_libraries(krom_editor_paths PRIVATE Shell32 Ole32)
 endif()
@@ -1010,6 +845,8 @@ add_executable(krom_build_tools_tests tests/test_build_tools.cpp)
 target_link_libraries(krom_build_tools_tests PRIVATE krom_editor_build_tools)
 
 add_executable(krom_engine_paths_tests tests/test_engine_paths.cpp)
+add_executable(krom_sdk_abi_tests tests/test_sdk_abi.cpp)
+target_include_directories(krom_sdk_abi_tests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${CMAKE_CURRENT_SOURCE_DIR}/include")
 target_link_libraries(krom_engine_paths_tests PRIVATE krom_editor_paths)
 target_compile_definitions(krom_engine_paths_tests PRIVATE KROM_TEST_BUILD_DIR="${CMAKE_CURRENT_BINARY_DIR}")
 
@@ -1102,6 +939,7 @@ target_link_libraries(krom_tests PRIVATE
 )
 if(WIN32)
     target_sources(krom_tests PRIVATE app/editor/ScriptModuleHost.cpp)
+    target_link_libraries(krom_tests PRIVATE krom_editor_build_tools)
     add_library(script_module_fixture SHARED tests/script_module_fixture/Fixture.cpp addons/script/ScriptModuleEntry.cpp)
     target_link_libraries(script_module_fixture PRIVATE engine_script)
     target_compile_definitions(script_module_fixture PRIVATE KROM_HAS_GAME_SCRIPTS=1
@@ -1177,3 +1015,5 @@ if(WIN32 AND KROM_SPIRV_CROSS_INCLUDE_DIR AND KROM_SPIRV_CROSS_C_SHARED_LIB
 else()
     message(STATUS "  krom_shader_cross (experiment): disabled (VULKAN_SDK with dxc and spirv-cross-c-shared not found)")
 endif()
+
+include(cmake/KromSdkInstall.cmake)
