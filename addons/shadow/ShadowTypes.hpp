@@ -98,6 +98,9 @@ struct ShadowRequest
     ShadowTechnique technique = ShadowTechnique::None;
 
     ShadowSettings settings{};
+    // Actual tile resolution after the shared atlas budget is applied. Zero
+    // means the requested resolution (before atlas allocation).
+    uint32_t effectiveResolution = 0u;
     ShadowAllocation allocation{};
     std::vector<ShadowView> views;
 
@@ -132,8 +135,9 @@ struct ShadowRequest
 [[nodiscard]] inline ShadowMapDesc BuildShadowMapDesc(const ShadowRequest& request) noexcept
 {
     ShadowMapDesc desc{};
-    desc.width = std::max(1u, request.settings.resolution);
-    desc.height = std::max(1u, request.settings.resolution);
+    desc.width = std::max(1u, request.effectiveResolution != 0u
+        ? request.effectiveResolution : request.settings.resolution);
+    desc.height = desc.width;
     desc.comparisonSampling = true;
 
     switch (request.technique)

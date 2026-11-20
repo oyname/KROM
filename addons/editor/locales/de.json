@@ -517,6 +517,7 @@
   "light.shadow_light_size_tip": "Größe der Lichtquelle für PCSS. Punkt- und Spotlicht: in Metern. Richtungslicht: Tangens der Winkelgröße. Größer = weichere Schatten mit wachsendem Abstand zum Schattenwerfer; am Kontakt bleibt der Schatten scharf.",
   "light.shadow_filter_tip": "Filter der Schattenkante. Es gilt der Filter des ersten schattenwerfenden Lichts für alle Schatten der Ansicht. Poisson und PCSS wirken in PBR-Materialien; ältere Lit-Materialien zeigen dann PCF 3x3.",
   "light.shadow_bias": "Schatten-Bias",
+  "light.shadow_bias_tip": "Richtungslicht: Abstand in Welteinheiten, unabhängig von Kameradistanz und Kaskadengröße. Punkt- und Spotlicht: normierte Schattentiefe. Kleine Werte erhalten den Kontakt an Wandverbindungen; zu große Werte erzeugen Lichtlücken.",
   "light.normal_bias": "Normalen-Bias",
   "light.shadow_strength": "Schattenstärke",
   "light.shadow_distance": "Schattendistanz",

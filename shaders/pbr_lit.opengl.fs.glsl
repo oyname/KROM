@@ -388,7 +388,9 @@ uint ChoosePointShadowFace(vec3 lightToPoint)
 
 #include "pbr_shadow_poisson.opengl.glsl"
 
-float SampleShadowAtlas(vec4 positionLightCS, float biasValue, float strengthValue, vec4 atlasRect)
+#include "shadow_receiver.opengl.glsl"
+
+float SampleShadowAtlas(vec4 positionLightCS, float biasValue, float strengthValue, vec4 atlasRect, mat4 shadowVP)
 {
     if (shadowCascadeCount == 0u || strengthValue <= 0.0)
         return 1.0;
@@ -410,15 +412,9 @@ float SampleShadowAtlas(vec4 positionLightCS, float biasValue, float strengthVal
     // Der Bias passt sich der Flaechenneigung an, daher genuegt ein winziger
     // konstanter Bias — das verhindert Acne OHNE Peter-Panning (Schatten loest
     // sich nicht von der Objektkante). Vorher fehlte dieser Term in OpenGL.
-    float ddxDepth = dFdx(depth);
-    float ddyDepth = dFdy(depth);
-    float ddxUvX = dFdx(atlasUv.x);
-    float ddyUvY = dFdy(atlasUv.y);
-    vec2 dDepth_dUV = vec2(
-        abs(ddxUvX) > 1e-7 ? ddxDepth / ddxUvX : 0.0,
-        abs(ddyUvY) > 1e-7 ? ddyDepth / ddyUvY : 0.0);
-    dDepth_dUV = clamp(dDepth_dUV, -1.0, 1.0);
-    float baseBias = max(biasValue, 0.00005);
+
+    vec2 dDepth_dUV = KromShadowDepthGradient(depth, atlasUv);
+    float baseBias = KromShadowReceiverBias(biasValue, shadowVP);
     float visibility = 0.0;
 
     if (shadowFilterMode == 1u)
@@ -706,7 +702,7 @@ void main()
                             shadowViewProjArray[viewIndex] * vec4(receiverWS, 1.0),
                             shadowLightMeta[shadowIndex].y,
                             shadowLightMeta[shadowIndex].w,
-                            shadowViewRect[viewIndex]);
+                            shadowViewRect[viewIndex], shadowViewProjArray[viewIndex]);
                     }
                 }
                 else if (type < 0.5 && viewCount > 1u)
@@ -742,7 +738,7 @@ void main()
                                 shadowVisibility = SampleShadowAtlas(posLCS,
                                     shadowLightMeta[shadowIndex].y,
                                     shadowLightMeta[shadowIndex].w,
-                                    shadowViewRect[viewIndex]);
+                                    shadowViewRect[viewIndex], shadowViewProjArray[viewIndex]);
                                 break;
                             }
                         }
@@ -758,7 +754,7 @@ void main()
                                                 shadowLightMeta[shadowIndex].z),
                         shadowLightMeta[shadowIndex].y,
                         shadowLightMeta[shadowIndex].w,
-                        shadowViewRect[firstViewIndex]);
+                        shadowViewRect[firstViewIndex], shadowViewProjArray[firstViewIndex]);
                 }
                 break;
             }

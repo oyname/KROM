@@ -437,7 +437,9 @@ uint ChoosePointShadowFace(float3 lightToPoint)
 
 #include "pbr_shadow_poisson.hlsl"
 
-float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthValue, float4 atlasRect)
+#include "shadow_receiver.hlsl"
+
+float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthValue, float4 atlasRect, float4x4 shadowVP)
 {
     float result = 1.0f;
 
@@ -455,25 +457,12 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
         if (insideAtlas)
         {
             float2 atlasUv = atlasRect.xy + localUv * atlasRect.zw;
-            // Perspektivische Tiefen-Kompression: nahe dem Near-Plane ist
-            // depth sehr genau, am Far-Plane stark komprimiert.
-            // Bias skaliert mit depth² damit der Schutz gegen Self-Shadowing
-            // (Shadow Acne) über die gesamte Lichtreichweite gleichmäßig ist.
-            // Besonders wichtig für Point Lights (90° FOV pro Würfelseite).
-            float ddxDepth = ddx(depth);
-            float ddyDepth = ddy(depth);
-            float ddxUvX = ddx(atlasUv.x);
-            float ddyUvY = ddy(atlasUv.y);
-            float2 dDepth_dUV = float2(
-                abs(ddxUvX) > 1e-7f ? ddxDepth / ddxUvX : 0.0f,
-                abs(ddyUvY) > 1e-7f ? ddyDepth / ddyUvY : 0.0f
-            );
-            dDepth_dUV = clamp(dDepth_dUV, -1.0f, 1.0f);
+            float2 dDepth_dUV = KromShadowDepthGradient(depth, atlasUv);
             // Nur ein winziger Epsilon-Floor gegen reines Z-Fighting — der konstante
             // Bias wird vom Slider gesteuert. Acne faengt der slope-scaled Term
             // (dDepth_dUV) adaptiv ab, daher darf baseBias klein sein. Ein grosser
             // Floor wuerde Peter-Panning (Schatten loest sich vom Objekt) erzwingen.
-            float baseBias = max(biasValue, 0.00005f);
+            float baseBias = KromShadowReceiverBias(biasValue, shadowVP);
             float visibility = 0.0f;
 
             if (shadowFilterMode == 1u)
@@ -929,7 +918,7 @@ LocalProbeIBL localProbes;
             {
                 KromPreparePcss(shadowViewProjArray[shadowViewIndexSel], shadowViewRect[shadowViewIndexSel], IN.positionWS, L);
                 shadowVisibility = SampleShadowAtlas(shadowPosLCS, shadowBiasSel, shadowStrengthSel,
-                                                     shadowViewRect[shadowViewIndexSel]);
+                                                     shadowViewRect[shadowViewIndexSel], shadowViewProjArray[shadowViewIndexSel]);
             }
         }
         // Contact shadows multiply onto the shadow map of the main light only.

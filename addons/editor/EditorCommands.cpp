@@ -1006,6 +1006,7 @@ static EntityID CreateLightEntityRaw(EditorFrameContext& ctx, LightType type, En
     light.castShadows = true;
     light.shadowSettings.enabled = light.castShadows;
     light.shadowSettings.resolution = type == LightType::Directional ? 2048u : 1024u;
+    light.shadowSettings.cascadeCount = type == LightType::Directional ? 4u : 1u;
     light.shadowSettings.bias = 0.0015f;
     light.shadowSettings.normalBias = 0.001f;
     light.shadowSettings.maxDistance = type == LightType::Directional ? 100.f : light.range;

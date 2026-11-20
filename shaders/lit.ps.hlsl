@@ -260,7 +260,9 @@ uint ChoosePointShadowFace(float3 lightToPoint)
     return lightToPoint.z >= 0.0f ? 4u : 5u;
 }
 
-float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthValue, float4 atlasRect)
+#include "shadow_receiver.hlsl"
+
+float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthValue, float4 atlasRect, float4x4 shadowVP)
 {
     float result = 1.0f;
 
@@ -283,15 +285,9 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
 
             // Slope-scaled Receiver-Plane Depth Bias (analog zum OpenGL-Pfad):
             // Verhindert Shadow Acne auf schrägen Flächen ohne übermäßiges Peter-Panning.
-            float ddxDepth = ddx(depth);
-            float ddyDepth = ddy(depth);
-            float ddxUvX   = ddx(uv.x);
-            float ddyUvY   = ddy(uv.y);
-            float2 dDepth_dUV = float2(
-                abs(ddxUvX) > 1e-7f ? ddxDepth / ddxUvX : 0.0f,
-                abs(ddyUvY) > 1e-7f ? ddyDepth / ddyUvY : 0.0f);
-            dDepth_dUV = clamp(dDepth_dUV, -1.0f, 1.0f);
-            float baseBias = max(biasValue, 0.00005f);
+
+            float2 dDepth_dUV = KromShadowDepthGradient(depth, uv);
+            float baseBias = KromShadowReceiverBias(biasValue, shadowVP);
 
             float visibility = 0.0f;
 
@@ -415,7 +411,7 @@ float4 main(PSInput IN) : SV_Target
                             mul(shadowViewProjArray[viewIndex], float4(receiverWS, 1.0f)),
                             shadowLightMeta[shadowIndex].y,
                             shadowLightMeta[shadowIndex].w,
-                            shadowViewRect[viewIndex]);
+                            shadowViewRect[viewIndex], shadowViewProjArray[viewIndex]);
                     }
                 }
                 else if (type < 0.5f && viewCount > 1u)
@@ -450,7 +446,7 @@ float4 main(PSInput IN) : SV_Target
                                 shadowVisibility = SampleShadowAtlas(posLCS,
                                     shadowLightMeta[shadowIndex].y,
                                     shadowLightMeta[shadowIndex].w,
-                                    shadowViewRect[viewIndex]);
+                                    shadowViewRect[viewIndex], shadowViewProjArray[viewIndex]);
                                 break;
                             }
                         }
@@ -462,7 +458,7 @@ float4 main(PSInput IN) : SV_Target
                         ComputeShadowReceiverCS(IN.positionWS, geomN, shadowViewProjArray[firstViewIndex], shadowLightMeta[shadowIndex].z),
                         shadowLightMeta[shadowIndex].y,
                         shadowLightMeta[shadowIndex].w,
-                        shadowViewRect[firstViewIndex]);
+                        shadowViewRect[firstViewIndex], shadowViewProjArray[firstViewIndex]);
                 }
                 break;
             }

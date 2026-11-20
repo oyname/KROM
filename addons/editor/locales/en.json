@@ -517,6 +517,7 @@
   "light.shadow_light_size_tip": "Size of the light source for PCSS. Point and spot light: metres. Directional light: tangent of the angular size. Larger = softer shadows the further the receiver is from the occluder; the shadow stays sharp at the contact.",
   "light.shadow_filter_tip": "Filter of the shadow edge. The filter of the first shadow-casting light applies to all shadows of the view. Poisson and PCSS work in PBR materials; legacy lit materials show PCF 3x3 instead.",
   "light.shadow_bias": "Shadow Bias",
+  "light.shadow_bias_tip": "Directional light: distance in world units, independent of camera distance and cascade size. Point and spot lights: normalized shadow depth. Small values preserve contact at wall joints; excessive values cause light leaks.",
   "light.normal_bias": "Normal Bias",
   "light.shadow_strength": "Shadow Strength",
   "light.shadow_distance": "Shadow Distance",

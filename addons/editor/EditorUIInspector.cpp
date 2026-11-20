@@ -2061,6 +2061,7 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingComponentEdit(ctx, biasKey);
+        ImGui::SetItemTooltip("%s", Translate("light.shadow_bias_tip"));
 
         const LightComponent beforeNormalBias = *light;
         const std::string normalBiasKey = MakeEditHistoryKey(entity, "light.normalBias");
