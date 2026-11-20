@@ -17,6 +17,31 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Sonne aus der IBL: Phase 0 (Codex, 2026-11-20)
+
+Auf ausdruecklichen Nutzerauftrag implementiert; die Rollenregel oben ist fuer diesen Auftrag aufgehoben.
+Branch `codex/remove-sun-from-ibl`. Keine Aenderung der Filter oder der Materialshader in dieser Phase.
+
+- Einstellungen / Viewport: IBL Diffus und IBL Spekular; wirkt auch auf die Materialvorschau.
+- Optionale `IBLBakeDiagnostics` misst Quelle, Highlight-Kompression und Sonnenfilter getrennt.
+  `krom_tests --probes`, optional `KROM_IBL_MEASURE_HDR`, misst auch Prefilter-Mip 0 und 2.
+- Echte Room-2-Quelle `Textures/puresky.hdr`, Intensitaet 1: Mittel/Maximum vorher
+  0.587172/46.216599, komprimiert 0.583459/5.576137 (0.108111 % Pixel veraendert),
+  nach Sonnenfilter 0.569792/2.977215 (2.541602 % gegen Original). Prefilter-Maxima
+  Mip 0: 2.923454, Mip 2: 1.980501. Quelle unterscheidet sich vom Engine-Test-HDR.
+- GPU-Diagnose `--material-ibl` erweitert: feste Belichtung, Weiss mit Metallic 0 und
+  Roughness 1 (optional `KROM_IBL_ROUGHNESS_HALF`), Gesamt/Global-Spekular und Probe-Debug 1/2,
+  jeweils Materialvorschau und Szene. In der DX11-Vorschau sind Gesamt-Spekular und
+  Global-Spekular bytegleich (mittlere Differenz 0): kein Probe-Beitrag zu diesem Befund.
+  Room 2s sichtbare Oberflaechen zeigen in Probe-Gewicht schwarz; keine flaechige Probe-Abdeckung.
+  Kleine Szenendifferenzen enthalten auch Animation/Emissive; kein Beweis fuer Sonnenlicht aus Probes.
+- Debug-Build DX11/Vulkan/OpenGL-Libraries erfolgreich, kompletter Testlauf erfolgreich
+  (577 Tests in 20 Suiten; Physik/Audio aus). Zusaetzlicher Probes-Lauf 10/10.
+  Messlogs und GPU-Bilder lokal unter `out/ibl-phase0-*`, `out/ibl-before-dx11-r1/`.
+- Codebefund fuer spaetere Probe-Arbeit: `ProbeCapture::Begin` uebernimmt `backgroundMode`
+  der Basisansicht, zeichnet also gegebenenfalls die sichtbare Skybox. Phase 4 bleibt fuer
+  den aktuellen Vorschau-Befund aus; neue Probe-Bakes mit sichtbarer Sonne gesondert beachten.
+
 ## Windows-Release-SDK und Plattformgrenzen (Codex, 2026-11-20)
 
 Auf ausdruecklichen Nutzerauftrag implementiert. Die Sperren des nachfolgenden

@@ -446,13 +446,17 @@ struct EditorLoadingSmokeTest final : IAppScene
     {
         uint32_t flags = 0u;
         bool disableProbes = false;
+        uint32_t probeDebug = 0u;
         std::string_view GetName() const noexcept override { return "test.material_ibl"; }
         void Contribute(const renderer::FrameConstantsContributionContext& context,
                         renderer::FrameConstants& constants) const override
         {
-            if (context.view.visibilityLayerMask != renderer::LAYER_EDITOR_MATERIAL_PREVIEW)
-                return;
             constants.debugFlags = flags;
+            auto& probeSlot = constants.featureParams[engine::addons::probes::kProbeFrameParameterBlock.firstSlot];
+            uint32_t probeFlags = 0u;
+            std::memcpy(&probeFlags, &probeSlot[1], sizeof(probeFlags));
+            probeFlags = (probeFlags & 0xFFu) | (probeDebug << engine::addons::probes::kProbeFlagDebugShift);
+            std::memcpy(&probeSlot[1], &probeFlags, sizeof(probeFlags));
             if (disableProbes)
                 constants.featureParams[engine::addons::probes::kProbeFrameParameterBlock.firstSlot][0] = 0.f;
         }
@@ -488,16 +492,19 @@ struct EditorLoadingSmokeTest final : IAppScene
             materialIblReadyFrames = 0;
             return true;
         }
+        if (materialIblStage == 0u && materialIblReadyFrames == 0)
+        {
+            auto& asset = app.m_editorFrameCtx->state.selectedMaterialAssetData;
+            asset.metallicFactor = 0.f;
+            asset.roughnessFactor = std::getenv("KROM_IBL_ROUGHNESS_HALF") ? .5f : 1.f;
+            asset.graph.metallic = asset.graph.roughness = 0u;
+            app.m_editorFrameCtx->state.tonemap.exposureMode = renderer::addons::forward::ExposureMode::Fixed;
+            app.m_editorFrameCtx->state.tonemap.exposureEv = 0.f;
+        }
         if (++materialIblReadyFrames < 8)
             return true;
-        if (materialIblStage == 0u)
-        {
-            const auto& asset = app.m_editorFrameCtx->state.selectedMaterialAssetData;
-            Check(asset.PbrMetallic() == 0.f && asset.PbrRoughness() == 1.f,
-                  "Weiss preview uses metallic zero and roughness one");
-        }
 
-        struct Stage { const char* name; uint32_t flags; bool disableProbes; };
+        struct Stage { const char* name; uint32_t flags; bool disableProbes; uint32_t probeDebug = 0u; };
         const Stage stages[] = {
             {"full", 0u, false},
             {"without-specular", renderer::DBG_DISABLE_IBL_SPEC, false},
@@ -507,6 +514,9 @@ struct EditorLoadingSmokeTest final : IAppScene
             {"normals", renderer::DBG_VIEW_NORMALS, false},
             {"roughness", renderer::DBG_VIEW_ROUGHNESS, false},
             {"without-probes", 0u, true},
+            {"global-specular", renderer::DBG_VIEW_IBL_SPEC, true},
+            {"probe-index", 0u, false, 1u},
+            {"probe-weight", 0u, false, 2u},
         };
         auto* device = context.renderLoop.GetRenderSystem().GetDevice();
         const auto texture = device->GetRenderTargetColorTexture(app.m_materialPreviewRT);
@@ -526,12 +536,22 @@ struct EditorLoadingSmokeTest final : IAppScene
                 output.write(reinterpret_cast<const char*>(pixels.data() + i), 3);
             Check(static_cast<bool>(output), stages[materialIblStage].name);
         }
+        if (device->ReadTexturePixels(device->GetRenderTargetColorTexture(app.m_sceneView.rt), pixels, width, height))
+        {
+            std::ofstream output(materialIblCaptures / (std::string("scene-") + stages[materialIblStage].name + ".ppm"),
+                                 std::ios::binary);
+            output << "P6\n" << width << ' ' << height << "\n255\n";
+            for (size_t i = 0u; i < pixels.size(); i += 4u)
+                output.write(reinterpret_cast<const char*>(pixels.data() + i), 3);
+            Check(static_cast<bool>(output), "scene lighting diagnostic capture");
+        }
         if (++materialIblStage == std::size(stages))
             context.renderLoop.GetWindow()->RequestClose();
         else
         {
             materialIblConstants->flags = stages[materialIblStage].flags;
             materialIblConstants->disableProbes = stages[materialIblStage].disableProbes;
+            materialIblConstants->probeDebug = stages[materialIblStage].probeDebug;
             materialIblReadyFrames = 0;
         }
         return true;

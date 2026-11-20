@@ -53,6 +53,8 @@ int main(int argc, char** argv)
     const char* deathCase = std::getenv("KROM_ECS_DEATH_TEST");
     if (deathCase != nullptr && deathCase[0] != '\0')
         return RunECSReadPhaseDeathTest(deathCase);
+    if (argc > 1 && std::strcmp(argv[1], "--probes") == 0)
+        return RunProbeTests();
 
     std::fprintf(stdout, "TAP version 14\n");
     std::fprintf(stdout, "# KROM Engine Tests\n");

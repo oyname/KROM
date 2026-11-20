@@ -20,6 +20,21 @@ namespace engine::jobs { class JobSystem; }
 
 namespace engine::renderer {
 
+struct IBLSourceStatistics
+{
+    double meanLuminance = 0.0;
+    float maxLuminance = 0.f;
+    double changedPixelFraction = 0.0;
+};
+
+// Optional CPU bake measurements. No effect on filtering or cache identity.
+struct IBLBakeDiagnostics
+{
+    IBLSourceStatistics source;
+    IBLSourceStatistics compressed;
+    IBLSourceStatistics lighting;
+};
+
 struct IBLBakeParams
 {
     uint32_t environmentSize    = 512u;
@@ -34,6 +49,7 @@ struct IBLBakeParams
     // Optional: provide an initialized JobSystem to parallelize expensive bake
     // steps (environment conversion, irradiance convolution, prefilter mip chain). null → single-threaded.
     jobs::JobSystem* jobSystem  = nullptr;
+    IBLBakeDiagnostics* diagnostics = nullptr;
 };
 
 class IBLBaker

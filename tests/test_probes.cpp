@@ -12,6 +12,7 @@
 #include "addons/probes/ProbeData.hpp"
 #include "addons/probes/ProbeSerialization.hpp"
 #include "assets/AssetRegistry.hpp"
+#include "assets/TextureImporter.hpp"
 #include "core/PathUtf8.hpp"
 #include "ecs/Components.hpp"
 #include "ecs/World.hpp"
@@ -22,6 +23,8 @@
 #include <cstdio>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <string>
 #include <vector>
@@ -227,6 +230,51 @@ void TestDiffuseIrradianceFiltersHighFrequencyEnvironment(test::TestContext& ctx
     CHECK(ctx, maxError < 0.01f);
 }
 
+void TestPureSkyBakeMeasurements(test::TestContext& ctx)
+{
+    assets::TextureImportRequest request{};
+    request.sourcePath = std::filesystem::path(__FILE__).parent_path().parent_path()
+                       / "assets/autumn_field_puresky_2k.hdr";
+    if (const char* path = std::getenv("KROM_IBL_MEASURE_HDR"))
+        request.sourcePath = PathFromUtf8(path);
+    std::ifstream input(request.sourcePath, std::ios::binary);
+    request.fileBytes.assign(std::istreambuf_iterator<char>(input), {});
+    assets::TextureAsset texture{};
+    CHECK(ctx, assets::TextureImporter::Import(request, texture));
+    if (texture.pixelData.empty()) return;
+    renderer::IBLBakeDiagnostics diagnostics{};
+    renderer::IBLBakeParams params{};
+    params.environmentSize = 128u;
+    params.irradianceSize = 8u;
+    params.prefilterBaseSize = 128u;
+    params.prefilterSamples = 64u;
+    params.diagnostics = &diagnostics;
+    const auto baked = renderer::IBLBaker::BakeFromTexture(texture, 1.f, params);
+    CHECK(ctx, baked.IsValid());
+    if (!baked.IsValid()) return;
+    for (const auto& stage : {std::pair{"source", diagnostics.source},
+                             std::pair{"compressed", diagnostics.compressed},
+                             std::pair{"lighting", diagnostics.lighting}})
+        std::printf("# puresky %s: mean %.6f, max %.6f, changed %.6f%%\n", stage.first,
+            stage.second.meanLuminance, stage.second.maxLuminance, stage.second.changedPixelFraction * 100.0);
+    size_t offset = 0u;
+    for (uint32_t mip = 0u, size = baked.prefilterBaseSize; mip < baked.prefilterMipCount;
+         ++mip, size = std::max(size / 2u, 1u))
+    {
+        float maximum = 0.f;
+        for (size_t pixel = 0u; pixel < static_cast<size_t>(6u) * size * size; ++pixel)
+        {
+            uint16_t h[4];
+            std::memcpy(h, baked.prefilterData.data() + offset + pixel * 8u, 8u);
+            maximum = std::max(maximum, HalfToFloatTest(h[0]) * .2126f
+                + HalfToFloatTest(h[1]) * .7152f + HalfToFloatTest(h[2]) * .0722f);
+        }
+        if (mip == 0u || mip == 2u)
+            std::printf("# puresky prefilter mip %u: max luminance %.6f\n", mip, maximum);
+        offset += static_cast<size_t>(6u) * size * size * 8u;
+    }
+}
+
 void TestInputHash(test::TestContext& ctx)
 {
     auto makeWorld = [](bool reversed, float meshX, ecs::World*& out, EntityID& outProbe,
@@ -408,6 +456,7 @@ int RunProbeTests()
         .Add(".kprobe round trip and versions", TestProbeFileRoundTrip)
         .Add("Bake from cube faces",           TestBakeFromCubeFaces)
         .Add("Diffuse irradiance filters high-frequency environments", TestDiffuseIrradianceFiltersHighFrequencyEnvironment)
+        .Add("Pure sky bake measurements", TestPureSkyBakeMeasurements)
         .Add("Input hash",                     TestInputHash)
         .Add("Fit box from scene triangles",   TestFitProbeBox)
         .Add("Probe data path",                TestProbeDataPath)

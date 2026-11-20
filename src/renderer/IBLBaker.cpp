@@ -298,6 +298,28 @@ namespace engine::renderer {
             }
         }
 
+        [[nodiscard]] static IBLSourceStatistics MeasureSource(const FloatImage& image,
+                                                              const FloatImage& original) noexcept
+        {
+            IBLSourceStatistics result{};
+            size_t changed = 0u;
+            for (size_t i = 0u; i < image.pixels.size(); ++i)
+            {
+                const auto& p = image.pixels[i];
+                const auto& q = original.pixels[i];
+                const float lum = Luminance(p);
+                result.meanLuminance += lum;
+                result.maxLuminance = std::max(result.maxLuminance, lum);
+                changed += p.x != q.x || p.y != q.y || p.z != q.z;
+            }
+            if (!image.pixels.empty())
+            {
+                result.meanLuminance /= image.pixels.size();
+                result.changedPixelFraction = static_cast<double>(changed) / image.pixels.size();
+            }
+            return result;
+        }
+
         static void RemoveDominantSunHotspotForIBL(FloatImage& img) noexcept
         {
             if (img.pixels.empty() || img.width == 0u || img.height == 0u)
@@ -775,8 +797,15 @@ namespace engine::renderer {
         FloatImage source = DecodeAsset(asset);
         if (intensity != 1.f)
             for (Float3& px : source.pixels) px *= intensity;
+        const FloatImage original = params.diagnostics ? source : FloatImage{};
+        if (params.diagnostics)
+            params.diagnostics->source = MeasureSource(source, original);
         CompressDominantHighlightsForIBL(source);
+        if (params.diagnostics)
+            params.diagnostics->compressed = MeasureSource(source, original);
         RemoveDominantSunHotspotForIBL(source);
+        if (params.diagnostics)
+            params.diagnostics->lighting = MeasureSource(source, original);
         return BakeFromSource(source, params);
     }
 

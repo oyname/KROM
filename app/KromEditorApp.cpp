@@ -5120,7 +5120,8 @@ bool KromEditorApp::BuildMaterialPreviewRenderView(renderer::RenderView& outView
     outView.farPlane = 20.0f;
     outView.ambientColor = {0.22f, 0.22f, 0.24f};
     outView.ambientIntensity = 1.8f;
-    outView.debugFlags = 0u;
+    outView.debugFlags = m_editorFrameCtx->state.editorDebugFlags &
+        (renderer::DBG_VIEW_IBL_DIFF | renderer::DBG_VIEW_IBL_SPEC);
     outView.visibilityLayerMask = renderer::LAYER_EDITOR_MATERIAL_PREVIEW;
     // Only the material preview light rig (see SyncPreviewLightRigs); scene lights carry
     // other bits and are rejected by the exclude mask.
