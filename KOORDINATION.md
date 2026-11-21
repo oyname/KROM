@@ -17,6 +17,73 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## krom.h wrapper: scene management moved to `KromSceneManager` (Claude Opus 5.5, 2026-11-21)
+
+- User request: next step of the `src/app/KromWrapper.cpp` split, on branch
+  `refactor/krom-runtime-materials` on top of the uncommitted runtime-materials step, not committed.
+- New `src/app/KromSceneManager.hpp/.cpp` (`Krom::internal`): `KromSceneData`, `SceneRecord`, the
+  `.kscene` parser (`HasLegacyKsceneEntities`, `ParseKscene`), scene instantiation
+  (`MarkPersistentRecursive`, `PreservePersistentSubtrees`, `UnloadSceneById`,
+  `RebuildChildrenComponentsForLoadedEntities`, `EnsureRuntimeTransformComponents`,
+  `ResolveSerializedSceneAssetBindings`, `LoadComponentSerializedScene`, `ApplySceneEnvironment`,
+  `InstantiateSceneData`, `LoadSceneFromData`, `LoadKsceneFile`), `DestroyEntityRecursive`,
+  `DetachEntityFromParent`, `RegisterScriptSpawn`, and the bodies of the krom.h scene functions
+  (`LoadScene`/`LoadSceneAdditive` by path and by index, `GetSceneCount`, `LoadSceneAsync`,
+  `IsSceneReady`, `ActivateScene`, `UnloadScene`, `UnloadAll`, `SetPersistent`,
+  `SetScenePersistent`, `FindEntityInScene`). Helpers moved by script (renames only:
+  `State& state` -> `const SceneContext& ctx`, `state.x` -> `ctx.x` / `ctx.manager.x`,
+  `MakeMaterialContext(state)` -> `ctx.materials`, `LoadMaterial`/`LoadTexture` -> `Krom::...`);
+  the krom.h bodies were copied and diffed against the old ones (only signature/`Get()` lines
+  differ).
+- Cut: the module OWNS `SceneManagerState` (`scenes`, `persistentEntityIds`, `nextSceneId`,
+  `projectScenePaths`; member `sceneManager` in `State`, at the place of the old fields so the
+  destruction order is unchanged). Everything shared comes in per call through `SceneContext`
+  (built by `MakeSceneContext(state)`): world, asset pipeline, asset registry, transform and bounds
+  systems, event bus, script registry, game simulation, asset root, project settings,
+  `editorLiveStateEnabled`, render settings, camera options (ambient), active environment, render
+  system, and a `RuntimeMaterialContext`. `IsSceneReady`, `SetPersistent`, `GetSceneCount` and the
+  index overloads only take `SceneManagerState&`; the index overloads call `Krom::LoadScene(path)` /
+  `Krom::LoadSceneAdditive(path)` as before.
+- Public in the header: the krom.h functions, plus `DestroyEntityRecursive` and
+  `DetachEntityFromParent` (also used by `DestroyEntity`, `SetParent`/`Detach` and the
+  script destroy hook in `Run()`) and `RegisterScriptSpawn` (script hook in `Run()`). Everything
+  else is `static` in the .cpp. `EnsureInitialized()` stays in the wrapper forwards.
+- Stayed in the wrapper: `ReadProjectFile` and `NormalizeProjectScenePath` (project loading; writes
+  `state.sceneManager.projectScenePaths`), `InstantiatePrefabForScript` (users: script hook and
+  shader warm-up, not scenes), `CaptureWorldTransform` / `IsDescendantOf` / `ApplyLocalFromWorld`
+  (only `SetParent`/`Detach`), `WriteRuntimeStateSnapshot` (editor live state in `Run()`), `FindEntity`,
+  `GetMainCamera`. `Shutdown()` and `DestroyEntity()` / the destroy hook now clear/erase through
+  `state.sceneManager`. Nothing was left behind because of entanglement.
+- `KromWrapper.cpp` 4149 -> 3439 lines (module: 762 .cpp + 146 .hpp). krom.h is unchanged.
+- New opt-in test `krom_scene_api_tests` (`tests/test_runtime_scene_api.cpp`, DX11, hidden
+  window, 53 checks): `LoadProject` + `GetSceneCount`, `FindEntityInScene` (own scene only, null
+  name, unknown scene), additive load + `UnloadScene` of the additive scene leaving the first one
+  intact, `LoadSceneAsync` + `IsSceneReady` + `ActivateScene` (also blocking activate, missing file),
+  `SetPersistent` / `SetScenePersistent` / a `persistent:true` scene file across `LoadScene` and
+  `UnloadAll`, index range checks, DemoProject `Scenes/Room 0.kscene`, then `LoadScene(4)` inside
+  `Run()` and 5 frames, `Shutdown` clearing the scene order.
+- Checked: before/after - the new test built and run against the pre-step wrapper (53 PASS) and
+  after the move (53 PASS), PASS lines identical for all five runtime tests; scene/warning/error log
+  lines identical apart from a one-time IBL cache cleanup in the first run
+  (`out/claude-scenemanager-test-<test>-before.log` / `-after.log`). After the move:
+  `krom_scene_api_tests` 53 PASS, `krom_scene_lifetime_tests` 11 PASS, `krom_runtime_material_tests`
+  21 PASS, `krom_render_settings_tests` 25 PASS, `krom_surface_tests` 26 PASS, `krom_tests` 507
+  passed / 0 failed (`out/claude-scenemanager-build.log`).
+  Full Debug build (`out/claude-scenemanager-build-all.log`, exit 0, no errors; DX11/Vulkan/OpenGL
+  runtimes, examples and DemoProject relinked), then the test targets rebuilt (up to date) and all
+  six test programs run again with the same counts (`out/claude-scenemanager-test-<test>-final.log`).
+- Not checked: Release; runs under Vulkan/OpenGL (only linked by the full build); the GLFW wrapper
+  `engine_krom_wrapper_glfw` (not configured in `out/build/x64-Debug`, so not compiled at all); editor live state (`runtime-state.json`) and the editor play path (it does not use the
+  wrapper scene code); scenes with environment textures under a backend other than DX11.
+- Please review: `MakeSceneContext` (field order against `SceneContext`, `assetPipeline.get()` /
+  `world.get()` taken after `EnsureInitialized()` in the forwards), that `ActivateScene`,
+  `UnloadScene`, `UnloadAll`, `SetScenePersistent` and `FindEntityInScene` build the context without
+  `EnsureInitialized()` exactly like before (world may be null), and `RegisterScriptSpawn` now
+  building a full context per script spawn.
+- Still open in the split: EntityApi, project/user files, `Run()`.
+
+---
+
 ## krom.h wrapper: runtime materials moved to `KromRuntimeMaterials` (Claude, 2026-11-21)
 
 - User request: next step of the `src/app/KromWrapper.cpp` split. Branch
@@ -76,8 +143,8 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
   null add-ons, script block, scene values, player's level saved/read/ignored from the editor,
   project options with the level on top), then krom.h against the runtime (Low/Medium/High round
   trip, switches, shading, grading).
-- Checked: full Debug build (`out/claude-rendersettings-build-all.log`, includes the GLFW wrapper
-  and all backends); `krom_render_settings_tests` 25 PASS, `krom_surface_tests` 26 PASS,
+- Checked: full Debug build (`out/claude-rendersettings-build-all.log`, all backends; correction:
+  the GLFW wrapper is not configured in `out/build/x64-Debug` and was never compiled); `krom_render_settings_tests` 25 PASS, `krom_surface_tests` 26 PASS,
   `krom_scene_lifetime_tests` 11 PASS (scene loads and `Run()` frames on DX11), `krom_tests` all pass
   (`out/claude-rendersettings-*.log`).
 - Not checked: Release; a run under Vulkan/OpenGL; `LoadProject` with a real user-settings.json in

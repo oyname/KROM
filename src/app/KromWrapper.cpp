@@ -1,6 +1,7 @@
 #include "krom.h"
 #include "KromRenderSettings.hpp"
 #include "KromRuntimeMaterials.hpp"
+#include "KromSceneManager.hpp"
 #include "KromSurfaces.hpp"
 #include "core/AtomicTextFile.hpp"
 #include "core/PathUtf8.hpp"
@@ -160,53 +161,6 @@ namespace Krom {
 
 namespace {
 
-// =============================================================================
-// Scene-Datenstrukturen
-// =============================================================================
-
-struct KromSceneData
-{
-    std::string name;
-    bool persistent = false;
-    int  version = 1;
-    std::string sourceJson;
-    std::string environmentTexturePath;
-    bool hasEnvironment = false;
-    bool environmentEnableIBL = false;
-    bool environmentRemoveSunFromLighting = true;
-    float environmentIntensity = 1.0f;
-    std::array<float, 4> backgroundColor{0.f, 0.f, 0.f, 1.f};
-    bool hasBackgroundColor = false;
-    engine::math::Vec3 ambientColor{0.06f, 0.06f, 0.08f};
-    bool hasAmbientColor = false;
-    float ambientIntensity = 1.0f;
-    bool hasAmbientIntensity = false;
-    float exposureEv = 0.0f;
-    engine::renderer::addons::forward::ExposureMode exposureMode = engine::renderer::addons::forward::ExposureMode::Fixed;
-    engine::renderer::addons::forward::AutoExposureSettings autoExposure{};
-    engine::renderer::addons::forward::ColorGradingSettings grading{};   // neutral when missing
-    // Render options of scenes written before they moved to the project settings;
-    // used only when the project file has no "rendering" block.
-    engine::ProjectRenderSettings legacyRendering = engine::ReadLegacySceneRenderSettings({});
-    uint32_t probeBakePasses = 2u;    // probe add-on
-    bool valid = false;
-};
-
-struct SceneRecord
-{
-    std::string name;
-    std::string path;
-    bool persistent = false;
-    bool active = false;
-    std::vector<LPENTITY> rootEntities;
-
-    // Async-Support
-    std::shared_future<KromSceneData> asyncFuture;
-    KromSceneData stagedData;
-    bool staging = false;  // Hintergrund-Load läuft
-    bool staged  = false;  // Parsing fertig, Entity-Erstellung aussteht
-};
-
 using internal::SurfaceRecord;
 using internal::GenerateMissingNormals;
 
@@ -252,16 +206,13 @@ struct State
     bool running = false;
     bool forwardPlusActive = false;
 
-    // Scene-Management
-    std::unordered_map<uint32_t, SceneRecord> scenes;
-    std::unordered_set<uint32_t>              persistentEntityIds;
+    // Scenes, persistent entities and the project scene order (KromSceneManager.hpp).
+    internal::SceneManagerState               sceneManager;
     std::unordered_map<uint32_t, std::string> texturePaths;
     std::unordered_map<uint64_t, LPMATERIAL>  runtimeMaterialCache;
     std::unordered_map<uint32_t, SurfaceRecord> surfaces;
     uint32_t                                  nextSurfaceId = 1u;
-    uint32_t                                  nextSceneId = 1u;
     std::filesystem::path                     projectRoot;
-    std::vector<std::string>                  projectScenePaths;
     std::filesystem::path                     runtimeStatePath;
     float                                     runtimeStateWriteTimer = 0.0f;
     bool                                      editorLiveStateEnabled = false;
@@ -545,6 +496,16 @@ internal::SurfaceContext MakeSurfaceContext(State& state)
     return internal::SurfaceContext{state.surfaces, state.nextSurfaceId, state.assetRegistry, state.world.get()};
 }
 
+internal::SceneContext MakeSceneContext(State& state)
+{
+    return internal::SceneContext{
+        state.sceneManager, state.world.get(), state.assetPipeline.get(), state.assetRegistry,
+        state.transformSystem, state.boundsSystem, state.eventBus, state.scriptAddonRegistry, state.game,
+        state.assetRoot, state.projectSettings, state.editorLiveStateEnabled, state.render,
+        state.cameraOptions, state.activeEnvironment, state.renderLoop.GetRenderSystem(),
+        MakeMaterialContext(state)};
+}
+
 LPMESH RegisterProceduralMesh(State& state, engine::assets::SubMeshData submesh, const char* name, bool generateTangents)
 {
     if (submesh.positions.empty())
@@ -584,133 +545,6 @@ LPENTITY CreateProceduralEntity(State& state, LPMESH mesh, const char* name)
     if (material.IsValid())
         (void)SetMaterial(entity, material);
     return entity;
-}
-
-// =============================================================================
-// .kscene Parser
-// =============================================================================
-
-// .kscene ist das SceneSerializer-Format (Entities mit "components"-Array)
-// plus Root-Metadaten (scene, version, persistent, environment).
-// Das alte, handgeschriebene Schema (model/light/camera direkt am Entity)
-// wird nicht mehr unterstuetzt — solche Dateien im Editor neu bauen.
-static bool HasLegacyKsceneEntities(const engine::serialization::JsonValue& root) noexcept
-{
-    const auto* arr = root.Get("entities");
-    if (!arr || !arr->IsArray())
-        return false;
-
-    for (const auto& e : arr->arrayVal)
-    {
-        const auto* components = e.Get("components");
-        if (!components || !components->IsArray())
-            return true;
-    }
-    return false;
-}
-
-static KromSceneData ParseKscene(const std::string& json)
-{
-    KromSceneData data;
-    std::string err;
-    const engine::serialization::JsonValue root =
-        engine::serialization::JsonParser::Parse(json, err);
-    if (!err.empty())
-    {
-        engine::Debug::LogError("krom.h: kscene JSON-Fehler: %s", err.c_str());
-        return data;
-    }
-
-    if (const auto* s = root.Get("scene"))     data.name       = s->AsString();
-    if (const auto* p = root.Get("persistent")) data.persistent = p->AsBool();
-    if (const auto* v = root.Get("version"))    data.version    = v->AsInt();
-    if (const auto* env = root.Get("environment"))
-    {
-        if (env->IsObject())
-        {
-            if (const auto* path = env->Get("texturePath"); path && path->IsString())
-            {
-                data.environmentTexturePath = path->AsString();
-                data.hasEnvironment = !data.environmentTexturePath.empty();
-            }
-            if (const auto* enable = env->Get("enableIBL"); enable && enable->IsBool())
-                data.environmentEnableIBL = enable->AsBool();
-            if (const auto* removeSun = env->Get("removeSunFromLighting"); removeSun && removeSun->IsBool())
-                data.environmentRemoveSunFromLighting = removeSun->AsBool();
-            if (const auto* intensity = env->Get("iblIntensity"); intensity && intensity->IsNumber())
-                data.environmentIntensity = std::max(0.0f, intensity->AsFloat());
-            if (const auto* bg = env->Get("backgroundColor"); bg && bg->IsArray() && bg->arrayVal.size() >= 3u)
-            {
-                data.backgroundColor[0] = bg->arrayVal[0].AsFloat();
-                data.backgroundColor[1] = bg->arrayVal[1].AsFloat();
-                data.backgroundColor[2] = bg->arrayVal[2].AsFloat();
-                data.backgroundColor[3] = bg->arrayVal.size() >= 4u ? bg->arrayVal[3].AsFloat() : 1.f;
-                data.hasBackgroundColor = true;
-            }
-            if (const auto* amb = env->Get("ambientColor"); amb && amb->IsArray() && amb->arrayVal.size() >= 3u)
-            {
-                data.ambientColor = {amb->arrayVal[0].AsFloat(),
-                                     amb->arrayVal[1].AsFloat(),
-                                     amb->arrayVal[2].AsFloat()};
-                data.hasAmbientColor = true;
-            }
-            if (const auto* ambI = env->Get("ambientIntensity"); ambI && ambI->IsNumber())
-            {
-                data.ambientIntensity = std::max(0.0f, ambI->AsFloat());
-                data.hasAmbientIntensity = true;
-            }
-            if (const auto* ev = env->Get("exposureEv"); ev && ev->IsNumber())
-                data.exposureEv = std::clamp(ev->AsFloat(), engine::renderer::addons::forward::kMinExposureEv,
-                                             engine::renderer::addons::forward::kMaxExposureEv);
-            engine::renderer::addons::forward::ReadSceneExposureJson(*env, data.exposureMode, data.autoExposure);
-            engine::renderer::addons::forward::ReadSceneColorGradingJson(*env, data.grading);
-            data.legacyRendering = engine::ReadLegacySceneRenderSettings(root);
-            if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
-                data.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;
-        }
-    }
-
-    if (HasLegacyKsceneEntities(root))
-    {
-        engine::Debug::LogError("krom.h: kscene '%s' nutzt das alte Format (version %d) — "
-            "bitte im Editor neu bauen (Build)", data.name.c_str(), data.version);
-        return data;
-    }
-
-    data.sourceJson = json;
-    data.valid = true;
-    return data;
-}
-
-// =============================================================================
-// Scene Entity-Instantiierung
-// =============================================================================
-
-static void DetachEntityFromParent(engine::ecs::World& world, LPENTITY entity);
-
-static void DestroyEntityRecursive(engine::ecs::World& world, LPENTITY entity)
-{
-    if (!world.IsAlive(entity))
-        return;
-    if (const auto* children = world.Get<engine::ChildrenComponent>(entity))
-    {
-        const auto copy = children->children;
-        for (const LPENTITY child : copy)
-            DestroyEntityRecursive(world, child);
-    }
-    DetachEntityFromParent(world, entity);
-    world.DestroyEntity(entity);
-}
-
-static void DetachEntityFromParent(engine::ecs::World& world, LPENTITY entity)
-{
-    if (!world.IsAlive(entity) || !world.Has<engine::ParentComponent>(entity))
-        return;
-
-    const LPENTITY parent = world.Get<engine::ParentComponent>(entity)->parent;
-    if (world.IsAlive(parent) && world.Has<engine::ChildrenComponent>(parent))
-        world.Get<engine::ChildrenComponent>(parent)->Remove(entity);
-    world.Remove<engine::ParentComponent>(entity);
 }
 
 struct CapturedTransform
@@ -804,206 +638,6 @@ static void ApplyLocalFromWorld(State& state, LPENTITY entity, const CapturedTra
     transform->localRotation = worldTransform.rotation;
     transform->localScale = worldTransform.scale;
     transform->dirty = true;
-}
-
-static void MarkPersistentRecursive(State& state, LPENTITY entity)
-{
-    if (!state.world || !state.world->IsAlive(entity))
-        return;
-
-    state.persistentEntityIds.insert(entity.value);
-    if (const auto* children = state.world->Get<engine::ChildrenComponent>(entity))
-    {
-        for (const LPENTITY child : children->children)
-            MarkPersistentRecursive(state, child);
-    }
-}
-
-static void PreservePersistentSubtrees(engine::ecs::World& world,
-                                       LPENTITY entity,
-                                       const std::unordered_set<uint32_t>& persistentEntityIds)
-{
-    if (!world.IsAlive(entity))
-        return;
-
-    if (const auto* children = world.Get<engine::ChildrenComponent>(entity))
-    {
-        const auto copy = children->children;
-        for (const LPENTITY child : copy)
-        {
-            if (!world.IsAlive(child))
-                continue;
-
-            if (persistentEntityIds.count(child.value) != 0u)
-            {
-                DetachEntityFromParent(world, child);
-                continue;
-            }
-
-            PreservePersistentSubtrees(world, child, persistentEntityIds);
-        }
-    }
-}
-
-// Spawns gehoeren zur Szene des aufrufenden Objekts, nicht einfach zur zuletzt
-// geladenen Szene. Parent-Ketten decken auch Scripts auf Prefab-Kindern ab.
-static void RegisterScriptSpawn(State& state, LPENTITY owner, LPENTITY root)
-{
-    if (!state.world || !state.world->IsAlive(root))
-        return;
-    std::unordered_set<uint32_t> visited;
-    for (LPENTITY current = owner; state.world->IsAlive(current) && visited.insert(current.value).second;)
-    {
-        for (auto& [sceneId, scene] : state.scenes)
-        {
-            (void)sceneId;
-            if (std::find(scene.rootEntities.begin(), scene.rootEntities.end(), current) != scene.rootEntities.end())
-            {
-                scene.rootEntities.push_back(root);
-                if (scene.persistent)
-                    MarkPersistentRecursive(state, root);
-                return;
-            }
-        }
-        const auto* parent = state.world->Get<engine::ParentComponent>(current);
-        current = parent ? parent->parent : NULL_LPENTITY;
-    }
-    // Ein explizit persistentes Objekt kann seine Ursprungsszene bereits
-    // ueberlebt haben. Seine Spawns erhalten dann denselben Lebenszyklus.
-    if (state.persistentEntityIds.count(owner.value))
-        MarkPersistentRecursive(state, root);
-    else
-        engine::Debug::LogWarning("krom.h: Script-Spawn ohne besitzende Szene (owner=%u root=%u)",
-            owner.value, root.value);
-}
-
-static void UnloadSceneById(State& state, uint32_t sceneId)
-{
-    auto it = state.scenes.find(sceneId);
-    if (it == state.scenes.end())
-        return;
-    SceneRecord& record = it->second;
-    if (state.world)
-    {
-        for (const LPENTITY entity : record.rootEntities)
-        {
-            if (!state.world->IsAlive(entity))
-                continue;
-            if (state.persistentEntityIds.count(entity.value))
-                continue;
-            PreservePersistentSubtrees(*state.world, entity, state.persistentEntityIds);
-            DestroyEntityRecursive(*state.world, entity);
-        }
-    }
-    if (record.active && !record.name.empty())
-        state.eventBus.Emit<engine::events::SceneUnloadedEvent>(record.name);
-    state.scenes.erase(it);
-}
-
-static void RebuildChildrenComponentsForLoadedEntities(State& state,
-                                                       const std::vector<LPENTITY>& loadedEntities)
-{
-    if (!state.world)
-        return;
-
-    for (const LPENTITY entity : loadedEntities)
-    {
-        if (!state.world->IsAlive(entity))
-            continue;
-
-        const auto* parent = state.world->Get<engine::ParentComponent>(entity);
-        if (!parent || !parent->parent.IsValid() || !state.world->IsAlive(parent->parent))
-            continue;
-
-        if (!state.world->Has<engine::ChildrenComponent>(parent->parent))
-            state.world->Add<engine::ChildrenComponent>(parent->parent);
-        state.world->Get<engine::ChildrenComponent>(parent->parent)->Add(entity);
-    }
-}
-
-static void EnsureRuntimeTransformComponents(State& state,
-                                             const std::vector<LPENTITY>& loadedEntities)
-{
-    if (!state.world)
-        return;
-
-    for (const LPENTITY entity : loadedEntities)
-    {
-        if (!state.world->IsAlive(entity))
-            continue;
-
-        auto* transform = state.world->Get<engine::TransformComponent>(entity);
-        if (!transform)
-            continue;
-
-        if (!state.world->Has<engine::WorldTransformComponent>(entity))
-            state.world->Add<engine::WorldTransformComponent>(entity);
-        transform->dirty = true;
-    }
-}
-
-static void ResolveSerializedSceneAssetBindings(State& state,
-                                                const std::vector<LPENTITY>& loadedEntities)
-{
-    if (!state.world || !state.assetPipeline)
-        return;
-
-    engine::addons::mesh_renderer::ResolveMeshAssetBindings(
-        *state.assetPipeline,
-        state.assetRegistry,
-        *state.world);
-
-    std::unordered_map<std::string, engine::assets::ImportedAssetBundle> importedBundleCache;
-    std::unordered_map<std::string, LPMATERIAL> importedRuntimeMaterialCache;
-
-    for (const LPENTITY entity : loadedEntities)
-    {
-        if (!state.world->IsAlive(entity))
-            continue;
-
-        if (const auto* mesh = state.world->Get<engine::MeshComponent>(entity))
-        {
-            if (!mesh->mesh.IsValid() && mesh->meshAssetPath.empty())
-            {
-                const auto* name = state.world->Get<engine::NameComponent>(entity);
-                engine::Debug::LogWarning(
-                    "krom.h: Entity '%s' hat MeshComponent ohne meshAssetPath; "
-                    "alte meshHandle-Werte koennen in der Runtime nicht neu geladen werden",
-                    name ? name->name.c_str() : "<unnamed>");
-            }
-        }
-
-        // Erst GLB-Import-Materialien in Runtime-Materialien uebersetzen.
-        // DefaultLit greift nur, wenn danach immer noch kein Material existiert.
-        internal::ApplyImportedMeshMaterialsForEntity(
-            MakeMaterialContext(state), entity, importedBundleCache, importedRuntimeMaterialCache);
-        internal::EnsureDefaultMaterialForEntity(MakeMaterialContext(state), entity);
-
-        auto* material = state.world->Get<engine::MaterialComponent>(entity);
-        if (!material)
-            continue;
-
-        if (!material->materialAssetPath.empty())
-        {
-            const LPMATERIAL assetMaterial = material->materialOverrideSource.empty()
-                ? LoadMaterial(material->materialAssetPath.c_str())
-                : state.assetPipeline->LoadMaterialSource(material->materialOverrideSource);
-            if (assetMaterial.IsValid())
-                material->material = internal::RealizeMaterialForEntity(MakeMaterialContext(state), entity, assetMaterial);
-        }
-
-        for (engine::MaterialComponent::SlotOverride& slot : material->slotOverrides)
-        {
-            if (slot.materialAssetPath.empty())
-                continue;
-
-            const LPMATERIAL assetMaterial = slot.materialOverrideSource.empty()
-                ? LoadMaterial(slot.materialAssetPath.c_str())
-                : state.assetPipeline->LoadMaterialSource(slot.materialOverrideSource);
-            if (assetMaterial.IsValid())
-                slot.material = internal::RealizeMaterialForEntity(MakeMaterialContext(state), entity, assetMaterial);
-        }
-    }
 }
 
 static LPENTITY InstantiatePrefabForScript(State& state,
@@ -1189,61 +823,6 @@ static void WriteRuntimeStateSnapshot(State& state)
     }
 }
 
-static bool LoadComponentSerializedScene(State& state,
-                                         const KromSceneData& data,
-                                         SceneRecord& record)
-{
-    engine::serialization::SceneDeserializer deserializer(*state.world);
-    deserializer.RegisterDefaultHandlers();
-    engine::addons::camera::RegisterCameraDeserializationHandlers(deserializer);
-    engine::addons::lighting::RegisterLightingDeserializationHandlers(deserializer);
-    engine::addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deserializer);
-    engine::addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
-    engine::script::RegisterScriptDeserializationHandlers(deserializer, &state.scriptAddonRegistry);
-    engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
-    engine::audio::RegisterAudioDeserializationHandlers(deserializer);
-    engine::particles::RegisterParticleDeserializationHandlers(deserializer);
-    engine::addons::probes::RegisterProbeDeserializationHandlers(deserializer);
-    engine::addons::postprocess::RegisterPostProcessDeserializationHandlers(deserializer);
-
-    engine::serialization::DeserializeResult result =
-        deserializer.DeserializeFromJson(data.sourceJson);
-    if (!result.success)
-    {
-        engine::Debug::LogError("krom.h: serialized scene '%s' konnte nicht geladen werden: %s",
-            data.name.c_str(), result.error.c_str());
-        return false;
-    }
-
-    std::vector<LPENTITY> loadedEntities;
-    loadedEntities.reserve(result.entityRemap.size());
-    for (const auto& [oldId, newId] : result.entityRemap)
-    {
-        (void)oldId;
-        if (newId.IsValid() && state.world->IsAlive(newId))
-            loadedEntities.push_back(newId);
-    }
-
-    RebuildChildrenComponentsForLoadedEntities(state, loadedEntities);
-    EnsureRuntimeTransformComponents(state, loadedEntities);
-    ResolveSerializedSceneAssetBindings(state, loadedEntities);
-    engine::script::ResolveScriptEntityReferences(*state.world, state.scriptAddonRegistry);
-
-    for (const LPENTITY entity : loadedEntities)
-    {
-        if (!state.world->IsAlive(entity))
-            continue;
-        if (!state.world->Has<engine::ParentComponent>(entity))
-            record.rootEntities.push_back(entity);
-        if (data.persistent)
-            MarkPersistentRecursive(state, entity);
-    }
-
-    engine::Debug::Log("krom.h: serialized scene '%s' geladen (%u entities, %u components)",
-        data.name.c_str(), result.entitiesRead, result.componentsRead);
-    return true;
-}
-
 // IScriptContext::GetRenderSettings(): the same values as the Set*/Get* functions of krom.h.
 class WrapperRenderSettingsService final : public engine::script::IRenderSettingsService
 {
@@ -1259,147 +838,6 @@ public:
 private:
     State& m_state;
 };
-
-static void ApplySceneEnvironment(State& state, const KromSceneData& data)
-{
-    if (!state.projectSettings.renderingStored)
-        internal::ApplyProjectRenderSettings(state.render, data.legacyRendering, state.editorLiveStateEnabled);
-    internal::ApplySceneRenderSettings(state.render, data.exposureEv, data.exposureMode, data.autoExposure,
-                                       data.grading, data.probeBakePasses);
-
-    // ── Ambient ───────────────────────────────────────────────────────────────
-    if (data.hasAmbientColor)    state.cameraOptions.ambientColor    = data.ambientColor;
-    if (data.hasAmbientIntensity) state.cameraOptions.ambientIntensity = data.ambientIntensity;
-
-    // ── IBL-Modus von der Game-Main-Kamera ableiten ───────────────────────────
-    // Der Editor-IBL-Toggle ist unabhängig von der Game-Kamera.
-    // Im Wrapper bestimmt ausschließlich backgroundMode der Main-Kamera ob IBL aktiv ist.
-    bool gameCameraWantsSkybox = false;
-    if (state.world)
-    {
-        state.world->ForEachAlive([&](engine::EntityID id)
-        {
-            const auto* cam = state.world->Get<engine::CameraComponent>(id);
-            if (cam && cam->isMainCamera)
-                gameCameraWantsSkybox = (cam->backgroundMode == engine::BackgroundMode::Skybox);
-        });
-    }
-
-    // ── Environment-Textur laden ──────────────────────────────────────────────
-    if (data.hasEnvironment && !data.environmentTexturePath.empty() && state.assetPipeline)
-    {
-        const LPTEXTURE sourceTexture = LoadTexture(data.environmentTexturePath.c_str());
-        if (sourceTexture.IsValid())
-        {
-            state.assetPipeline->UploadPendingGpuAssets();
-
-            engine::renderer::EnvironmentDesc envDesc{};
-            envDesc.mode          = engine::renderer::EnvironmentMode::Texture;
-            envDesc.sourceTexture = sourceTexture;
-            envDesc.intensity     = data.environmentIntensity;
-            envDesc.enableIBL     = data.environmentEnableIBL;
-            envDesc.removeSunFromLighting = data.environmentRemoveSunFromLighting;
-
-            engine::renderer::RenderSystem& rs = state.renderLoop.GetRenderSystem();
-            const engine::renderer::EnvironmentHandle next = rs.CreateEnvironment(envDesc);
-            if (next.IsValid())
-            {
-                const engine::renderer::EnvironmentHandle prev = state.activeEnvironment;
-                state.activeEnvironment = next;
-                rs.SetActiveEnvironment(next);
-                if (prev.IsValid()) rs.DestroyEnvironment(prev);
-
-                engine::Debug::Log("krom.h: environment '%s' intensity=%.2f ibl=%s (von Game-Kamera)",
-                    data.environmentTexturePath.c_str(), data.environmentIntensity,
-                    gameCameraWantsSkybox ? "true" : "false");
-            }
-            else
-            {
-                engine::Debug::LogWarning("krom.h: environment konnte nicht erstellt werden: %s",
-                    data.environmentTexturePath.c_str());
-            }
-        }
-        else
-        {
-            engine::Debug::LogWarning("krom.h: environment-Textur nicht gefunden: %s",
-                data.environmentTexturePath.c_str());
-        }
-    }
-
-    // ── Kamera-Hintergrund ────────────────────────────────────────────────────
-    // backgroundMode und clearColor kommen direkt aus der Entity-Deserialisierung —
-    // kein Override nötig.
-}
-
-// Gemeinsamer Instantiierungspfad fuer LoadScene/LoadSceneAdditive und ActivateScene.
-static bool InstantiateSceneData(State& state, const KromSceneData& data, SceneRecord& record)
-{
-    if (!LoadComponentSerializedScene(state, data, record))
-        return false;
-
-    state.transformSystem.Update(*state.world);
-    state.boundsSystem.Update(*state.world);
-    ApplySceneEnvironment(state, data);
-    if (!record.name.empty())
-        state.eventBus.Emit<engine::events::SceneLoadedEvent>(record.name);
-    return true;
-}
-
-static LPSCENE LoadSceneFromData(State& state, KromSceneData data, bool additive,
-                                 const char* filePath = nullptr)
-{
-    if (!data.valid || !state.world)
-        return NULL_SCENE;
-
-    if (!additive)
-    {
-        // Trigger, Events, Physikkoerper, Klaenge und Partikel der alten Szene verwerfen.
-        state.game.ResetForSceneChange();
-        // Alle nicht-persistenten Scenes entladen
-        std::vector<uint32_t> toUnload;
-        for (const auto& [id, scene] : state.scenes)
-            if (!scene.persistent)
-                toUnload.push_back(id);
-        for (const uint32_t id : toUnload)
-            UnloadSceneById(state, id);
-    }
-
-    const uint32_t sceneId = state.nextSceneId++;
-    SceneRecord& record = state.scenes[sceneId];
-    record.name       = data.name;
-    record.path       = (filePath && filePath[0] != '\0') ? filePath : data.name;
-    record.persistent = data.persistent;
-    record.active     = true;
-
-    if (!InstantiateSceneData(state, data, record))
-    {
-        state.scenes.erase(sceneId);
-        return NULL_SCENE;
-    }
-
-    engine::Debug::Log("krom.h: scene '%s' geladen (%zu entities, persistent=%s)",
-        data.name.c_str(), record.rootEntities.size(),
-        record.persistent ? "true" : "false");
-
-    return LPSCENE{sceneId};
-}
-
-static KromSceneData LoadKsceneFile(const std::filesystem::path& assetRoot,
-                                     const char* path)
-{
-    const std::filesystem::path resolved =
-        std::filesystem::weakly_canonical(assetRoot / PathFromUtf8(path));
-    std::ifstream file(resolved);
-    if (!file)
-    {
-        engine::Debug::LogError("krom.h: kscene file not found: %s",
-            PathToUtf8(resolved).c_str());
-        return KromSceneData{};
-    }
-    const std::string json(std::istreambuf_iterator<char>(file),
-                           std::istreambuf_iterator<char>{});
-    return ParseKscene(json);
-}
 
 static std::string NormalizeProjectScenePath(std::string scenePath,
                                              const std::string& assetRootName)
@@ -1485,7 +923,7 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
     if (const auto* shaderCache = root.Get("shaderCache"); shaderCache && shaderCache->IsString())
         SetShaderCacheDir(state.projectRoot / PathFromUtf8(shaderCache->AsString()));
 
-    state.projectScenePaths.clear();
+    state.sceneManager.projectScenePaths.clear();
     std::unordered_set<std::string> excludedScenes;
     if (const auto* excluded = root.Get("buildExclude"); excluded && excluded->IsArray())
         for (const auto& item : excluded->arrayVal)
@@ -1503,7 +941,7 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
             {
                 hasSceneOrder = true;
                 if (!excludedScenes.count(normalized))
-                    state.projectScenePaths.push_back(std::move(normalized));
+                    state.sceneManager.projectScenePaths.push_back(std::move(normalized));
             }
         }
     }
@@ -1514,14 +952,14 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
         {
             std::string normalized = NormalizeProjectScenePath(editorScene->AsString(), assetRootName);
             if (!normalized.empty() && !excludedScenes.count(normalized))
-                state.projectScenePaths.push_back(std::move(normalized));
+                state.sceneManager.projectScenePaths.push_back(std::move(normalized));
         }
     }
 
     engine::Debug::Log("krom.h: project loaded '%s' assetRoot='%s' scenes=%zu",
         PathToUtf8(projectPath).c_str(),
         PathToUtf8(state.assetRoot).c_str(),
-        state.projectScenePaths.size());
+        state.sceneManager.projectScenePaths.size());
     return true;
 }
 
@@ -2187,11 +1625,11 @@ bool DestroyEntity(LPENTITY entity)
     if (!state.world || !state.world->IsAlive(entity))
         return false;
 
-    state.persistentEntityIds.erase(entity.value);
+    state.sceneManager.persistentEntityIds.erase(entity.value);
     std::erase_if(state.surfaces, [&](const auto& item) {
         return item.second.entity == entity;
     });
-    DestroyEntityRecursive(*state.world, entity);
+    internal::DestroyEntityRecursive(*state.world, entity);
     state.transformSystem.Update(*state.world);
     state.boundsSystem.Update(*state.world);
     return true;
@@ -2425,7 +1863,7 @@ bool SetParent(LPENTITY child, LPENTITY parent, bool keepWorldTransform)
         ? CaptureWorldTransform(state, child)
         : CapturedTransform{};
 
-    DetachEntityFromParent(*state.world, child);
+    internal::DetachEntityFromParent(*state.world, child);
     state.world->Add<engine::ParentComponent>(child, parent);
     if (!state.world->Has<engine::ChildrenComponent>(parent))
         state.world->Add<engine::ChildrenComponent>(parent);
@@ -2451,7 +1889,7 @@ bool Detach(LPENTITY child, bool keepWorldTransform)
         ? CaptureWorldTransform(state, child)
         : CapturedTransform{};
 
-    DetachEntityFromParent(*state.world, child);
+    internal::DetachEntityFromParent(*state.world, child);
     if (keepWorldTransform)
         ApplyLocalFromWorld(state, child, worldTransform);
     else if (auto* transform = state.world->Get<engine::TransformComponent>(child))
@@ -3660,7 +3098,7 @@ int Run()
                 return InstantiatePrefabForScript(state, prefabAssetPath, position, rotation, scale);
             };
         const std::function<void(LPENTITY, LPENTITY)> prefabInstantiated =
-            [&state](LPENTITY owner, LPENTITY root) { RegisterScriptSpawn(state, owner, root); };
+            [&state](LPENTITY owner, LPENTITY root) { internal::RegisterScriptSpawn(MakeSceneContext(state), owner, root); };
         engine::gameplay::GameSimulationHooks hooks{};
         hooks.instantiatePrefab  = &instantiatePrefab;
         hooks.prefabInstantiated = &prefabInstantiated;
@@ -3670,8 +3108,8 @@ int Run()
         hooks.renderSettings = &renderSettings;
         hooks.destroyEntity = [&state](LPENTITY id)
         {
-            state.persistentEntityIds.erase(id.value);
-            DestroyEntityRecursive(*state.world, id);
+            state.sceneManager.persistentEntityIds.erase(id.value);
+            internal::DestroyEntityRecursive(*state.world, id);
         };
         hooks.loadScene = [](const engine::script::SceneLoadRequest& request)
         {
@@ -3848,15 +3286,15 @@ void Shutdown()
     state.featuresRegistered = false;
     state.tickCallback = {};
     state.initCallback = {};
-    state.scenes.clear();
-    state.persistentEntityIds.clear();
+    state.sceneManager.scenes.clear();
+    state.sceneManager.persistentEntityIds.clear();
     state.texturePaths.clear();
     state.runtimeMaterialCache.clear();
     state.surfaces.clear();
     state.nextSurfaceId = 1u;
-    state.nextSceneId = 1u;
+    state.sceneManager.nextSceneId = 1u;
     state.projectRoot.clear();
-    state.projectScenePaths.clear();
+    state.sceneManager.projectScenePaths.clear();
     if (state.activeEnvironment.IsValid())
     {
         state.renderLoop.GetRenderSystem().DestroyEnvironment(state.activeEnvironment);
@@ -3884,7 +3322,7 @@ void Shutdown()
 }
 
 // =============================================================================
-// Scene-Management
+// Scene-Management (KromSceneManager.cpp)
 // =============================================================================
 
 LPSCENE LoadScene(const char* path)
@@ -3892,28 +3330,17 @@ LPSCENE LoadScene(const char* path)
     State& state = Get();
     if (!EnsureInitialized() || !path)
         return NULL_SCENE;
-    return LoadSceneFromData(state, LoadKsceneFile(state.assetRoot, path), false, path);
+    return internal::LoadScene(MakeSceneContext(state), path);
 }
 
 LPSCENE LoadScene(int sceneIndex)
 {
-    State& state = Get();
-    if (sceneIndex <= 0)
-        return NULL_SCENE;
-
-    const size_t index = static_cast<size_t>(sceneIndex - 1);
-    if (index >= state.projectScenePaths.size())
-    {
-        engine::Debug::LogError("krom.h: LoadScene(%d) out of range; project has %zu scenes",
-            sceneIndex, state.projectScenePaths.size());
-        return NULL_SCENE;
-    }
-    return LoadScene(state.projectScenePaths[index].c_str());
+    return internal::LoadScene(Get().sceneManager, sceneIndex);
 }
 
 int GetSceneCount()
 {
-    return static_cast<int>(Get().projectScenePaths.size());
+    return internal::GetSceneCount(Get().sceneManager);
 }
 
 LPSCENE LoadSceneAdditive(const char* path)
@@ -3921,23 +3348,12 @@ LPSCENE LoadSceneAdditive(const char* path)
     State& state = Get();
     if (!EnsureInitialized() || !path)
         return NULL_SCENE;
-    return LoadSceneFromData(state, LoadKsceneFile(state.assetRoot, path), true, path);
+    return internal::LoadSceneAdditive(MakeSceneContext(state), path);
 }
 
 LPSCENE LoadSceneAdditive(int sceneIndex)
 {
-    State& state = Get();
-    if (sceneIndex <= 0)
-        return NULL_SCENE;
-
-    const size_t index = static_cast<size_t>(sceneIndex - 1);
-    if (index >= state.projectScenePaths.size())
-    {
-        engine::Debug::LogError("krom.h: LoadSceneAdditive(%d) out of range; project has %zu scenes",
-            sceneIndex, state.projectScenePaths.size());
-        return NULL_SCENE;
-    }
-    return LoadSceneAdditive(state.projectScenePaths[index].c_str());
+    return internal::LoadSceneAdditive(Get().sceneManager, sceneIndex);
 }
 
 LPSCENE LoadSceneAsync(const char* path)
@@ -3945,143 +3361,37 @@ LPSCENE LoadSceneAsync(const char* path)
     State& state = Get();
     if (!EnsureInitialized() || !path)
         return NULL_SCENE;
-
-    const uint32_t sceneId = state.nextSceneId++;
-    SceneRecord& record = state.scenes[sceneId];
-    record.name    = "";
-    record.path    = path;
-    record.staging = true;
-    record.staged  = false;
-    record.active  = false;
-
-    // Absoluten Pfad vor dem Thread-Start berechnen (thread-safe)
-    const std::filesystem::path resolved =
-        std::filesystem::weakly_canonical(state.assetRoot / PathFromUtf8(path));
-
-    // Hintergrund-Thread: nur Datei-I/O + JSON-Parsing — kein ECS-Zugriff
-    const std::string resolvedStr = PathToUtf8(resolved);
-    record.asyncFuture = std::async(std::launch::async, [resolved, resolvedStr]() -> KromSceneData
-    {
-        std::ifstream file(resolved);
-        if (!file)
-        {
-            engine::Debug::LogError("krom.h: LoadSceneAsync: Datei nicht gefunden: %s",
-                resolvedStr.c_str());
-            return KromSceneData{};
-        }
-        const std::string json(std::istreambuf_iterator<char>(file),
-                               std::istreambuf_iterator<char>{});
-        return ParseKscene(json);
-    }).share();
-
-    engine::Debug::Log("krom.h: LoadSceneAsync gestartet: %s", path);
-    return LPSCENE{sceneId};
+    return internal::LoadSceneAsync(MakeSceneContext(state), path);
 }
 
 bool IsSceneReady(LPSCENE scene)
 {
-    State& state = Get();
-    auto it = state.scenes.find(scene.id);
-    if (it == state.scenes.end())
-        return false;
-    SceneRecord& record = it->second;
-    if (record.staged || record.active)
-        return true;
-    if (!record.staging)
-        return false;
-
-    if (record.asyncFuture.valid() &&
-        record.asyncFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
-    {
-        record.stagedData = record.asyncFuture.get();
-        record.staging    = false;
-        record.staged     = true;
-        return true;
-    }
-    return false;
+    return internal::IsSceneReady(Get().sceneManager, scene);
 }
 
 bool ActivateScene(LPSCENE scene)
 {
-    State& state = Get();
-    auto it = state.scenes.find(scene.id);
-    if (it == state.scenes.end())
-        return false;
-    SceneRecord& record = it->second;
-
-    if (record.active)
-        return true;  // bereits aktiv
-
-    // Falls async noch läuft: blockierend warten
-    if (record.staging && record.asyncFuture.valid())
-    {
-        record.stagedData = record.asyncFuture.get();
-        record.staging    = false;
-        record.staged     = true;
-    }
-
-    if (!record.staged)
-        return false;
-
-    // Entities jetzt auf dem Main-Thread erstellen
-    const KromSceneData& data = record.stagedData;
-    if (!data.valid)
-    {
-        state.scenes.erase(it);
-        return false;
-    }
-
-    record.name       = data.name;
-    record.persistent = data.persistent;
-    record.active     = true;
-    record.staged     = false;
-
-    if (!InstantiateSceneData(state, data, record))
-    {
-        state.scenes.erase(it);
-        return false;
-    }
-
-    engine::Debug::Log("krom.h: scene '%s' aktiviert (%zu entities)",
-        data.name.c_str(), record.rootEntities.size());
-    return true;
+    return internal::ActivateScene(MakeSceneContext(Get()), scene);
 }
 
 void UnloadScene(LPSCENE scene)
 {
-    State& state = Get();
-    UnloadSceneById(state, scene.id);
+    internal::UnloadScene(MakeSceneContext(Get()), scene);
 }
 
 void UnloadAll()
 {
-    State& state = Get();
-    std::vector<uint32_t> toUnload;
-    for (const auto& [id, scene] : state.scenes)
-    {
-        if (!scene.persistent)
-            toUnload.push_back(id);
-    }
-    for (const uint32_t id : toUnload)
-        UnloadSceneById(state, id);
+    internal::UnloadAll(MakeSceneContext(Get()));
 }
 
 void SetPersistent(LPENTITY entity)
 {
-    if (entity.IsValid())
-        Get().persistentEntityIds.insert(entity.value);
+    internal::SetPersistent(Get().sceneManager, entity);
 }
 
 void SetScenePersistent(LPSCENE scene)
 {
-    State& state = Get();
-    auto it = state.scenes.find(scene.id);
-    if (it == state.scenes.end())
-        return;
-    SceneRecord& record = it->second;
-    record.persistent = true;
-    for (const LPENTITY entity : record.rootEntities)
-        MarkPersistentRecursive(state, entity);
+    internal::SetScenePersistent(MakeSceneContext(Get()), scene);
 }
 
 LPENTITY FindEntity(const char* name)
@@ -4123,27 +3433,7 @@ LPENTITY GetMainCamera()
 
 LPENTITY FindEntityInScene(LPSCENE scene, const char* name)
 {
-    State& state = Get();
-    if (!state.world || !name)
-        return NULL_LPENTITY;
-
-    auto it = state.scenes.find(scene.id);
-    if (it == state.scenes.end())
-        return NULL_LPENTITY;
-
-    LPENTITY found = NULL_LPENTITY;
-    std::function<void(LPENTITY)> search = [&](LPENTITY e)
-    {
-        if (found.IsValid() || !state.world->IsAlive(e)) return;
-        if (const auto* nc = state.world->Get<engine::NameComponent>(e))
-            if (nc->name == name) { found = e; return; }
-        if (const auto* ch = state.world->Get<engine::ChildrenComponent>(e))
-            for (const LPENTITY child : ch->children)
-                search(child);
-    };
-    for (const LPENTITY root : it->second.rootEntities)
-        search(root);
-    return found;
+    return internal::FindEntityInScene(MakeSceneContext(Get()), scene, name);
 }
 
 } // namespace Krom
