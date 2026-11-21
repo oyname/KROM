@@ -7,8 +7,8 @@ alphaMode opaque
 alphaCutoff 0.523000002
 baseColorFactor 1 1 1 1
 emissiveFactor 0 0 0
-metallicFactor 1
-roughnessFactor 0
+metallicFactor 0.305000007
+roughnessFactor 0.38499999
 normalScale 0.0309999995
 occlusionStrength 1
 emissiveStrength 0
@@ -16,12 +16,14 @@ uvScale 1 1
 uvOffset 0 0
 uvProjection mesh
 boxTileSize 1
+clearcoatFactor 1
+clearcoatRoughness 0
 baseColorTexture 
 metallicRoughnessTexture 
 normalTexture 
 occlusionTexture 
 emissiveTexture 
-graphOutputs 3 0 6 0 0 0 0 0 0 1 0 0
+graphOutputs 3 0 0 0 0 0 0 0 0 1 0 0
 graphNode 1 2 0 0 0.201492548 0.0601470284 0.0601470284 -360 -120 "" 0 1 1 0 0 0 0 0 0 0
 graphNode 2 0 0 0 1 1 1 -560 100 "Textures/dust.png" 0 1 1 0 0 0 0 0 0 0
 graphNode 3 5 1 5 1 1 1 -20 -140 "" 4 1 1 0 0 0 0 0 0 0

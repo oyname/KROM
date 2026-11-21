@@ -5,7 +5,7 @@ instanced false
 transparent false
 alphaMode opaque
 alphaCutoff 0.5
-baseColorFactor 1 1 1 1
+baseColorFactor 0.434197247 0.348746806 0.348746806 1
 emissiveFactor 0 0 0
 metallicFactor 0
 roughnessFactor 1

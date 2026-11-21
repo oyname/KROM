@@ -8,7 +8,8 @@ alphaCutoff 0
 baseColorFactor 1 1 1 1
 emissiveFactor 0 0 0
 metallicFactor 1
-roughnessFactor 0.5
+roughnessFactor 1
+specularFactor 0
 normalScale 0
 occlusionStrength 0
 emissiveStrength 1
@@ -21,5 +22,5 @@ metallicRoughnessTexture
 normalTexture 
 occlusionTexture 
 emissiveTexture 
-graphOutputs 3 0 0 0 0 0 0 0 0 1 0 0
-graphNode 3 2 0 0 0.897366464 0.848665476 0.792109489 -20 140 "" 0 1 1 0 0 0 0 0 0 0
+graphOutputs 3 0 0 0 0 0 0 0 0 1 0 0 0
+graphNode 3 2 0 0 0.928315401 0.865096807 0.882402658 60 40 "" 0 1 1 0 0 0 0 0 0 0
