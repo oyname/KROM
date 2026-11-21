@@ -76,6 +76,18 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
   once and shrinks after 120 frames too large (`kShadowAtlasShrinkDelayFrames`); tiles follow the
   current lights. `atlasViewCountHint` removed. Tests: packer cases (Room 2, held size, tight cap,
   overlap/bounds), 5-spot rects, cascade test expects 1024 again after 4 cascades.
+  Correction: the captures I reported for the atlas change (and the Vulkan check of the per-light
+  filter) ran with stale `krom_editor_loading_tests*.exe` (09:04/12:47); `cmake --build` without
+  `--target` does not rebuild them. Re-checked on the committed state (2995bd9) with binaries built
+  by target at 16:10: `krom_tests` all pass; Room 2 copy (sun PCF 5x5, normal bias 0.02, fixed
+  exposure) on DX11, Vulkan with `KROM_VALIDATION=1` (no messages, DX11 vs Vulkan mean < 1/255) and
+  OpenGL (`out/claude-final`). The tile size the sun gets is covered by the unit tests only.
+- MSM tried and discarded (not committed): moment shadow maps for the sun (Hamburger 4MSM, 16-bit
+  optimized moments, half resolution + 7-tap blur, opaque input on a new slot t21). Edges were
+  smooth but soft, and at small depth gaps (contacts, the inside of a box, worse with the sun's
+  normal bias of 1 m) light bled through and shadows detached (`out/claude-msm/contact-*.png`).
+  The user wants sharp shadows, so MSM was dropped; all its code was reverted. Room 2 saved with
+  shadowFilter 6 now loads as Tent7x7 (clamped to kShadowFilterMax).
 
 ## PBR: Specular-Materialeingang (Codex, 2026-11-20)
 
