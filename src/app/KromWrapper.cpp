@@ -1,4 +1,5 @@
 #include "krom.h"
+#include "KromRenderSettings.hpp"
 #include "KromSurfaces.hpp"
 #include "core/AtomicTextFile.hpp"
 #include "core/PathUtf8.hpp"
@@ -209,8 +210,7 @@ using internal::SurfaceRecord;
 
 // =============================================================================
 
-// Bloom strength of the forward feature (base of the post-process volumes).
-constexpr float kRuntimeBloomIntensity = 0.12f;
+using internal::kRuntimeBloomIntensity;
 
 struct State
 {
@@ -226,43 +226,8 @@ struct State
     // asset pipeline, game simulation) so that it is destroyed after them.
     engine::jobs::JobSystem jobSystem;
     engine::renderer::PlatformRenderLoop renderLoop;
-    // Read every frame by the forward tonemap pass (Krom::SetTonemapping, scene files).
-    std::shared_ptr<engine::renderer::addons::forward::TonemapSettings> tonemapSettings =
-        std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
-    // What the tonemap pass reads: tonemapSettings with the post-process volumes
-    // at the camera blended over it, rewritten every frame (tonemapSettings stays).
-    std::shared_ptr<engine::renderer::addons::forward::TonemapSettings> effectiveTonemapSettings =
-        std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
-    // Project effect intensities (base of the post-process volumes); the add-on
-    // settings receive the blended values every frame.
-    float baseGtaoIntensity = 0.65f;
-    float baseSsrIntensity = 1.0f;
-    float baseContactShadowIntensity = 1.0f;
-    // Reset request of the automatic exposure on scene loads.
-    std::shared_ptr<engine::renderer::addons::forward::AutoExposureStatus> autoExposureStatus =
-        std::make_shared<engine::renderer::addons::forward::AutoExposureStatus>();
-    std::shared_ptr<engine::renderer::addons::forward::MsaaSettings> msaaSettings =
-        std::make_shared<engine::renderer::addons::forward::MsaaSettings>();
-    // Post-process AA after tonemapping (project settings, KROM_POST_AA).
-    std::shared_ptr<engine::renderer::addons::forward::PostAASettings> postAASettings =
-        std::make_shared<engine::renderer::addons::forward::PostAASettings>();
-    // GTAO add-on resources (settings); null without GTAO (OpenGL, enableGtao off).
-    std::shared_ptr<engine::renderer::addons::gtao::GtaoGpuResources> gtaoResources;
-    std::shared_ptr<engine::renderer::addons::ssr::SsrGpuResources> ssrResources;
-    // Contact shadow add-on resources; null without it (OpenGL, enableContactShadows off).
-    std::shared_ptr<engine::renderer::addons::contact_shadow::ContactShadowGpuResources> contactShadowResources;
-    // Shadow resolution and filter of the quality level (read by the shadow add-on).
-    std::shared_ptr<engine::addons::shadow::ShadowQualitySettings> shadowQuality =
-        std::make_shared<engine::addons::shadow::ShadowQualitySettings>();
-    // Quality level a player picked (Krom::SetQualityLevel, scripts), remembered on
-    // this computer (user-settings.json); replaces the project's level options.
-    // Not used by runs started from the editor (editor live state).
-    std::optional<engine::RenderQualityLevel> userQualityLevel;
-    // BRDF options of the PBR shaders (Krom::SetShading, scene files).
-    std::shared_ptr<engine::renderer::addons::forward::ShadingSettings> shadingSettings =
-        std::make_shared<engine::renderer::addons::forward::ShadingSettings>();
-    // Local reflection probes (baked .kprobe files below the asset root).
-    std::shared_ptr<engine::addons::probes::ProbeRuntime> probeRuntime;
+    // Render options and the add-on settings they drive (KromRenderSettings.hpp).
+    internal::RenderSettingsState render;
     engine::assets::AssetRegistry assetRegistry;
     std::unique_ptr<engine::assets::AssetPipeline> assetPipeline;
     engine::renderer::MaterialSystem materialSystem;
@@ -2291,210 +2256,14 @@ static bool LoadComponentSerializedScene(State& state,
     return true;
 }
 
-// user-settings.json of an exported game: %LOCALAPPDATA%\KROM\Games\<window
-// title or EXE name>\ (Windows), $XDG_CONFIG_HOME/krom/games/<...>/ or
-// ~/.config/krom/games/<...>/ elsewhere. KROM_USER_SETTINGS_DIR replaces the
-// folder (tests). Empty if no folder can be found.
-static_assert(static_cast<uint8_t>(engine::RenderPostAA::Fxaa) ==
-              static_cast<uint8_t>(engine::renderer::addons::forward::PostAAMode::Fxaa) &&
-              static_cast<uint8_t>(engine::RenderPostAA::Smaa) ==
-              static_cast<uint8_t>(engine::renderer::addons::forward::PostAAMode::Smaa),
-              "RenderPostAA ids must match PostAAMode");
-
-static std::filesystem::path UserGameSettingsPath(const State& state)
-{
-    if (const char* dir = std::getenv("KROM_USER_SETTINGS_DIR"); dir && *dir)
-        return PathFromUtf8(dir) / "user-settings.json";
-    std::string game = engine::UserGameSettingsFolderName(state.projectSettings.windowTitle);
-#if defined(_WIN32)
-    if (game.empty())
-    {
-        wchar_t exeBuf[260]{};
-        if (::GetModuleFileNameW(nullptr, exeBuf, 260) > 0)
-            game = engine::UserGameSettingsFolderName(PathToUtf8(std::filesystem::path(exeBuf).stem()));
-    }
-    if (game.empty())
-        return {};
-    if (const wchar_t* appData = _wgetenv(L"LOCALAPPDATA"); appData && *appData)
-        return std::filesystem::path(appData) / "KROM" / "Games" / PathFromUtf8(game) / "user-settings.json";
-#else
-    if (game.empty())
-        return {};
-    if (const char* config = std::getenv("XDG_CONFIG_HOME"); config && *config)
-        return PathFromUtf8(config) / "krom" / "games" / PathFromUtf8(game) / "user-settings.json";
-    if (const char* home = std::getenv("HOME"); home && *home)
-        return PathFromUtf8(home) / ".config" / "krom" / "games" / PathFromUtf8(game) / "user-settings.json";
-#endif
-    return {};
-}
-
-static void LoadUserGameSettings(State& state)
-{
-    state.userQualityLevel.reset();
-    const std::filesystem::path path = UserGameSettingsPath(state);
-    std::ifstream file(path);
-    if (path.empty() || !file)
-        return;
-    const std::string json(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>{});
-    std::string err;
-    const engine::serialization::JsonValue root = engine::serialization::JsonParser::Parse(json, err);
-    if (!err.empty() || !root.IsObject())
-    {
-        engine::Debug::LogWarning("krom.h: ignoring invalid user settings '%s'", PathToUtf8(path).c_str());
-        return;
-    }
-    state.userQualityLevel = engine::ReadUserGameSettings(root).qualityLevel;
-    if (state.userQualityLevel)
-        engine::Debug::Log("krom.h: quality level '%s' from %s",
-                           engine::RenderQualityLevelName(*state.userQualityLevel), PathToUtf8(path).c_str());
-}
-
-static void SaveUserGameSettings(const State& state)
-{
-    const std::filesystem::path path = UserGameSettingsPath(state);
-    engine::UserGameSettings settings;
-    settings.qualityLevel = state.userQualityLevel;
-    if (path.empty() || !engine::WriteTextFileAtomically(path, engine::WriteUserGameSettings(settings)))
-        engine::Debug::LogWarning("krom.h: could not save user settings '%s'", PathToUtf8(path).c_str());
-}
-
-// Project-wide render options (project settings, or the scene of a project
-// written before they moved there). Exposure stays with the scene.
-static void ApplyProjectRenderSettings(State& state, const engine::ProjectRenderSettings& projectRendering)
-{
-    // A player's quality level replaces the level options of the project.
-    engine::ProjectRenderSettings rendering = projectRendering;
-    state.baseGtaoIntensity = rendering.gtaoIntensity;
-    state.baseSsrIntensity = rendering.ssrIntensity;
-    state.baseContactShadowIntensity = rendering.contactShadowIntensity;
-    if (state.userQualityLevel && !state.editorLiveStateEnabled)
-        engine::ApplyRenderQualityLevel(rendering, *state.userQualityLevel);
-    if (state.tonemapSettings &&
-        !engine::renderer::addons::forward::ParseTonemapOperator(rendering.tonemapOperator.c_str(),
-                                                                 state.tonemapSettings->op))
-        engine::Debug::LogWarning("KromWrapper.cpp: unknown tonemap operator '%s'", rendering.tonemapOperator.c_str());
-    if (state.msaaSettings)
-        state.msaaSettings->sampleCount =
-            engine::renderer::addons::forward::NormalizeMsaaSamples(rendering.msaaSamples);
-    if (state.postAASettings)
-    {
-        state.postAASettings->mode = engine::renderer::addons::forward::PostAAMode::Off;
-        if (!engine::renderer::addons::forward::ParsePostAAMode(rendering.postAA.c_str(), state.postAASettings->mode))
-            engine::Debug::LogWarning("KromWrapper.cpp: unknown post-AA mode '%s'", rendering.postAA.c_str());
-    }
-    if (state.shadingSettings)
-        *state.shadingSettings = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
-                                   rendering.brdfMultiScatter, rendering.specularAntiAliasing,
-                                   rendering.brdfBurleyDiffuse };
-    if (state.ssrResources)
-    {
-        engine::renderer::addons::ssr::SsrSettings& ssr = state.ssrResources->settings;
-        ssr.enabled      = rendering.ssrEnabled;
-        ssr.intensity    = rendering.ssrIntensity;
-        ssr.maxRoughness = rendering.ssrMaxRoughness;
-        ssr.maxDistance  = rendering.ssrMaxDistance;
-        ssr.thickness    = rendering.ssrThickness;
-    }
-    if (state.gtaoResources)
-    {
-        engine::renderer::addons::gtao::GtaoSettings& gtao = state.gtaoResources->settings;
-        gtao.enabled   = rendering.gtaoEnabled;
-        gtao.radius    = rendering.gtaoRadius;
-        gtao.intensity = rendering.gtaoIntensity;
-        gtao.bias      = rendering.gtaoBias;
-    }
-    if (state.contactShadowResources)
-    {
-        engine::renderer::addons::contact_shadow::ContactShadowSettings& cs = state.contactShadowResources->settings;
-        cs.enabled   = rendering.contactShadowsEnabled;
-        cs.length    = rendering.contactShadowLength;
-        cs.thickness = rendering.contactShadowThickness;
-        cs.intensity = rendering.contactShadowIntensity;
-        cs.steps     = rendering.contactShadowSteps;
-    }
-    if (state.probeRuntime)
-    {
-        engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
-        probeSettings.specularOcclusion = rendering.specularOcclusion;
-        state.probeRuntime->SetSettings(probeSettings);
-    }
-    if (state.shadowQuality)
-    {
-        state.shadowQuality->directionalResolution = rendering.shadowSunResolution;
-        state.shadowQuality->localResolution = rendering.shadowLocalResolution;
-        state.shadowQuality->filter = static_cast<engine::ShadowFilter>(
-            std::min<uint8_t>(rendering.shadowFilter, engine::kMaxShadowQualityFilter));
-    }
-}
-
 // IScriptContext::GetRenderSettings(): the same values as the Set*/Get* functions of krom.h.
 class WrapperRenderSettingsService final : public engine::script::IRenderSettingsService
 {
 public:
     explicit WrapperRenderSettingsService(State& state) noexcept : m_state(state) {}
 
-    engine::script::RenderSettings Get() const override
-    {
-        engine::script::RenderSettings out{};
-        if (m_state.tonemapSettings)
-        {
-            out.tonemap = static_cast<engine::script::TonemapMode>(m_state.tonemapSettings->op);
-            out.exposureEv = m_state.tonemapSettings->exposureEv;
-            out.autoExposure = m_state.tonemapSettings->exposureMode == engine::renderer::addons::forward::ExposureMode::Auto;
-        }
-        out.msaaSamples = m_state.msaaSettings ? m_state.msaaSettings->sampleCount : 1u;
-        const engine::renderer::addons::forward::ShadingSettings shading =
-            m_state.shadingSettings ? *m_state.shadingSettings : engine::renderer::addons::forward::ShadingSettings{};
-        out.heightCorrelatedVisibility = shading.heightCorrelatedVisibility;
-        out.perLightDiffuseFresnel = shading.perLightDiffuseFresnel;
-        out.multiScatterCompensation = shading.multiScatterCompensation;
-        out.specularAntiAliasing = shading.specularAntiAliasing;
-        out.burleyDiffuse = shading.burleyDiffuse;
-        out.specularOcclusion = m_state.probeRuntime && m_state.probeRuntime->GetSettings().specularOcclusion;
-        out.gtaoEnabled = m_state.gtaoResources && m_state.gtaoResources->settings.enabled;
-        out.ssrEnabled = m_state.ssrResources && m_state.ssrResources->settings.enabled;
-        out.contactShadowsEnabled = m_state.contactShadowResources && m_state.contactShadowResources->settings.enabled;
-        out.postAA = m_state.postAASettings ? static_cast<engine::script::PostAAMode>(m_state.postAASettings->mode)
-                                            : engine::script::PostAAMode::Off;
-        if (m_state.tonemapSettings)
-            out.grading = engine::script::ToScriptColorGrading(m_state.tonemapSettings->grading);
-        Krom::GetShadowQuality(out.sunShadowResolution, out.localShadowResolution, out.shadowFilter);
-        return out;
-    }
-
-    void Set(const engine::script::RenderSettings& in) override
-    {
-        using namespace engine::renderer::addons::forward;
-        if (m_state.tonemapSettings)
-        {
-            m_state.tonemapSettings->op = static_cast<TonemapOperator>(
-                std::min<uint8_t>(static_cast<uint8_t>(in.tonemap), 3u));
-            m_state.tonemapSettings->exposureEv = std::clamp(in.exposureEv, kMinExposureEv, kMaxExposureEv);
-            m_state.tonemapSettings->exposureMode = in.autoExposure ? ExposureMode::Auto : ExposureMode::Fixed;
-            m_state.tonemapSettings->grading = engine::script::FromScriptColorGrading(in.grading);
-        }
-        if (m_state.msaaSettings)
-            m_state.msaaSettings->sampleCount = NormalizeMsaaSamples(in.msaaSamples);
-        if (m_state.shadingSettings)
-            *m_state.shadingSettings = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel,
-                                         in.multiScatterCompensation, in.specularAntiAliasing,
-                                         in.burleyDiffuse };
-        if (m_state.probeRuntime)
-        {
-            engine::addons::probes::ProbeSettings probeSettings = m_state.probeRuntime->GetSettings();
-            probeSettings.specularOcclusion = in.specularOcclusion;
-            m_state.probeRuntime->SetSettings(probeSettings);
-        }
-        if (m_state.gtaoResources)
-            m_state.gtaoResources->settings.enabled = in.gtaoEnabled;
-        if (m_state.ssrResources)
-            m_state.ssrResources->settings.enabled = in.ssrEnabled;
-        if (m_state.contactShadowResources)
-            m_state.contactShadowResources->settings.enabled = in.contactShadowsEnabled;
-        if (m_state.postAASettings)
-            m_state.postAASettings->mode = static_cast<PostAAMode>(std::min<uint8_t>(static_cast<uint8_t>(in.postAA), 2u));
-        Krom::SetShadowQuality(in.sunShadowResolution, in.localShadowResolution, in.shadowFilter);
-    }
+    engine::script::RenderSettings Get() const override { return internal::GetScriptRenderSettings(m_state.render); }
+    void Set(const engine::script::RenderSettings& in) override { internal::SetScriptRenderSettings(m_state.render, in); }
 
     // Also remembered on this computer, like Krom::SetQualityLevel.
     void SetQualityLevel(engine::script::QualityLevel level) override { Krom::SetQualityLevel(level); }
@@ -2506,22 +2275,9 @@ private:
 static void ApplySceneEnvironment(State& state, const KromSceneData& data)
 {
     if (!state.projectSettings.renderingStored)
-        ApplyProjectRenderSettings(state, data.legacyRendering);
-    if (state.tonemapSettings)
-    {
-        state.tonemapSettings->exposureEv = data.exposureEv;
-        state.tonemapSettings->exposureMode = data.exposureMode;
-        state.tonemapSettings->autoExposure = data.autoExposure;
-        state.tonemapSettings->grading = data.grading;
-    }
-    if (state.autoExposureStatus)
-        state.autoExposureStatus->RequestReset();   // the new scene starts at its own exposure
-    if (state.probeRuntime)
-    {
-        engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
-        probeSettings.bakePasses = data.probeBakePasses;
-        state.probeRuntime->SetSettings(probeSettings);
-    }
+        internal::ApplyProjectRenderSettings(state.render, data.legacyRendering, state.editorLiveStateEnabled);
+    internal::ApplySceneRenderSettings(state.render, data.exposureEv, data.exposureMode, data.autoExposure,
+                                       data.grading, data.probeBakePasses);
 
     // ── Ambient ───────────────────────────────────────────────────────────────
     if (data.hasAmbientColor)    state.cameraOptions.ambientColor    = data.ambientColor;
@@ -2720,10 +2476,10 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
 
     state.projectRoot = std::filesystem::weakly_canonical(projectPath.parent_path());
     state.projectSettings = engine::ReadProjectSettings(root);
-    LoadUserGameSettings(state);   // needs the window title
+    internal::LoadUserGameSettings(state.render, state.projectSettings.windowTitle);   // needs the window title
     state.game.SetProjectSettings(state.projectSettings);
     if (state.projectSettings.renderingStored)
-        ApplyProjectRenderSettings(state, state.projectSettings.rendering);
+        internal::ApplyProjectRenderSettings(state.render, state.projectSettings.rendering, state.editorLiveStateEnabled);
     state.runtimeStatePath = state.projectRoot / "editor" / "runtime-state.json";
     state.runtimeStateWriteTimer = 0.0f;
     if (state.editorLiveStateEnabled)
@@ -2871,11 +2627,11 @@ bool RegisterEngineFeatures(State& state)
     forwardConfig.bloomThreshold = 1.0f;
     forwardConfig.bloomIntensity = kRuntimeBloomIntensity;
     forwardConfig.bloomBlurRadius = 1.0f;
-    forwardConfig.tonemapSettings = state.effectiveTonemapSettings;
-    forwardConfig.autoExposureStatus = state.autoExposureStatus;
-    forwardConfig.msaaSettings = state.msaaSettings;
-    forwardConfig.postAASettings = state.postAASettings;
-    forwardConfig.shadingSettings = state.shadingSettings;
+    forwardConfig.tonemapSettings = state.render.effectiveTonemapSettings;
+    forwardConfig.autoExposureStatus = state.render.autoExposureStatus;
+    forwardConfig.msaaSettings = state.render.msaaSettings;
+    forwardConfig.postAASettings = state.render.postAASettings;
+    forwardConfig.shadingSettings = state.render.shadingSettings;
     forwardConfig.mode = state.forwardPlusActive
         ? renderer::addons::forward::ForwardRendererMode::ForwardPlus
         : renderer::addons::forward::ForwardRendererMode::Forward;
@@ -2883,7 +2639,7 @@ bool RegisterEngineFeatures(State& state)
     addons::shadow::ShadowFeatureConfig shadowConfig{};
     shadowConfig.maxShadowLights = state.config.maxShadowLights;
     shadowConfig.maxShadowViews = state.config.maxShadowViews;
-    shadowConfig.quality = state.shadowQuality;
+    shadowConfig.quality = state.render.shadowQuality;
 
     renderer::RenderSystem& renderSystem = state.renderLoop.GetRenderSystem();
     if (!renderSystem.RegisterFeature(addons::mesh_renderer::CreateMeshRendererFeature()) ||
@@ -2897,7 +2653,7 @@ bool RegisterEngineFeatures(State& state)
 
     if (state.config.enableGtao && ToBackend(state.config.backend) != BackendType::OpenGL)
     {
-        if (!renderSystem.RegisterFeature(renderer::addons::gtao::CreateGtaoFeature(&state.gtaoResources)))
+        if (!renderSystem.RegisterFeature(renderer::addons::gtao::CreateGtaoFeature(&state.render.gtaoResources)))
         {
             Debug::LogError("krom.h: failed to register GTAO feature");
             return false;
@@ -2906,7 +2662,7 @@ bool RegisterEngineFeatures(State& state)
 
     if (state.config.enableContactShadows && ToBackend(state.config.backend) != BackendType::OpenGL &&
         !renderSystem.RegisterFeature(renderer::addons::contact_shadow::CreateContactShadowFeature(
-            &state.contactShadowResources)))
+            &state.render.contactShadowResources)))
     {
         Debug::LogError("krom.h: failed to register contact shadow feature");
         return false;
@@ -2914,26 +2670,26 @@ bool RegisterEngineFeatures(State& state)
 
     // SSR after GTAO: it adds to the scene composite GTAO creates.
     if (ToBackend(state.config.backend) != BackendType::OpenGL &&
-        !renderSystem.RegisterFeature(renderer::addons::ssr::CreateSsrFeature(&state.ssrResources)))
+        !renderSystem.RegisterFeature(renderer::addons::ssr::CreateSsrFeature(&state.render.ssrResources)))
     {
         Debug::LogError("krom.h: failed to register SSR feature");
         return false;
     }
 
-    if (!renderSystem.RegisterFeature(engine::addons::probes::CreateProbeFeature(&state.probeRuntime)))
+    if (!renderSystem.RegisterFeature(engine::addons::probes::CreateProbeFeature(&state.render.probeRuntime)))
     {
         Debug::LogError("krom.h: failed to register probe feature");
         return false;
     }
-    if (state.probeRuntime && !state.assetRoot.empty())
-        state.probeRuntime->SetAssetRoot(PathToUtf8(state.assetRoot));
+    if (state.render.probeRuntime && !state.assetRoot.empty())
+        state.render.probeRuntime->SetAssetRoot(PathToUtf8(state.assetRoot));
     // GTAO and the probes exist only now; LoadProject may have run before.
     if (state.projectSettings.renderingStored)
-        ApplyProjectRenderSettings(state, state.projectSettings.rendering);
+        internal::ApplyProjectRenderSettings(state.render, state.projectSettings.rendering, state.editorLiveStateEnabled);
     Debug::Log("krom.h: render quality '%s' (MSAA %u, post-AA %u, GTAO %d, SSR %d, contact shadows %d)%s",
                engine::RenderQualityLevelName(GetQualityLevel()), GetMsaa(), static_cast<unsigned>(GetPostAA()),
                GetGtaoEnabled() ? 1 : 0, GetSsrEnabled() ? 1 : 0, GetContactShadowsEnabled() ? 1 : 0,
-               state.userQualityLevel && !state.editorLiveStateEnabled ? ", player's level" : "");
+               state.render.userQualityLevel && !state.editorLiveStateEnabled ? ", player's level" : "");
 
     state.featuresRegistered = true;
     return true;
@@ -3000,11 +2756,7 @@ bool InitializeRenderLoop(State& state)
     // validation (Vulkan layers, DX11 debug device); KROM_MSAA=<n> sets the start MSAA.
     if (const char* debugLayer = std::getenv("KROM_DEBUG_LAYER"); debugLayer && debugLayer[0] == '1')
         state.config.enableDebugLayer = true;
-    if (const char* msaa = std::getenv("KROM_MSAA"); msaa && state.msaaSettings)
-        state.msaaSettings->sampleCount = engine::renderer::addons::forward::NormalizeMsaaSamples(
-            static_cast<uint32_t>(std::strtoul(msaa, nullptr, 10)));
-    if (const char* postAA = std::getenv("KROM_POST_AA"); postAA && state.postAASettings)
-        (void)engine::renderer::addons::forward::ParsePostAAMode(postAA, state.postAASettings->mode);
+    internal::ApplyRenderEnvironmentOverrides(state.render);
 
     engine::renderer::IDevice::DeviceDesc deviceDesc{};
     deviceDesc.enableDebugLayer = state.config.enableDebugLayer;
@@ -3216,8 +2968,8 @@ void SetAssetRoot(const std::filesystem::path& path)
     State& state = Get();
     state.assetRoot = path;
     state.game.SetAssetRoot(path);
-    if (state.probeRuntime)
-        state.probeRuntime->SetAssetRoot(PathToUtf8(path));
+    if (state.render.probeRuntime)
+        state.render.probeRuntime->SetAssetRoot(PathToUtf8(path));
     if (state.assetPipeline)
         state.assetPipeline->SetAssetRoot(path);
 
@@ -3252,12 +3004,12 @@ void ApplyProjectGraphicsSettings(GraphicsConfig& config)
 void SetEditorLiveStateEnabled(bool enabled)
 {
     State& state = Get();
-    const bool userLevelChanges = state.userQualityLevel && state.editorLiveStateEnabled != enabled;
+    const bool userLevelChanges = state.render.userQualityLevel && state.editorLiveStateEnabled != enabled;
     state.editorLiveStateEnabled = enabled;
     state.runtimeStateWriteTimer = 0.0f;
     // Runs started from the editor show the project's options, not a player's level.
     if (userLevelChanges && state.projectSettings.renderingStored)
-        ApplyProjectRenderSettings(state, state.projectSettings.rendering);
+        internal::ApplyProjectRenderSettings(state.render, state.projectSettings.rendering, state.editorLiveStateEnabled);
 
     if (!enabled || state.projectRoot.empty())
         return;
@@ -4502,18 +4254,13 @@ engine::renderer::EnvironmentHandle CreateEnvironmentFromHDR(const char* path,
 
 void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float exposureEv)
 {
-    State& state = Get();
-    if (!state.tonemapSettings)
-        return;
-    state.tonemapSettings->op = op;
-    state.tonemapSettings->exposureEv = std::clamp(exposureEv, engine::renderer::addons::forward::kMinExposureEv,
-                                                   engine::renderer::addons::forward::kMaxExposureEv);
+    internal::SetTonemapping(Get().render, op, exposureEv);
 }
 
 bool BakeReflectionProbe(LPENTITY entity, const char* sceneName)
 {
     State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity) || !state.probeRuntime)
+    if (!state.world || !state.world->IsAlive(entity) || !state.render.probeRuntime)
     {
         engine::Debug::LogError("krom.h: BakeReflectionProbe needs a live entity and the probe feature");
         return false;
@@ -4544,13 +4291,13 @@ bool BakeReflectionProbe(LPENTITY entity, const char* sceneName)
     request.relativePath = probe->bakedDataPath;
     request.inputHash = engine::addons::probes::ComputeProbeInputHash(*state.world, entity);
     // Pass 1: global IBL only; pass 2 (if set): lit by the probes of pass 1.
-    const uint32_t passes = state.probeRuntime->GetSettings().bakePasses >= 2u ? 2u : 1u;
+    const uint32_t passes = state.render.probeRuntime->GetSettings().bakePasses >= 2u ? 2u : 1u;
     for (uint32_t pass = 1u; pass <= passes; ++pass)
     {
         request.lightWithProbes = pass == 2u;
         std::string error;
         if (!engine::addons::probes::BakeProbeBlocking(renderSystem, *state.world, state.materialSystem,
-                                                        state.timing, view, *state.probeRuntime, request,
+                                                        state.timing, view, *state.render.probeRuntime, request,
                                                         &state.jobSystem, &error))
         {
             engine::Debug::LogError("krom.h: BakeReflectionProbe failed: %s", error.c_str());
@@ -4579,192 +4326,58 @@ float GetPostProcessWeight(LPENTITY entity)
     return volume ? volume->weight : 0.0f;
 }
 
-void SetReflectionProbesEnabled(bool enabled)
-{
-    State& state = Get();
-    if (state.probeRuntime)
-        state.probeRuntime->SetEnabled(enabled);
-}
+void SetReflectionProbesEnabled(bool enabled) { internal::SetReflectionProbesEnabled(Get().render, enabled); }
+void SetProbeDebugView(uint32_t view) { internal::SetProbeDebugView(Get().render, view); }
+void SetSpecularOcclusion(bool enabled) { internal::SetSpecularOcclusion(Get().render, enabled); }
+bool GetSpecularOcclusion() { return internal::GetSpecularOcclusion(Get().render); }
 
-void SetProbeDebugView(uint32_t view)
-{
-    State& state = Get();
-    if (!state.probeRuntime)
-        return;
-    engine::addons::probes::ProbeSettings settings = state.probeRuntime->GetSettings();
-    settings.debugView = static_cast<engine::addons::probes::ProbeDebugView>(std::min(view, 3u));
-    state.probeRuntime->SetSettings(settings);
-}
-
-void SetGtaoEnabled(bool enabled)
-{
-    State& state = Get();
-    if (state.gtaoResources)
-        state.gtaoResources->settings.enabled = enabled;
-}
-
-bool GetGtaoEnabled()
-{
-    const State& state = Get();
-    return state.gtaoResources && state.gtaoResources->settings.enabled;
-}
-
-void SetSsrEnabled(bool enabled)
-{
-    State& state = Get();
-    if (state.ssrResources)
-        state.ssrResources->settings.enabled = enabled;
-}
-
-bool GetSsrEnabled()
-{
-    const State& state = Get();
-    return state.ssrResources && state.ssrResources->settings.enabled;
-}
-
-void SetSpecularOcclusion(bool enabled)
-{
-    State& state = Get();
-    if (!state.probeRuntime)
-        return;
-    engine::addons::probes::ProbeSettings settings = state.probeRuntime->GetSettings();
-    settings.specularOcclusion = enabled;
-    state.probeRuntime->SetSettings(settings);
-}
-
-bool GetSpecularOcclusion()
-{
-    const State& state = Get();
-    return state.probeRuntime && state.probeRuntime->GetSettings().specularOcclusion;
-}
-
-void SetQualityLevel(engine::RenderQualityLevel level)
-{
-    if (level == engine::RenderQualityLevel::Custom)
-        return;
-    State& state = Get();
-    engine::RenderQualityOptions options = engine::RenderQualityPreset(level);
-    SetMsaa(options.msaaSamples);
-    SetPostAA(options.postAA);
-    SetGtaoEnabled(options.gtaoEnabled);
-    SetSsrEnabled(options.ssrEnabled);
-    SetContactShadowsEnabled(options.contactShadowsEnabled);
-    SetShadowQuality(options.sunShadowResolution, options.localShadowResolution, options.shadowFilter);
-    if (state.editorLiveStateEnabled)
-        return;   // started from the editor: nothing to remember
-    if (state.userQualityLevel != level)
-    {
-        state.userQualityLevel = level;
-        SaveUserGameSettings(state);
-    }
-}
-
-engine::RenderQualityLevel GetQualityLevel()
-{
-    engine::RenderQualityOptions options{};
-    options.msaaSamples = GetMsaa();
-    options.postAA = GetPostAA();
-    options.gtaoEnabled = GetGtaoEnabled();
-    options.ssrEnabled = GetSsrEnabled();
-    options.contactShadowsEnabled = GetContactShadowsEnabled();
-    GetShadowQuality(options.sunShadowResolution, options.localShadowResolution, options.shadowFilter);
-    return engine::DetectRenderQualityLevel(options);
-}
-
-void SetPostAA(engine::RenderPostAA mode)
-{
-    State& state = Get();
-    if (state.postAASettings)
-        state.postAASettings->mode = static_cast<engine::renderer::addons::forward::PostAAMode>(
-            std::min<uint8_t>(static_cast<uint8_t>(mode), 2u));
-}
-
-engine::RenderPostAA GetPostAA()
-{
-    const State& state = Get();
-    return state.postAASettings ? static_cast<engine::RenderPostAA>(state.postAASettings->mode)
-                                : engine::RenderPostAA::Off;
-}
-
-void SetContactShadowsEnabled(bool enabled)
-{
-    State& state = Get();
-    if (state.contactShadowResources)
-        state.contactShadowResources->settings.enabled = enabled;
-}
-
-bool GetContactShadowsEnabled()
-{
-    const State& state = Get();
-    return state.contactShadowResources && state.contactShadowResources->settings.enabled;
-}
+void SetGtaoEnabled(bool enabled) { internal::SetGtaoEnabled(Get().render, enabled); }
+bool GetGtaoEnabled() { return internal::GetGtaoEnabled(Get().render); }
+void SetSsrEnabled(bool enabled) { internal::SetSsrEnabled(Get().render, enabled); }
+bool GetSsrEnabled() { return internal::GetSsrEnabled(Get().render); }
+void SetContactShadowsEnabled(bool enabled) { internal::SetContactShadowsEnabled(Get().render, enabled); }
+bool GetContactShadowsEnabled() { return internal::GetContactShadowsEnabled(Get().render); }
 
 void SetShadowQuality(uint32_t sunResolution, uint32_t localResolution, uint8_t filter)
 {
-    State& state = Get();
-    if (!state.shadowQuality)
-        return;
-    state.shadowQuality->directionalResolution = engine::ClampShadowQualityResolution(sunResolution);
-    state.shadowQuality->localResolution = engine::ClampShadowQualityResolution(localResolution);
-    state.shadowQuality->filter = static_cast<engine::ShadowFilter>(std::min<uint8_t>(filter, engine::kMaxShadowQualityFilter));
+    internal::SetShadowQuality(Get().render, sunResolution, localResolution, filter);
 }
 
 void GetShadowQuality(uint32_t& sunResolution, uint32_t& localResolution, uint8_t& filter)
 {
-    const State& state = Get();
-    const engine::addons::shadow::ShadowQualitySettings quality =
-        state.shadowQuality ? *state.shadowQuality : engine::addons::shadow::ShadowQualitySettings{};
-    sunResolution = quality.directionalResolution;
-    localResolution = quality.localResolution;
-    filter = static_cast<uint8_t>(quality.filter);
+    internal::GetShadowQuality(Get().render, sunResolution, localResolution, filter);
 }
 
-void SetMsaa(uint32_t sampleCount)
+void SetPostAA(engine::RenderPostAA mode) { internal::SetPostAA(Get().render, mode); }
+engine::RenderPostAA GetPostAA() { return internal::GetPostAA(Get().render); }
+void SetMsaa(uint32_t sampleCount) { internal::SetMsaa(Get().render, sampleCount); }
+uint32_t GetMsaa() { return internal::GetMsaa(Get().render); }
+
+void SetQualityLevel(engine::RenderQualityLevel level)
 {
     State& state = Get();
-    if (state.msaaSettings)
-        state.msaaSettings->sampleCount = engine::renderer::addons::forward::NormalizeMsaaSamples(sampleCount);
+    internal::SetQualityLevel(state.render, level, state.editorLiveStateEnabled, state.projectSettings.windowTitle);
 }
 
-uint32_t GetMsaa()
-{
-    const State& state = Get();
-    return state.msaaSettings ? state.msaaSettings->sampleCount : 1u;
-}
+engine::RenderQualityLevel GetQualityLevel() { return internal::GetQualityLevel(Get().render); }
 
 void SetShading(const engine::renderer::addons::forward::ShadingSettings& settings)
 {
-    State& state = Get();
-    if (state.shadingSettings)
-        *state.shadingSettings = settings;
+    internal::SetShading(Get().render, settings);
 }
 
-engine::renderer::addons::forward::ShadingSettings GetShading()
-{
-    const State& state = Get();
-    return state.shadingSettings ? *state.shadingSettings : engine::renderer::addons::forward::ShadingSettings{};
-}
+engine::renderer::addons::forward::ShadingSettings GetShading() { return internal::GetShading(Get().render); }
 
-engine::renderer::addons::forward::TonemapSettings GetTonemapping()
-{
-    const State& state = Get();
-    return state.tonemapSettings ? *state.tonemapSettings : engine::renderer::addons::forward::TonemapSettings{};
-}
+engine::renderer::addons::forward::TonemapSettings GetTonemapping() { return internal::GetTonemapping(Get().render); }
 
 void SetColorGrading(const engine::renderer::addons::forward::ColorGradingSettings& grading)
 {
-    State& state = Get();
-    if (!state.tonemapSettings)
-        return;
-    state.tonemapSettings->grading = grading;
-    state.tonemapSettings->grading.Clamp();
+    internal::SetColorGrading(Get().render, grading);
 }
 
 engine::renderer::addons::forward::ColorGradingSettings GetColorGrading()
 {
-    const State& state = Get();
-    return state.tonemapSettings ? state.tonemapSettings->grading
-                                 : engine::renderer::addons::forward::ColorGradingSettings{};
+    return internal::GetColorGrading(Get().render);
 }
 
 void SetActiveEnvironment(engine::renderer::EnvironmentHandle environment)
@@ -5143,24 +4756,7 @@ int Run()
         view.enableDepthPrepass = true;
 
         // Post-process volumes at the camera over the scene and project values.
-        {
-            engine::addons::postprocess::PostProcessValues ppBase;
-            ppBase.tonemap = *state.tonemapSettings;
-            ppBase.bloomIntensity = kRuntimeBloomIntensity;
-            ppBase.gtaoIntensity = state.baseGtaoIntensity;
-            ppBase.ssrIntensity = state.baseSsrIntensity;
-            ppBase.contactShadowIntensity = state.baseContactShadowIntensity;
-            const engine::addons::postprocess::PostProcessValues pp =
-                engine::addons::postprocess::BlendPostProcessVolumes(*state.world, view.cameraPosition, ppBase);
-            *state.effectiveTonemapSettings = pp.tonemap;
-            state.effectiveTonemapSettings->bloomIntensity = pp.bloomIntensity;
-            if (state.gtaoResources)
-                state.gtaoResources->settings.intensity = pp.gtaoIntensity;
-            if (state.ssrResources)
-                state.ssrResources->settings.intensity = pp.ssrIntensity;
-            if (state.contactShadowResources)
-                state.contactShadowResources->settings.intensity = pp.contactShadowIntensity;
-        }
+        internal::ApplyPostProcessVolumes(state.render, *state.world, view.cameraPosition);
 
         // Text-Overlay im UI-Pass; Atlas/Pipeline vorher ausserhalb des Passes anlegen.
         engine::renderer::FramePipelineCallbacks frameCallbacks;
