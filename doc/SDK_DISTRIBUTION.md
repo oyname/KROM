@@ -65,9 +65,14 @@ cmake --build <project>/.krom/manual --target krom_runtime_<runtimeTarget>_dx11
 ```
 
 The template uses the same project helpers as the engine source build. The
-editor's automatic cache additionally separates a 16-digit SDK ID prefix, platform and full MSVC compiler version. The full SDK ID remains checked in the CMake cache and module ABI; a moved SDK resets its project CMake cache.
+editor's automatic cache `<project>/.krom/b/<12 hex>` is a hash of SDK build ID, platform, full MSVC compiler version and Release (see `doc/SDK_PATHS.md`). The full SDK ID remains checked in the CMake cache and module ABI; a moved SDK resets its project CMake cache.
 The two SDK entrypoints are copied into that cache during configuration to keep
-MSVC object paths short. Runtime redistributables are copied through a generated
+MSVC object paths short. Project scripts and `generated/ScriptBindings.cpp` are
+compiled through one-line `#include` wrappers in `<cache>/ps/`, so their objects
+avoid CMake's 32-character hash directory; diagnostics and debug info still name
+the original files. cl.exe is not long-path aware, so configuration warns when an
+object path in the cache would exceed 250 characters and suggests a shorter
+project folder; the editor checks the same limit before configuring. Runtime redistributables are copied through a generated
 CMake script, avoiding UTF-8 batch files interpreted in the Windows OEM codepage.
 Source-build timestamp/header checks remain in source mode. SDK modules instead
 must match the immutable build ID and the explicit ABI policy.

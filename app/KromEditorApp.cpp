@@ -70,6 +70,7 @@
 #include <fstream>
 #include <filesystem>
 #include <functional>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #if defined(_WIN32)
@@ -537,6 +538,13 @@ bool ResolveRuntimeBuildCommands(RuntimeBuildRequest& request,
         request.buildDir = paths.ProjectBuildDir(request.projectRoot,
             std::to_string(tools.compilerVersion));
         if (request.buildDir.empty()) return fail("build.directory_failed");
+        if (const size_t overflow = engine::app::ProjectBuildPathOverflow(request.buildDir))
+        {
+            log(engine::LogLevel::Error,
+                BuildLogText(TranslateWithValue("build.path_too_long", std::to_string(overflow)),
+                             PathToUtf8(request.projectRoot)));
+            return false;
+        }
         request.editorOwnedBuildDir = true;
     }
     if (editorCompiler && !CompilerCompatible(editorCompiler, tools.compilerVersion, request.scriptBuild, paths.sdk))
@@ -558,6 +566,17 @@ bool ResolveRuntimeBuildCommands(RuntimeBuildRequest& request,
     const bool needsConfigure = !std::filesystem::exists(request.buildDir / "CMakeCache.txt");
     std::filesystem::create_directories(request.buildDir, ec);
     if (ec) return fail("build.directory_failed", ec.message());
+    if (paths.sdk)
+    {
+        // The directory name is a hash; record what it stands for so old caches stay identifiable.
+        const auto info = paths.ProjectBuildInfo(std::to_string(tools.compilerVersion));
+        const auto infoPath = request.buildDir / engine::app::kProjectBuildInfoFile;
+        std::string existing;
+        if (std::ifstream in{infoPath, std::ios::binary})
+            existing.assign(std::istreambuf_iterator<char>(in), std::istreambuf_iterator<char>());
+        if (existing != info)
+            std::ofstream(infoPath, std::ios::binary | std::ios::trunc) << info;
+    }
 
     commands.clear();
     auto configure = [&](std::vector<std::string> options) {
@@ -4327,6 +4346,22 @@ bool KromEditorApp::LoadProjectFile(const std::string& projectPath, bool stageIn
     return FinishProjectLoad(hasSceneFile ? LoadEditorScene() : (SyncEditorSceneState(), true));
 }
 
+void KromEditorApp::WarnIfProjectPathTooLong()
+{
+    // Warn on create/open, not only at the first build. The SDK build directory
+    // name has a fixed length, so any valid toolset gives the same answer here.
+    const auto& paths = GetEnginePaths();
+    if (!paths.sdk || m_projectRoot.empty()) return;
+    std::error_code ec;
+    const auto root = std::filesystem::absolute(m_projectRoot, ec);
+    const auto buildDir = ec ? std::filesystem::path{} : paths.ProjectBuildDir(root, "0");
+    const size_t overflow = buildDir.empty() ? 0 : engine::app::ProjectBuildPathOverflow(buildDir);
+    if (!overflow) return;
+    const auto text = TranslateWithValue("project.path_too_long", std::to_string(overflow));
+    Debug::LogWarning("%s", text.c_str());
+    if (m_editorFrameCtx) m_editorFrameCtx->lastFileMessage = text;
+}
+
 bool KromEditorApp::FinishProjectLoad(bool sceneLoaded)
 {
     // Scene camera data supplies defaults; saved editor preferences take precedence.
@@ -4339,6 +4374,8 @@ bool KromEditorApp::FinishProjectLoad(bool sceneLoaded)
             : Translate("project.scene_load_failed");
 
     if (sceneLoaded) m_maximizeAfterProjectLoad = true;
+    WarnIfProjectPathTooLong();
+
     if (sceneLoaded)
     {
         RememberSavedSceneContent();
@@ -4556,6 +4593,7 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
 
     if (m_editorFrameCtx)
         m_editorFrameCtx->lastFileMessage = TranslateWithValue("project.created", PathToUtf8(projectRoot));
+    WarnIfProjectPathTooLong();
 
     if (m_editorFrameCtx)
         SaveEditorSettings(m_projectRoot, m_editorFrameCtx->state, m_currentSceneName);
