@@ -5,6 +5,7 @@
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/lighting/LightingFrameData.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "addons/shadow/ShadowAtlasLayout.hpp"
 #include "addons/shadow/ShadowCasterCulling.hpp"
 #include "addons/shadow/ShadowFrameData.hpp"
 #include "addons/shadow/ShadowViewBuilder.hpp"
@@ -19,25 +20,6 @@
 namespace engine::addons::shadow {
 namespace {
 
-[[nodiscard]] uint32_t ComputeCurrentRenderPathAtlasGridDim(size_t viewCount) noexcept
-{
-    return std::max(1u, static_cast<uint32_t>(std::ceil(std::sqrt(static_cast<float>(std::max<size_t>(1u, viewCount))))));
-}
-
-[[nodiscard]] uint32_t ComputeShadowAtlasResolution(uint32_t maxTileResolution,
-                                                    size_t viewCount,
-                                                    uint32_t maxAtlasResolution) noexcept
-{
-    if (maxTileResolution == 0u || viewCount == 0u)
-        return 0u;
-
-    const uint32_t gridDim = ComputeCurrentRenderPathAtlasGridDim(viewCount);
-    const uint64_t requested = static_cast<uint64_t>(maxTileResolution) *
-                               static_cast<uint64_t>(gridDim);
-    const uint32_t capped = static_cast<uint32_t>(
-        std::min<uint64_t>(requested, std::max(1u, maxAtlasResolution)));
-    return std::max(gridDim, capped);
-}
 
 [[nodiscard]] bool IsEntityActive(const ecs::World& world, EntityID entity) noexcept
 {
@@ -199,12 +181,20 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
         splits[i] = splitUniform + (splitLog - splitUniform) * std::clamp(cascadeLambda, 0.f, 1.f);
     }
 
+    // The PBR shaders let pixels in the last kCascadeBlendBand of a cascade pick the
+    // next one (dithered transition, kKromCascadeBlendBand in pbr_lit/pbr_forward_plus).
+    // Every cascade after the first starts that much earlier so it covers the band.
+    constexpr float kCascadeBlendBand = 0.1f;
+
     result.reserve(cascadeCount);
     outCorners.reserve(cascadeCount);
     for (uint32_t i = 0u; i < cascadeCount; ++i)
     {
+        const float sliceNear = i == 0u
+            ? splits[0]
+            : splits[i] - kCascadeBlendBand * (splits[i] - splits[i - 1u]);
         std::array<math::Vec3, 8> corners{};
-        result.push_back(ComputeFrustumSliceBounds(renderView, splits[i], splits[i + 1u], corners));
+        result.push_back(ComputeFrustumSliceBounds(renderView, sliceNear, splits[i + 1u], corners));
         outCorners.push_back(corners);
     }
 
@@ -875,49 +865,68 @@ void ExtractShadow(const renderer::SceneExtractionContext& context,
     uint32_t activeShadowResolution = 0u;
     if (shadowData.HasCurrentRenderPathRequests())
     {
-        uint32_t maxTileResolution = 0u;
-        size_t totalViewCount = 0u;
+        // Tiles of different sizes in one square atlas (ShadowAtlasLayout):
+        // each light keeps its own resolution as far as the atlas cap allows.
+        std::vector<size_t> packedRequests;
+        std::vector<ShadowAtlasLayoutRequest> layoutRequests;
         for (size_t requestIndex : shadowData.currentRenderPath.requestIndices)
         {
             if (requestIndex >= shadowData.requests.size())
                 continue;
-            maxTileResolution = std::max(maxTileResolution,
-                                         std::max(1u, shadowData.requests[requestIndex].settings.resolution));
-            totalViewCount += shadowData.requests[requestIndex].views.size();
+            const ShadowRequest& request = shadowData.requests[requestIndex];
+            packedRequests.push_back(requestIndex);
+            layoutRequests.push_back(ShadowAtlasLayoutRequest{
+                std::max(1u, request.settings.resolution),
+                static_cast<uint32_t>(request.views.size()),
+                request.lightType == LightType::Directional});
         }
+
+        // The atlas grows at once but shrinks only after it was too large for
+        // a while, so a light switching on and off does not rebuild the frame
+        // graph every frame.
+        uint32_t minAtlasSize = 0u;
         if (temporalState)
         {
-            const uint32_t currentViewCount = static_cast<uint32_t>(
-                std::min<size_t>(totalViewCount, UINT32_MAX));
-            temporalState->stableAtlasViewCount = std::max(
-                temporalState->stableAtlasViewCount,
-                currentViewCount);
-            totalViewCount = std::max<size_t>(totalViewCount,
-                                              temporalState->stableAtlasViewCount);
+            const uint32_t needed =
+                BuildShadowAtlasLayout(layoutRequests, config.maxShadowAtlasResolution).atlasSize;
+            if (needed >= temporalState->stableAtlasSize ||
+                ++temporalState->framesAtlasTooLarge > kShadowAtlasShrinkDelayFrames)
+            {
+                temporalState->stableAtlasSize = needed;
+                temporalState->framesAtlasTooLarge = 0u;
+            }
+            minAtlasSize = temporalState->stableAtlasSize;
         }
-        shadowData.atlasViewCountHint = static_cast<uint32_t>(
-            std::min<size_t>(totalViewCount, UINT32_MAX));
-        activeShadowResolution = ComputeShadowAtlasResolution(
-            maxTileResolution,
-            totalViewCount,
-            config.maxShadowAtlasResolution);
-        const uint32_t tileResolution = std::max(1u,
-            activeShadowResolution / ComputeCurrentRenderPathAtlasGridDim(totalViewCount));
-        for (size_t requestIndex : shadowData.currentRenderPath.requestIndices)
+        const ShadowAtlasLayout layout =
+            BuildShadowAtlasLayout(layoutRequests, config.maxShadowAtlasResolution, minAtlasSize);
+        activeShadowResolution = layout.atlasSize;
+
+        for (size_t packed = 0; packed < packedRequests.size(); ++packed)
         {
-            auto& request = shadowData.requests[requestIndex];
+            auto& request = shadowData.requests[packedRequests[packed]];
+            const uint32_t tileResolution = packed < layout.tileSizes.size() ? layout.tileSizes[packed] : 0u;
             request.effectiveResolution = tileResolution;
-            if (tileResolution == request.settings.resolution)
+            if (tileResolution != 0u && tileResolution != request.settings.resolution)
+            {
+                const auto* light = world.Get<LightComponent>(request.lightEntity);
+                const auto* transform = world.Get<WorldTransformComponent>(request.lightEntity);
+                if (light && transform)
+                    ShadowViewBuilder::BuildViews(*light, *transform, request.casterBoundsWorld, request);
+            }
+            if (packed >= layout.tiles.size())
                 continue;
-            const auto* light = world.Get<LightComponent>(request.lightEntity);
-            const auto* transform = world.Get<WorldTransformComponent>(request.lightEntity);
-            if (light && transform)
-                ShadowViewBuilder::BuildViews(*light, *transform, request.casterBoundsWorld, request);
+            const auto& tiles = layout.tiles[packed];
+            for (size_t vi = 0; vi < request.views.size() && vi < tiles.size(); ++vi)
+            {
+                request.views[vi].atlasX = tiles[vi].x;
+                request.views[vi].atlasY = tiles[vi].y;
+            }
         }
     }
     else if (temporalState)
     {
-        temporalState->stableAtlasViewCount = 0u;
+        temporalState->stableAtlasSize = 0u;
+        temporalState->framesAtlasTooLarge = 0u;
     }
     extraction.SetActiveShadowResolution(activeShadowResolution);
 }

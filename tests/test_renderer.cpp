@@ -17,6 +17,7 @@
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererExtraction.hpp"
 #include "addons/mesh_renderer/MeshRendererFeature.hpp"
+#include "addons/shadow/ShadowAtlasLayout.hpp"
 #include "addons/shadow/ShadowCasterCulling.hpp"
 #include "addons/shadow/ShadowFeature.hpp"
 #include "addons/shadow/ShadowFrameData.hpp"
@@ -2207,6 +2208,9 @@ static void TestForwardPlusShadowBuffersPackMoreThanFourShadowLights(test::TestC
         lc.shadowSettings.enabled = true;
         lc.shadowSettings.resolution = 256u;
         lc.shadowSettings.maxDistance = 25.0f;
+        // Different filter per light: each must reach the shader unchanged.
+        lc.shadowSettings.filter = (i % 2) ? engine::ShadowFilter::PCSS : engine::ShadowFilter::Tent7x7;
+        lc.shadowSettings.lightSize = 0.1f * static_cast<float>(i + 1);
         world.Add<LightComponent>(light, lc);
     }
 
@@ -2280,11 +2284,19 @@ static void TestForwardPlusShadowBuffersPackMoreThanFourShadowLights(test::TestC
     CHECK_EQ(ctx, constantResult.frameConstants.shadowViewCount, 5u);
     CHECK_EQ(ctx, constantResult.frameConstants.shadowBufferLightCount, 5u);
     CHECK_EQ(ctx, constantResult.frameConstants.shadowBufferViewCount, 5u);
-    // 512 / 3 gives 170-pixel tiles. Sampling must use the same integer
-    // footprint as the rasterizer, rather than drifting to a fractional third.
+    // Five 256 tiles do not fit a 512 atlas: one spot drops to 128. The
+    // sampled rect of every view must be the tile the rasterizer draws into.
     CHECK_EQ(ctx, snapshot.GetQueue().activeShadowResolution, 512u);
-    CHECK(ctx, NearlyEqual(constantResult.frameConstants.shadowViewRect[1][0], 170.f / 512.f));
-    CHECK(ctx, NearlyEqual(constantResult.frameConstants.shadowViewRect[1][2], 170.f / 512.f));
+    for (uint32_t k = 0u; shadow && k < 4u; ++k)
+    {
+        const auto& request = shadow->requests[shadow->currentRenderPath.requestIndices[k]];
+        const auto& atlasView = request.views.front();
+        const float* rect = constantResult.frameConstants.shadowViewRect[k];
+        CHECK(ctx, NearlyEqual(rect[0], static_cast<float>(atlasView.atlasX) / 512.f));
+        CHECK(ctx, NearlyEqual(rect[1], static_cast<float>(atlasView.atlasY) / 512.f));
+        CHECK(ctx, NearlyEqual(rect[2], static_cast<float>(request.effectiveResolution) / 512.f));
+        CHECK(ctx, request.effectiveResolution == 256u || request.effectiveResolution == 128u);
+    }
     CHECK(ctx, shadow && shadow->gpu.lightBuffer.IsValid());
     CHECK(ctx, shadow && shadow->gpu.viewBuffer.IsValid());
     CHECK_EQ(ctx, shadow ? shadow->gpu.lightCount : 0u, 5u);
@@ -2296,8 +2308,31 @@ static void TestForwardPlusShadowBuffersPackMoreThanFourShadowLights(test::TestC
     const auto* viewRecord = device.GetBuffer(viewBuffer);
     CHECK(ctx, lightRecord != nullptr);
     CHECK(ctx, viewRecord != nullptr);
-    CHECK(ctx, lightRecord && lightRecord->uploadedData.size() >= 5u * 32u);
+    CHECK(ctx, lightRecord && lightRecord->uploadedData.size() >= 5u * 48u);
     CHECK(ctx, viewRecord && viewRecord->uploadedData.size() >= 5u * 80u);
+
+    // Filter and light size per light: constant-buffer lights 0..3 in
+    // featureParams[5]/[6].y (pbr_lit), all lights in GpuShadowLightData::params (Forward+).
+    const FrameConstants& shadowFc = constantResult.frameConstants;
+    uint32_t packedFilters = 0u;
+    std::memcpy(&packedFilters, &shadowFc.featureParams[6][1], sizeof(packedFilters));
+    for (uint32_t k = 0u; shadow && k < 5u; ++k)
+    {
+        const auto& settings = shadow->requests[shadow->currentRenderPath.requestIndices[k]].settings;
+        if (k < 4u)
+        {
+            CHECK_EQ(ctx, (packedFilters >> (4u * k)) & 0xFu, static_cast<uint32_t>(settings.filter));
+            CHECK(ctx, NearlyEqual(shadowFc.featureParams[5][k], settings.lightSize));
+        }
+        if (lightRecord && lightRecord->uploadedData.size() >= (k + 1u) * 48u)
+        {
+            float params[4]{};
+            std::memcpy(params, lightRecord->uploadedData.data() + k * 48u + 32u, sizeof(params));
+            CHECK(ctx, NearlyEqual(params[0], static_cast<float>(settings.filter)));
+            CHECK(ctx, NearlyEqual(params[1], settings.lightSize));
+        }
+    }
+    CHECK(ctx, ((packedFilters & 0xFu) != ((packedFilters >> 4u) & 0xFu)));
 
     registry.ShutdownAll(FeatureShutdownContext{});
     shaderRuntime.Shutdown();
@@ -3217,20 +3252,108 @@ static void TestShadingSettingsFlags(test::TestContext& ctx)
     CHECK_EQ(ctx, bits, 5u);
 
     // Shadow filter values beyond the last one are clamped on load.
+    // Stored values must not move: scenes keep the number.
     CHECK_EQ(ctx, static_cast<uint32_t>(engine::kShadowFilterMax),
-             static_cast<uint32_t>(engine::ShadowFilter::PCSS));
+             static_cast<uint32_t>(engine::ShadowFilter::Tent7x7));
+    CHECK_EQ(ctx, static_cast<uint32_t>(engine::ShadowFilter::Tent3x3), 1u);
+    CHECK_EQ(ctx, static_cast<uint32_t>(engine::ShadowFilter::Tent5x5), 2u);
     CHECK_EQ(ctx, static_cast<uint32_t>(engine::ShadowFilter::PCSS), 4u);
+    CHECK_EQ(ctx, static_cast<uint32_t>(engine::ShadowFilter::Tent7x7), 5u);
 
-    // PCSS light size: featureParams[6].x, where pbr_shadow_poisson.* reads it.
+    // Filter parameters where pbr_shadow_poisson.* reads them: featureParams[5] =
+    // light size per shadow light, featureParams[6].x = light size of the first
+    // light (OpenGL), featureParams[6].y = filter per light, 4 bits each.
     using engine::addons::shadow::kShadowFilterFrameParameterBlock;
     CHECK(ctx, IsFrameParameterBlockInRange(kShadowFilterFrameParameterBlock));
-    CHECK_EQ(ctx, kShadowFilterFrameParameterBlock.firstSlot, 6u);
+    CHECK_EQ(ctx, kShadowFilterFrameParameterBlock.firstSlot, 5u);
+    CHECK_EQ(ctx, kShadowFilterFrameParameterBlock.slotCount, 2u);
     engine::addons::shadow::ShadowFilterFrameParams filterParams{};
     filterParams.lightSize = 0.25f;
+    filterParams.lightSizes[2] = 0.5f;
+    filterParams.filterModes = (static_cast<uint32_t>(engine::ShadowFilter::PCSS) << 0u) |
+                               (static_cast<uint32_t>(engine::ShadowFilter::Tent7x7) << 8u);
     CHECK(ctx, WriteFrameParameterBlock(fc, kShadowFilterFrameParameterBlock, filterParams));
     CHECK_EQ(ctx, fc.featureParams[6][0], 0.25f);
+    CHECK_EQ(ctx, fc.featureParams[5][2], 0.5f);
+    uint32_t packedFilters = 0u;
+    std::memcpy(&packedFilters, &fc.featureParams[6][1], sizeof(packedFilters));
+    CHECK_EQ(ctx, packedFilters & 0xFu, 4u);
+    CHECK_EQ(ctx, (packedFilters >> 8u) & 0xFu, 5u);
     CHECK(ctx, engine::ShadowSettings{}.lightSize > 0.f);
     CHECK_EQ(ctx, static_cast<uint32_t>(engine::ShadowFilter::Poisson), 3u);
+}
+
+static bool ShadowTilesOverlap(const engine::addons::shadow::ShadowAtlasLayout& layout)
+{
+    struct Box { uint32_t x, y, size; };
+    std::vector<Box> boxes;
+    for (size_t r = 0; r < layout.tiles.size(); ++r)
+        for (const auto& tile : layout.tiles[r])
+            boxes.push_back({tile.x, tile.y, layout.tileSizes[r]});
+    for (size_t a = 0; a < boxes.size(); ++a)
+    {
+        if (boxes[a].x + boxes[a].size > layout.atlasSize || boxes[a].y + boxes[a].size > layout.atlasSize)
+            return true;
+        for (size_t b = a + 1; b < boxes.size(); ++b)
+        {
+            const bool apart = boxes[a].x + boxes[a].size <= boxes[b].x || boxes[b].x + boxes[b].size <= boxes[a].x ||
+                               boxes[a].y + boxes[a].size <= boxes[b].y || boxes[b].y + boxes[b].size <= boxes[a].y;
+            if (!apart)
+                return true;
+        }
+    }
+    return false;
+}
+
+static void TestShadowAtlasLayout(test::TestContext& ctx)
+{
+    using engine::addons::shadow::BuildShadowAtlasLayout;
+    using engine::addons::shadow::ShadowAtlasLayoutRequest;
+
+    // Room 2: sun 4096 x 4 cascades, point light 1024 x 6, spot 1024.
+    // The sun gets 2048 cascades (the old grid gave every view 1024).
+    {
+        const std::vector<ShadowAtlasLayoutRequest> requests{
+            {4096u, 4u, true}, {1024u, 6u, false}, {1024u, 1u, false}};
+        const auto layout = BuildShadowAtlasLayout(requests, 6144u);
+        CHECK_EQ(ctx, layout.tileSizes.size(), size_t(3));
+        CHECK_EQ(ctx, layout.tileSizes[0], 2048u);
+        CHECK_EQ(ctx, layout.tileSizes[1], 1024u);
+        CHECK_EQ(ctx, layout.tileSizes[2], 1024u);
+        CHECK(ctx, layout.atlasSize <= 6144u && layout.atlasSize >= 4096u);
+        CHECK_EQ(ctx, layout.tiles[1].size(), size_t(6));
+        CHECK(ctx, !ShadowTilesOverlap(layout));
+    }
+    // One spot: atlas = its tile.
+    {
+        const std::vector<ShadowAtlasLayoutRequest> requests{{1024u, 1u, false}};
+        const auto layout = BuildShadowAtlasLayout(requests, 6144u);
+        CHECK_EQ(ctx, layout.atlasSize, 1024u);
+        CHECK_EQ(ctx, layout.tileSizes[0], 1024u);
+    }
+    // A held larger atlas keeps the tile sizes and stays at least that large.
+    {
+        const std::vector<ShadowAtlasLayoutRequest> requests{{1024u, 1u, false}};
+        const auto layout = BuildShadowAtlasLayout(requests, 6144u, 3072u);
+        CHECK_EQ(ctx, layout.atlasSize, 3072u);
+        CHECK_EQ(ctx, layout.tileSizes[0], 1024u);
+    }
+    // Tight cap: local lights shrink before the sun, and the sun stays the largest.
+    {
+        const std::vector<ShadowAtlasLayoutRequest> requests{
+            {2048u, 4u, true}, {1024u, 6u, false}, {1024u, 6u, false}};
+        const auto layout = BuildShadowAtlasLayout(requests, 4096u);
+        CHECK(ctx, layout.atlasSize > 0u && layout.atlasSize <= 4096u);
+        CHECK(ctx, layout.tileSizes[0] >= layout.tileSizes[1]);
+        CHECK(ctx, layout.tileSizes[0] >= layout.tileSizes[2]);
+        CHECK(ctx, layout.tileSizes[0] >= 1024u);
+        CHECK(ctx, !ShadowTilesOverlap(layout));
+    }
+    // Nothing to pack.
+    {
+        const std::vector<ShadowAtlasLayoutRequest> requests{{1024u, 0u, false}};
+        CHECK_EQ(ctx, BuildShadowAtlasLayout(requests, 4096u).atlasSize, 0u);
+    }
 }
 
 static void TestGpuPassProfiler(test::TestContext& ctx)
@@ -4846,7 +4969,6 @@ static void TestDirectionalShadowSlicesMatchCameraDepth(test::TestContext& ctx)
 
     // Wide FOV exposes the old radial-distance fit; orthographic cameras must
     // keep the same XY footprint at every depth. Include translated/rotated views.
-    bool retainedCascadeTiles = false;
     for (bool orthographic : {false, true})
     for (const math::Vec3 position : {math::Vec3::Zero(), math::Vec3{123.f, 8.f, -45.f}})
     for (uint32_t cascadeCount : {1u, 4u})
@@ -4874,9 +4996,9 @@ static void TestDirectionalShadowSlicesMatchCameraDepth(test::TestContext& ctx)
         CHECK(ctx, request != nullptr);
         if (!request) continue;
         CHECK_EQ(ctx, request->views.size(), static_cast<size_t>(cascadeCount));
-        // The atlas retains its larger grid after the first four-cascade frame.
-        retainedCascadeTiles = retainedCascadeTiles || cascadeCount > 1u;
-        CHECK_EQ(ctx, request->effectiveResolution, retainedCascadeTiles ? 512u : 1024u);
+        // 1024 atlas: one map keeps 1024, four cascades get 512 tiles. The
+        // tiles grow back when the cascades go (the atlas size stays the same).
+        CHECK_EQ(ctx, request->effectiveResolution, cascadeCount > 1u ? 512u : 1024u);
         CHECK_EQ(ctx, request->views.front().viewport.width, static_cast<float>(request->effectiveResolution));
         CHECK_EQ(ctx, request->allocation.desc.width, request->effectiveResolution);
         CHECK_EQ(ctx, request->allocation.desc.height, request->effectiveResolution);
@@ -4908,12 +5030,22 @@ static void TestDirectionalShadowSlicesMatchCameraDepth(test::TestContext& ctx)
             const float logarithmic = view.nearPlane * std::pow(80.f / view.nearPlane, f);
             return uniform + (logarithmic - uniform) * settings->cascadeLambda;
         };
+        // Cascades after the first start 10% of the previous cascade earlier: the
+        // shaders dither into the next cascade over that band (kCascadeBlendBand).
+        auto sliceNear = [&](uint32_t cascade)
+        {
+            return cascade == 0u
+                ? splitDepth(0u)
+                : splitDepth(cascade) - 0.1f * (splitDepth(cascade) - splitDepth(cascade - 1u));
+        };
         for (size_t cascade = 0; cascade < request->cascadeFrustumCornersWorld.size(); ++cascade)
         for (size_t corner = 0; corner < 8u; ++corner)
         {
             const auto& point = request->cascadeFrustumCornersWorld[cascade][corner];
             const auto vs = view.view.TransformPoint(point);
-            CHECK(ctx, std::fabs(-vs.z - splitDepth(static_cast<uint32_t>(cascade) + (corner >= 4u ? 1u : 0u))) < 0.002f);
+            const uint32_t cascadeIndex = static_cast<uint32_t>(cascade);
+            const float expectedDepth = corner >= 4u ? splitDepth(cascadeIndex + 1u) : sliceNear(cascadeIndex);
+            CHECK(ctx, std::fabs(-vs.z - expectedDepth) < 0.002f);
             const auto cs = view.projection * math::Vec4{vs.x, vs.y, vs.z, 1.f};
             CHECK(ctx, std::fabs(std::fabs(cs.x / cs.w) - 1.f) < 0.002f);
             CHECK(ctx, std::fabs(std::fabs(cs.y / cs.w) - 1.f) < 0.002f);
@@ -7222,6 +7354,7 @@ int RunRendererTests()
         .Add("Camera addon uses live local transform", TestCameraAddonUsesLiveLocalTransform)
         .Add("RenderWorld extract+cull",    TestRenderWorldExtract)
         .Add("RenderWorld parallel draw lists match serial", TestRenderWorldParallelDrawListsMatchSerial)
+        .Add("Shadow atlas packs tiles of different sizes", TestShadowAtlasLayout)
         .Add("GPU pass profiler", TestGpuPassProfiler)
         .Add("Tonemap operator names", TestTonemapOperatorNames)
         .Add("Shading settings flags", TestShadingSettingsFlags)

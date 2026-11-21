@@ -2016,17 +2016,23 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingComponentEdit(ctx, resolutionKey);
 
-        // Order of the list = ShadowFilter values.
-        const char* filterNames[] = { Translate("light.shadow_filter_none"), "PCF 2x2", "PCF 3x3",
+        // List order (tent sizes together) differs from the stored ShadowFilter values.
+        static constexpr ShadowFilter kFilterOrder[] = {
+            ShadowFilter::None, ShadowFilter::Tent3x3, ShadowFilter::Tent5x5, ShadowFilter::Tent7x7,
+            ShadowFilter::Poisson, ShadowFilter::PCSS };
+        static_assert(IM_ARRAYSIZE(kFilterOrder) == kShadowFilterMax + 1, "every ShadowFilter needs a list entry");
+        const char* filterNames[] = { Translate("light.shadow_filter_none"), "PCF 3x3", "PCF 5x5", "PCF 7x7",
                                       Translate("light.shadow_filter_poisson"),
                                       Translate("light.shadow_filter_pcss") };
-        int filter = std::clamp(static_cast<int>(light->shadowSettings.filter), 0, static_cast<int>(kShadowFilterMax));
+        int filter = 0;
+        for (int i = 0; i < IM_ARRAYSIZE(kFilterOrder); ++i)
+            if (kFilterOrder[i] == light->shadowSettings.filter)
+                filter = i;
         const std::string filterKey = MakeEditHistoryKey(entity, "light.shadowFilter");
         if (value_ui::Combo(TranslateLabel("light.shadow_filter", "Shadow Filter").c_str(), &filter, filterNames, IM_ARRAYSIZE(filterNames)))
         {
             BeginPendingComponentEdit<LightComponent>(ctx, filterKey, "history.shadow_filter", entity);
-            light->shadowSettings.filter = static_cast<ShadowFilter>(
-                std::clamp(filter, 0, static_cast<int>(kShadowFilterMax)));
+            light->shadowSettings.filter = kFilterOrder[std::clamp(filter, 0, IM_ARRAYSIZE(kFilterOrder) - 1)];
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingComponentEdit(ctx, filterKey);

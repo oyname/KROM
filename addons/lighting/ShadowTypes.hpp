@@ -10,15 +10,20 @@ namespace engine {
 
 enum class ShadowFilter : uint8_t
 {
-    None   = 0,  // hard shadow: single depth sample
-    PCF2x2 = 1,  // 4-tap PCF at ±0.5 texel offsets
-    PCF3x3 = 2,  // 9-tap PCF 3×3 kernel
+    None    = 0, // hard shadow: single bilinear compare
+    // Tent PCF ("The Witness" / MJP): bilinear compares weighted to a tent over
+    // 3x3, 5x5 or 7x7 texels (4, 9, 16 taps). PBR shaders; the frozen OpenGL and
+    // legacy lit shaders keep their old 2x2/3x3 box kernels for 1 and 2 and use
+    // 3x3 for Tent7x7.
+    Tent3x3 = 1,
+    Tent5x5 = 2,
     Poisson = 3, // 12-tap Poisson disc, rotated per pixel (PBR shaders; legacy lit falls back to 3x3)
     PCSS    = 4, // contact-hardening: blocker search + Poisson filter sized by lightSize (PBR shaders)
+    Tent7x7 = 5,
 };
 
 // Highest valid ShadowFilter value; values read from files are clamped to it.
-inline constexpr uint8_t kShadowFilterMax = static_cast<uint8_t>(ShadowFilter::PCSS);
+inline constexpr uint8_t kShadowFilterMax = static_cast<uint8_t>(ShadowFilter::Tent7x7);
 
 // Range of ShadowSettings::lightSize.
 inline constexpr float kShadowLightSizeMin = 0.f;
@@ -27,7 +32,7 @@ inline constexpr float kShadowLightSizeMax = 2.f;
 struct ShadowSettings
 {
     bool         enabled      = false;
-    ShadowFilter filter       = ShadowFilter::PCF3x3;
+    ShadowFilter filter       = ShadowFilter::Tent5x5;
     uint32_t     resolution   = 2048u;
     uint32_t     cascadeCount = 1u;
     // Directional: world units, stable across cascade sizes and camera distance.
@@ -65,7 +70,7 @@ namespace ShadowPresets {
 {
     ShadowSettings s;
     s.enabled       = true;
-    s.filter        = ShadowFilter::PCF2x2;
+    s.filter        = ShadowFilter::Tent3x3;
     s.resolution    = 1024u;
     s.cascadeCount  = 3u;
     s.bias          = 0.001f;
@@ -79,7 +84,7 @@ namespace ShadowPresets {
 {
     ShadowSettings s;
     s.enabled       = true;
-    s.filter        = ShadowFilter::PCF3x3;
+    s.filter        = ShadowFilter::Tent5x5;
     s.resolution    = 2048u;
     s.cascadeCount  = 4u;
     s.bias          = 0.0005f;

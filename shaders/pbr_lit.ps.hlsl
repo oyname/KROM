@@ -142,6 +142,7 @@ static const uint DBG_VIEW_GTAO         = 1u << 20;
 static const uint DBG_DISABLE_GTAO      = 1u << 21;
 static const uint DBG_VIEW_CONTACT_SHADOW    = 1u << 22;
 static const uint DBG_DISABLE_CONTACT_SHADOW = 1u << 23;
+static const uint DBG_VIEW_SHADOW_CASCADE    = 1u << 24;
 
 float3 SafeNormalize(float3 v)
 {
@@ -348,8 +349,17 @@ float CalcSpotAttenuation(float3 L, float3 spotDir, float cosInner, float cosOut
     return saturate((cosAngle - cosOuter) / max(cosInner - cosOuter, 1e-4f));
 }
 
-uint ChooseCascadeIndexFromViewDepth(float3 positionWS, uint viewCount, float maxShadowDistance, float cascadeLambdaValue)
+// Width of the band at the far end of each cascade, as a fraction of the cascade's
+// depth range, in which pixels pick the next cascade by noise. Must match
+// kCascadeBlendBand in addons/shadow/ShadowExtraction.cpp, which extends every
+// cascade by this band towards the camera so the next cascade covers it.
+static const float kKromCascadeBlendBand = 0.1f;
+
+// blendToNext: 0 outside the band, rising to 1 at the far split of the cascade.
+uint ChooseCascadeIndexFromViewDepth(float3 positionWS, uint viewCount, float maxShadowDistance,
+                                     float cascadeLambdaValue, out float blendToNext)
 {
+    blendToNext = 0.0f;
     const uint cascadeCount = min(viewCount, 4u);
     if (cascadeCount <= 1u)
         return 0u;
@@ -360,6 +370,7 @@ uint ChooseCascadeIndexFromViewDepth(float3 positionWS, uint viewCount, float ma
     const float lambda = saturate(cascadeLambdaValue);
     const float countF = (float)cascadeCount;
 
+    float prevSplit = camNear;
     [loop]
     for (uint splitIndex = 1u; splitIndex < cascadeCount; ++splitIndex)
     {
@@ -368,7 +379,12 @@ uint ChooseCascadeIndexFromViewDepth(float3 positionWS, uint viewCount, float ma
         const float splitUniform = camNear + (camFar - camNear) * fi;
         const float splitDepth = lerp(splitUniform, splitLog, lambda);
         if (viewDepth <= splitDepth)
+        {
+            const float toSplit = (splitDepth - viewDepth) / max(splitDepth - prevSplit, 1e-4f);
+            blendToNext = saturate(1.0f - toSplit / kKromCascadeBlendBand);
             return splitIndex - 1u;
+        }
+        prevSplit = splitDepth;
     }
     return cascadeCount - 1u;
 }
@@ -465,43 +481,19 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
             float baseBias = KromShadowReceiverBias(biasValue, shadowVP);
             float visibility = 0.0f;
 
-            if (shadowFilterMode == 1u)
-            {
-                [loop]
-                for (int y = 0; y <= 1; ++y)
-                {
-                    [loop]
-                    for (int x = 0; x <= 1; ++x)
-                    {
-                        float2 offset = float2((float)x - 0.5f, (float)y - 0.5f) * shadowTexelSize;
-                        float depthRef = depth + dot(dDepth_dUV, offset) - baseBias;
-                        visibility += CompareShadowManualBilinear(atlasUv + offset, depthRef, atlasRect);
-                    }
-                }
-                visibility *= 0.25f;
-            }
-            else if (shadowFilterMode == 3u)
+            if (gKromShadowFilter == 3u)
             {
                 visibility = SampleShadowPoisson(atlasUv, depth, dDepth_dUV, baseBias, atlasRect);
             }
-            else if (shadowFilterMode == 4u)
+            else if (gKromShadowFilter == 4u)
             {
                 visibility = SampleShadowPcss(atlasUv, depth, dDepth_dUV, baseBias, atlasRect);
             }
-            else if (shadowFilterMode >= 2u)
+            else if (gKromShadowFilter >= 1u)
             {
-                [loop]
-                for (int y = -1; y <= 1; ++y)
-                {
-                    [loop]
-                    for (int x = -1; x <= 1; ++x)
-                    {
-                        float2 offset = float2((float)x, (float)y) * shadowTexelSize;
-                        float depthRef = depth + dot(dDepth_dUV, offset) - baseBias;
-                        visibility += CompareShadowManualBilinear(atlasUv + offset, depthRef, atlasRect);
-                    }
-                }
-                visibility *= (1.0f / 9.0f);
+                // Tent3x3 = 1, Tent5x5 = 2, Tent7x7 = 5 (ShadowFilter).
+                const uint tentQuality = gKromShadowFilter == 5u ? 3u : min(gKromShadowFilter, 2u);
+                visibility = SampleShadowTent(atlasUv, depth, dDepth_dUV, baseBias, atlasRect, tentQuality);
             }
             else
             {
@@ -794,6 +786,11 @@ LocalProbeIBL localProbes;
     float3 totalDirectSpecular = float3(0.0f, 0.0f, 0.0f);
     float  firstNoL            = 0.0f;
     float  firstShadowVisibility = 1.0f;
+    // DBG_VIEW_SHADOW_CASCADE: first directional shadow that was sampled.
+    uint   dbgShadowCascade = 0xFFFFFFFFu;
+    float4 dbgShadowPosLCS = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    float4 dbgShadowRect = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float  dbgShadowVisibility = 1.0f;
 
     [loop]
     for (uint i = 0; i < lightCount; ++i)
@@ -829,6 +826,7 @@ LocalProbeIBL localProbes;
             float4 shadowPosLCS = float4(0.0f, 0.0f, 0.0f, 1.0f);
             float shadowBiasSel = 0.0f;
             float shadowStrengthSel = 0.0f;
+            uint shadowCascadeSel = 0xFFFFFFFFu;
             [loop]
             for (uint shadowIndex = 0u; shadowIndex < shadowLightCount; ++shadowIndex)
             {
@@ -858,8 +856,16 @@ LocalProbeIBL localProbes;
                     // durchprobieren und die erste nehmen, in deren Frustum der Fragment liegt.
                     // The filter runs once after the selection loop so fxc does not inline
                     // the whole shadow filter per attempt.
-                    const uint cascadeIndex = ChooseCascadeIndexFromViewDepth(
-                        IN.positionWS, viewCount, shadowLightExtra[shadowIndex].z, shadowLightExtra[shadowIndex].w);
+                    float cascadeBlend = 0.0f;
+                    uint cascadeIndex = ChooseCascadeIndexFromViewDepth(
+                        IN.positionWS, viewCount, shadowLightExtra[shadowIndex].z, shadowLightExtra[shadowIndex].w,
+                        cascadeBlend);
+                    // Near the far split some pixels take the next cascade (noise
+                    // dither), so the change in shadow sharpness is not a hard line.
+                    // The filter still runs once per pixel.
+                    if (cascadeBlend > KromInterleavedGradientNoise(gKromShadowPixelPos) &&
+                        cascadeIndex + 1u < viewCount)
+                        cascadeIndex += 1u;
                     uint selectedViewIndex = 0xFFFFFFFFu;
                     float4 selectedPosLCS = float4(0.0f, 0.0f, 0.0f, 1.0f);
                     [unroll]
@@ -898,6 +904,7 @@ LocalProbeIBL localProbes;
                     {
                         shadowSelected = true;
                         shadowViewIndexSel = selectedViewIndex;
+                        shadowCascadeSel = selectedViewIndex - firstViewIndex;
                         shadowPosLCS = selectedPosLCS;
                     }
                 }
@@ -905,12 +912,15 @@ LocalProbeIBL localProbes;
                 {
                     shadowSelected = true;
                     shadowViewIndexSel = firstViewIndex;
+                    if (type < 0.5f)
+                        shadowCascadeSel = 0u;
                     shadowPosLCS = ComputeShadowReceiverCS(IN.positionWS, geomN,
                                                            shadowViewProjArray[firstViewIndex],
                                                            shadowLightMeta[shadowIndex].z);
                 }
                 shadowBiasSel = shadowLightMeta[shadowIndex].y;
                 shadowStrengthSel = shadowLightMeta[shadowIndex].w;
+                KromSelectShadowFilterFromFrame(shadowIndex);
                 break;
             }
 
@@ -919,6 +929,13 @@ LocalProbeIBL localProbes;
                 KromPreparePcss(shadowViewProjArray[shadowViewIndexSel], shadowViewRect[shadowViewIndexSel], IN.positionWS, L);
                 shadowVisibility = SampleShadowAtlas(shadowPosLCS, shadowBiasSel, shadowStrengthSel,
                                                      shadowViewRect[shadowViewIndexSel], shadowViewProjArray[shadowViewIndexSel]);
+                if (dbgShadowCascade == 0xFFFFFFFFu && shadowCascadeSel != 0xFFFFFFFFu)
+                {
+                    dbgShadowCascade = shadowCascadeSel;
+                    dbgShadowPosLCS = shadowPosLCS;
+                    dbgShadowRect = shadowViewRect[shadowViewIndexSel];
+                    dbgShadowVisibility = shadowVisibility;
+                }
             }
         }
         // Contact shadows multiply onto the shadow map of the main light only.
@@ -986,6 +1003,10 @@ LocalProbeIBL localProbes;
     if (debugFlags & DBG_VIEW_FRESNEL_F0)  return float4(F0, 1.0f);
     if (debugFlags & DBG_VIEW_GTAO)        return float4(gtaoFactor.xxx, 1.0f);
     if (debugFlags & DBG_VIEW_CONTACT_SHADOW) return float4(contactShadowFactor.xxx, 1.0f);
+#if !defined(KROM_SHADOWS_NONE)
+    if (debugFlags & DBG_VIEW_SHADOW_CASCADE)
+        return float4(KromShadowCascadeDebugColor(dbgShadowCascade, dbgShadowPosLCS, dbgShadowRect, dbgShadowVisibility), 1.0f);
+#endif
     if (probeDebugView == 1u) return float4(LocalProbeDebugColor(localProbes.firstProbe), 1.0f);
     if (probeDebugView == 2u) return float4((1.0f - localProbes.remaining).xxx, 1.0f);
     if (probeDebugView == 3u) return float4(specularOcclusion.xxx, 1.0f);

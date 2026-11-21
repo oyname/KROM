@@ -2573,6 +2573,15 @@ static void DrawEditorViewportSettings(EditorFrameContext& ctx)
             if (ctx.setEditorDebugFlags)
                 ctx.setEditorDebugFlags(iblFlags[iblView]);
         }
+        bool shadowCascadeView = ctx.state.editorDebugFlags == DBG_VIEW_SHADOW_CASCADE;
+        if (value_ui::Checkbox(LocalizedLabel("settings.shadow_cascade_debug").c_str(), &shadowCascadeView))
+        {
+            ctx.state.editorDebugFlags = shadowCascadeView ? DBG_VIEW_SHADOW_CASCADE : 0u;
+            if (ctx.setEditorDebugFlags)
+                ctx.setEditorDebugFlags(ctx.state.editorDebugFlags);
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", Translate("settings.shadow_cascade_debug_tip"));
         const char* probeViews[] = { Translate("probe.debug_none"), Translate("probe.debug_index"),
                                      Translate("probe.debug_weight"), Translate("probe.debug_so") };
         int probeView = static_cast<int>(std::min(ctx.state.probeDebugView, 3u));

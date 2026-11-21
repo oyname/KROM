@@ -31,7 +31,6 @@ _tmp_*
 
 # Ablage / Fremdcode zur Ansicht
 /ablage/
-/_inspect_flax_windows/
 
 # Project textures: only files referenced by scenes/materials/prefabs are
 # tracked (added with `git add -f`); unused local textures stay out of the repo.

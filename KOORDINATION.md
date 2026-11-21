@@ -17,6 +17,66 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## Shadows: tent PCF and dithered cascade transition (Claude, 2026-11-21)
+
+- User request: stair-stepped shadow edges with PCF 3x3, noise and a
+  visible cascade seam with PCSS. Branch `feature/shadow-tent-filter` (from `fix/d3dcompiler-redist`),
+  not committed.
+- `SampleShadowTent` in `shaders/pbr_shadow_poisson.hlsl`: "optimized PCF" of The Witness (MJP,
+  github.com/TheRealMJP/Shadows), bilinear compares placed and weighted to a tent over 3x3/5x5/7x7 texels
+  (4/9/16 taps, one inlined compare site in two `[loop]`s), receiver-plane bias per tap as before.
+- `ShadowFilter`: `PCF2x2`/`PCF3x3` renamed `Tent3x3`/`Tent5x5` (values 1/2 unchanged, scenes keep
+  their number and get the tent kernel), new `Tent7x7 = 5` (= `kShadowFilterMax`). Inspector list
+  order None, 3x3, 5x5, 7x7, Poisson, PCSS via a value map; tooltip de/en. Frozen OpenGL and legacy
+  lit keep their old box kernels (mode 5 falls into their 3x3 branch).
+- Cascades: `ChooseCascadeIndexFromViewDepth` (pbr_lit, Forward+) returns a blend factor for the last
+  10% of each cascade; pixels pick the next cascade when it exceeds interleaved gradient noise. The
+  filter still runs once. `ComputeCascadeBounds` starts each later cascade 10% of the previous
+  slice earlier so it covers that band (constant in both places). Stable CSM border reserve
+  4 -> 10 texels for the 7x7 footprint. No TAA in KROM, so the band shows a fixed noise pattern.
+- Checked: fxc ps_5_0 /O1 (pbr_lit 2 s, Forward+ 1 s) and dxc spirv compile; Debug build of
+  `krom_tests`, three editors and loading tests (`out/claude-shadow-tent-build2.log`); `krom_tests`
+  all 22 suites pass (`out/claude-shadow-tent-tests.log`), "Directional shadow slices match camera
+  depth" adapted to the overlap. Room 2 copies with the sun on PCSS / 5x5 / 7x7
+  (`out/claude-shadow-{pcss,tent5,tent7}`), `KROM_CAPTURE_LIT=1 --gtao-motion`: DX11 runs, Vulkan with
+  `KROM_VALIDATION=1` no messages (DX11 vs Vulkan 1.1/255, scene animates), OpenGL starts and captures.
+  Zoom `out/claude-shadow-check/edge-zoom.png`: that view has no diagonal edge or cascade seam, so it
+  shows no clear difference.
+- Not checked: the user's problem views (diagonal edge, cascade seam) by eye in the editor; Release.
+- Please review: tent weights/offsets against MJP, the cascade overlap vs. the shader band, and
+  `KromInterleavedGradientNoise` use outside the Poisson path.
+- Follow-up: steps remain on the Room 2 floor (one wall edge clean, the other jagged; shadow
+  distance has no effect). Before changing resolution, a debug view `DBG_VIEW_SHADOW_CASCADE`
+  (bit 24): first directional shadow tinted per cascade with the shadow-map texels as a
+  checkerboard (`KromShadowCascadeDebugColor`, pbr_lit and Forward+, not OpenGL). Editor:
+  Shift+F9 or the settings checkbox "Schatten-Kaskaden anzeigen". Observation for later:
+  `stableAtlasViewCount` in ShadowExtraction.cpp only grows, so atlas tiles never get larger again.
+- Measured result: steps are ~6-10 texels long, not one texel. Cause is the sun orientation in
+  Room 2 (24° elevation, ~9° yaw to the room axis): wall edges lie almost parallel to the shadow
+  texel grid. Rotating the sun moves the steps to the other wall. Planned fix: moment shadow maps
+  (MSM) for the sun, step 1 of that plan below.
+- MSM step 1, filter per light: until now `fc.shadowFilterMode` and the PCSS light size came from
+  the first shadow request and applied to every light. Now `ShadowFilterFrameParams` is a two-slot
+  block (slots 5-6, slot 5 was free): `featureParams[5]` = light size per CB light 0..3,
+  `[6].x` = light size of the first light (unchanged for OpenGL), `[6].y` = filter per CB light,
+  4 bits each. `GpuShadowLightData` gets `params` (filter, lightSize), 32 -> 48 bytes (Forward+).
+  Shaders set `gKromShadowFilter`/`gKromShadowLightSize` at the selected light
+  (`KromSelectShadowFilterFromFrame` / `KromSelectShadowFilter`); `SampleShadowAtlas` and
+  `KromPreparePcss` read those. `fc.shadowFilterMode` stays for OpenGL and legacy lit. Tooltip de/en.
+  Tests: block layout, and the 5-spot test now gives alternating filters/light sizes and checks
+  both paths.
+- Sun resolution (before MSM): the atlas was a grid of equal tiles (ceil(sqrt(views))², capped
+  at 4096), so in Room 2 (11 views) every sun cascade got 1024 although the sun asks for 4096,
+  and `stableAtlasViewCount` never shrank. New `ShadowAtlasLayout` (addons/shadow): square atlas,
+  power-of-two tiles per request, guillotine packing largest first; atlas grows in 1024 steps up
+  to the cap (now 6144, was 4096); when full, local lights shrink while larger than a quarter of
+  the sun tile, then the largest tile. Room 2: sun 2048, point/spot 1024 in a 5120 atlas
+  (D32 ~100 MB, was 64 MB). `ShadowView::atlasX/Y` carry the tile; contributor rects and the
+  pass viewport read them (no shader change, texel size stays 1/atlasSize). The atlas grows at
+  once and shrinks after 120 frames too large (`kShadowAtlasShrinkDelayFrames`); tiles follow the
+  current lights. `atlasViewCountHint` removed. Tests: packer cases (Room 2, held size, tight cap,
+  overlap/bounds), 5-spot rects, cascade test expects 1024 again after 4 cascades.
+
 ## PBR: Specular-Materialeingang (Codex, 2026-11-20)
 
 Auf ausdruecklichen Nutzerauftrag implementiert. Roughness steuert weiterhin die

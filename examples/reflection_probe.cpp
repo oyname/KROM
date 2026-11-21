@@ -199,7 +199,7 @@ int main()
         Krom::SetPBR(ball, Krom::PBR{ .color = Krom::Color(0.95f, 0.95f, 0.95f), .roughness = 0.15f, .metallic = 1.f });
 
         LPENTITY lamp = Krom::CreatePointLight("Lamp", { 0.f, 2.6f, -1.f }, { 1.f, 0.9f, 0.8f }, 6.f, 9.f);
-        if (const char* filter = std::getenv("KROM_SHADOW_FILTER"); filter && filter[0] >= '0' && filter[0] <= '4')
+        if (const char* filter = std::getenv("KROM_SHADOW_FILTER"); filter && filter[0] >= '0' && filter[0] <= '0' + engine::kShadowFilterMax)
         {
             if (auto* light = Krom::GetComponent<engine::LightComponent>(lamp))
                 light->shadowSettings.filter = static_cast<engine::ShadowFilter>(filter[0] - '0');

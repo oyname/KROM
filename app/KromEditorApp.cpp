@@ -3312,7 +3312,8 @@ int KromEditorApp::Run(IAppScene& scene)
                 if (input->KeyHit(platform::Key::F6))  setDebugView(renderer::DBG_VIEW_AO);
                 if (input->KeyHit(platform::Key::F7))  setDebugView(renderer::DBG_VIEW_ROUGHNESS);
                 if (input->KeyHit(platform::Key::F8))  setDebugView(renderer::DBG_VIEW_METALLIC);
-                if (input->KeyHit(platform::Key::F9))  setDebugView(renderer::DBG_VIEW_SHADOW);
+                // Shift+F9: shadow cascades and shadow-map texels.
+                if (input->KeyHit(platform::Key::F9))  setDebugView(shiftDown ? renderer::DBG_VIEW_SHADOW_CASCADE : renderer::DBG_VIEW_SHADOW);
                 if (input->KeyHit(platform::Key::F10)) setDebugView(renderer::DBG_VIEW_NOL);
                 // F12 is not usable: Windows reserves it as the debugger break key.
                 if (input->KeyHit(platform::Key::F11))
