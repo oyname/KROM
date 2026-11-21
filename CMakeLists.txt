@@ -435,6 +435,7 @@ if(TARGET engine_platform_win32)
     add_library(engine_krom_wrapper_win32 STATIC
         src/app/KromWrapper.cpp
         src/app/KromRenderSettings.cpp
+        src/app/KromRuntimeMaterials.cpp
         src/app/KromSurfaces.cpp)
     target_include_directories(engine_krom_wrapper_win32
         PUBLIC
@@ -484,6 +485,7 @@ if(TARGET engine_platform_glfw)
     add_library(engine_krom_wrapper_glfw STATIC
         src/app/KromWrapper.cpp
         src/app/KromRenderSettings.cpp
+        src/app/KromRuntimeMaterials.cpp
         src/app/KromSurfaces.cpp)
     target_include_directories(engine_krom_wrapper_glfw
         PUBLIC
@@ -881,6 +883,9 @@ if(TARGET engine_krom_wrapper_win32 AND TARGET engine_dx11)
     target_link_libraries(krom_render_settings_tests PRIVATE engine_krom_wrapper_win32)
     target_include_directories(krom_render_settings_tests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src/app)
     krom_link_self_registering_addon(krom_render_settings_tests engine_dx11)
+    add_executable(krom_runtime_material_tests EXCLUDE_FROM_ALL tests/test_runtime_materials.cpp)
+    target_link_libraries(krom_runtime_material_tests PRIVATE engine_krom_wrapper_win32)
+    krom_link_self_registering_addon(krom_runtime_material_tests engine_dx11)
 endif()
 
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/tests/main.cpp)

@@ -17,6 +17,43 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## krom.h wrapper: runtime materials moved to `KromRuntimeMaterials` (Claude, 2026-11-21)
+
+- User request: next step of the `src/app/KromWrapper.cpp` split. Branch
+  `refactor/krom-runtime-materials` (from `refactor/krom-render-settings`, PR #42), not committed.
+- New `src/app/KromRuntimeMaterials.hpp/.cpp` (`Krom::internal`): the material block of the wrapper
+  (lit / unlit / custom / PBR runtime materials from assets, `RealizeMaterialForEntity`, imported
+  model materials, default lit material, code materials, `GenerateMissingNormals`,
+  `ResolveEngineAssetPath` / `LoadEngineShader`). Moved by script, bodies unchanged except
+  `State& state` -> `const RuntimeMaterialContext& ctx`.
+- `RuntimeMaterialContext` holds references to the 11 things the block used from `State`: asset
+  registry, asset pipeline, material system, render system (device for custom shader reflection),
+  world, asset root, engine shader root, `runtimeMaterialCache`, `texturePaths`, plus `openGL` and
+  `enableForwardPlus`. The fields stay in `State` (surfaces and `Shutdown` use the cache too);
+  the wrapper builds the context per call with `MakeMaterialContext(state)`.
+- Public from the module: the eight functions the rest of the wrapper calls; the other 17 are
+  `static` in the .cpp. `MeshHasSkinning(mesh)` is gone (callers use `mesh.HasSkinning()`).
+  Three German comments that sat above the wrong function are replaced by the header comments.
+- `KromWrapper.cpp` 5161 -> 4149 lines. krom.h is unchanged.
+- New opt-in test `krom_runtime_material_tests` (`tests/test_runtime_materials.cpp`, DX11, hidden
+  window): default material and its per-mesh cache, code lit material and the per material+mesh
+  cache, `SetPBR`, a pbr-lit and a custom-shader `.mat` of the DemoProject, texture materials,
+  three rendered frames.
+- Checked: before/after - the new test built once against the old `KromWrapper.cpp` (21 PASS) and
+  against the new one (21 PASS), material/shader/warning/error log lines identical
+  (`out/claude-runtimematerials-old.log` / `-new.log`). Final state: full Debug build
+  (`out/claude-runtimematerials-build-all.log`), `krom_runtime_material_tests` 21 PASS,
+  `krom_render_settings_tests` 25 PASS, `krom_surface_tests` 26 PASS, `krom_scene_lifetime_tests`
+  11 PASS (its own generated .kscene, so the scene-load material path runs), `krom_tests` all pass.
+- Not checked: Release; a run under Vulkan/OpenGL (the `openGL` shader paths are only compiled);
+  skinned meshes and imported glTF materials at runtime (`ApplyImportedMeshMaterialsForEntity`,
+  `CreateEntityFromAsset`) - no test loads a model.
+- Please review: the context construction in `MakeMaterialContext` (`openGL`, `enableForwardPlus`
+  against the old inline expressions) and that no call site lost its `state` argument order.
+- Still open in the split: SceneManager, EntityApi, project/user files, `Run()`.
+
+---
+
 ## krom.h wrapper: render options moved to `KromRenderSettings` (Claude, 2026-11-21)
 
 - User request: continue splitting `src/app/KromWrapper.cpp`, starting with the render options.
