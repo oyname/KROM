@@ -1510,6 +1510,37 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
     ImGui::TextDisabled("%s", Translate("quality.hint"));
     ImGui::PopTextWrapPos();
 
+    // Shadow maps: resolution and filter for all lights (part of the quality
+    // level, as in Unity/Unreal); lights keep distance, cascades, bias.
+    ImGui::SeparatorText(Translate("shadow_quality.title"));
+    {
+        const char* resolutionNames[] = { "256", "512", "1024", "2048", "4096" };
+        auto resolutionCombo = [&](const char* key, const char* fallback, const char* tipKey, uint32_t& value) {
+            int index = 0;
+            for (int i = 0; i < IM_ARRAYSIZE(resolutionNames); ++i)
+                if ((256u << i) == value)
+                    index = i;
+            if (ImGui::Combo(TranslateLabel(key, fallback).c_str(), &index, resolutionNames, IM_ARRAYSIZE(resolutionNames)))
+                value = 256u << std::clamp(index, 0, IM_ARRAYSIZE(resolutionNames) - 1);
+            ImGui::SetItemTooltip("%s", Translate(tipKey));
+        };
+        resolutionCombo("shadow_quality.sun_resolution", "Sun", "shadow_quality.sun_resolution_tip",
+                        rendering.shadowSunResolution);
+        resolutionCombo("shadow_quality.local_resolution", "Point/Spot", "shadow_quality.local_resolution_tip",
+                        rendering.shadowLocalResolution);
+        // List order (tent sizes together); values are engine::ShadowFilter ids.
+        static constexpr uint8_t kFilterIds[] = { 0u, 1u, 2u, 5u, 3u, 4u };
+        const char* filterNames[] = { Translate("light.shadow_filter_none"), "PCF 3x3", "PCF 5x5", "PCF 7x7",
+                                      Translate("light.shadow_filter_poisson"), Translate("light.shadow_filter_pcss") };
+        int filter = 2;
+        for (int i = 0; i < IM_ARRAYSIZE(kFilterIds); ++i)
+            if (kFilterIds[i] == rendering.shadowFilter)
+                filter = i;
+        if (ImGui::Combo(TranslateLabel("shadow_quality.filter", "Filter").c_str(), &filter, filterNames, IM_ARRAYSIZE(filterNames)))
+            rendering.shadowFilter = kFilterIds[std::clamp(filter, 0, IM_ARRAYSIZE(kFilterIds) - 1)];
+        ImGui::SetItemTooltip("%s", Translate("light.shadow_filter_tip"));
+    }
+
     ImGui::SeparatorText(Translate("tonemap.title"));
     // Order of the list = TonemapOperator ids; the file stores the names.
     const char* operatorNames[] = { "reinhard", "aces", "agx", "pbrNeutral" };

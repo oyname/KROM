@@ -1,4 +1,5 @@
 #pragma once
+#include "addons/shadow/ShadowExtraction.hpp"
 #include "renderer/RenderFeatureInterfaces.hpp"
 #include "renderer/RenderFrameConstants.hpp"
 #include <cstdint>
@@ -11,6 +12,9 @@ struct ShadowFeatureConfig
     uint32_t maxShadowLights = 16u;
     uint32_t maxShadowViews = 64u;
     uint32_t maxShadowAtlasResolution = 6144u;   // see ShadowExtractionConfig
+    // Resolution and filter of the quality level for all lights (see
+    // ShadowQualitySettings); null keeps the values of each light.
+    std::shared_ptr<const ShadowQualitySettings> quality;
 };
 
 // Shadow filter parameters in the add-on's frame parameter block, slots 5 and 6.

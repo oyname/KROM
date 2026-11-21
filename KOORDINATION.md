@@ -105,6 +105,44 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
   Room 2 copy (sun PCF 5x5) DX11, Vulkan `KROM_VALIDATION=1` no messages, OpenGL runs without
   errors (`out/claude-bias`). 1 texel vs. the old 0.02 m looks the same there (no acne); the fade
   is not in that camera view, so not checked by eye.
+- Measured cascade texels (FOV 60, 1080p, lambda 0.5, 2048 tiles): at 40 m the last cascade has
+  4.7 cm texels (~1 pixel at its far end, 2-3 px at its near end); a low sun (24 deg) stretches any
+  bias shift on the floor by ~2.2x, so far shadows detached by ~20 cm. Changes:
+  - Normal bias scaled by (1 - NdotL) as in Unity (`gKromShadowToLight`, set before the shadow
+    block; all five shadow shaders): floor under a low sun keeps ~60%, surfaces facing the light 0.
+  - Real cascade blend instead of noise dither: in the last 20% of a cascade (was 10%; C++ overlap
+    `kCascadeBlendBand` and the shader band 0.2, cascade test adapted) both cascades are filtered and
+    mixed; the filter stays one call site in a `[loop]` of 1 or 2 iterations.
+  - Receiver-plane gradient (`KromShadowGradientFor`) now analytic from ddx/ddy of the world
+    position taken once at the top of main, instead of ddx/ddy of the shadow coordinates: those
+    were wrong across cascade seams (a dashed line at the band start) and inside the loop. This also
+    removes the old X3595 warning in Forward+.
+  - Tried hardware slope bias 0.5 instead of 1.0: faint acne stripes on lit walls and boxes, no
+    visible contact gain -> kept 1.0.
+- Checked (binaries by target 17:57-17:59): `krom_tests` all pass; fxc (no warnings) / dxc for
+  pbr_lit and Forward+ (all shadow variants), lit; Room 2 copy at 40 m (`out/claude-far`): base
+  (HEAD shaders) vs new: dither band on the wall gone, no seam line, contact under the cubes a bit
+  tighter; DX11, Vulkan `KROM_VALIDATION=1` no messages (DX11 vs Vulkan mean < 1/255), OpenGL no
+  errors. Not checked: editor by eye, GPU cost of the band (two filters only there).
+- Light settings cleanup (like Unreal/Unity): shadow-map resolution and filter are global quality
+  settings now. `RenderQualityOptions` gains `sunShadowResolution`, `localShadowResolution`,
+  `shadowFilter` (Low 1024/512/PCF 3x3, Medium 2048/1024/PCF 5x5, High 2048/2048/PCF 5x5);
+  `ProjectRenderSettings` stores `shadowSunResolution`/`shadowLocalResolution`/`shadowFilter`
+  (project files without them take the values of the level their other options match, so the
+  level stays). The shadow add-on gets `ShadowFeatureConfig::quality`
+  (`shared_ptr<ShadowQualitySettings>`, owned by editor app / krom.h like the post-AA settings);
+  `ExtractShadow` replaces resolution and filter of every light with it, scene values stay. krom.h:
+  `SetShadowQuality`/`GetShadowQuality`; `SetQualityLevel` and the script `RenderSettings` include
+  them. Editor: project settings section "Schatten" (sun / point-spot resolution, filter); the
+  light inspector drops resolution and filter, bias / normal bias / light size (PCSS only) moved
+  under a collapsed "Erweitert". New suns (editor menu, default scene, krom.h
+  `CreateDirectionalLight`) get `ApplyDirectionalShadowDefaults`: 4 cascades, split 0.5, 50 m.
+  The per-light `resolution`/`filter` fields stay in the component and file (unused when quality
+  is set; tests without quality keep per-light behaviour).
+- Checked (binaries by target 18:42): build, `krom_tests` all pass (new: quality override test,
+  presets, migration/clamping/round trip of the project keys); Room 2 copy DX11 / Vulkan
+  `KROM_VALIDATION=1` (no messages) / OpenGL runs, image unchanged vs. before (same values).
+  Not checked: the new editor UI by eye.
 
 ## PBR: Specular-Materialeingang (Codex, 2026-11-20)
 

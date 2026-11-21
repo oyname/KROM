@@ -58,6 +58,16 @@ struct ShadowSettings
     bool         contactShadows = true;
 };
 
+// Scene defaults for a new sun: 4 cascades, an even split between uniform and
+// logarithmic, 50 m. These look good without tuning; very long distances with
+// few cascades give coarse, detached shadows (texels grow with the distance).
+inline void ApplyDirectionalShadowDefaults(ShadowSettings& s) noexcept
+{
+    s.cascadeCount = 4u;
+    s.cascadeLambda = 0.5f;
+    s.maxDistance = 50.0f;
+}
+
 namespace ShadowPresets {
 
 [[nodiscard]] inline ShadowSettings Low() noexcept

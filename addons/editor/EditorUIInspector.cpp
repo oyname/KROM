@@ -2006,81 +2006,6 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
             ImGui::SetItemTooltip("%s", Translate("light.contact_shadows_tip"));
         }
 
-        int resolution = static_cast<int>(light->shadowSettings.resolution);
-        const std::string resolutionKey = MakeEditHistoryKey(entity, "light.shadowResolution");
-        if (value_ui::DragInt(TranslateLabel("light.shadow_resolution", "Shadow Resolution").c_str(), &resolution, 16.f, 128, 8192))
-        {
-            BeginPendingComponentEdit<LightComponent>(ctx, resolutionKey, "history.shadow_resolution", entity);
-            light->shadowSettings.resolution = static_cast<uint32_t>(std::max(resolution, 128));
-        }
-        if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingComponentEdit(ctx, resolutionKey);
-
-        // List order (tent sizes together) differs from the stored ShadowFilter values.
-        static constexpr ShadowFilter kFilterOrder[] = {
-            ShadowFilter::None, ShadowFilter::Tent3x3, ShadowFilter::Tent5x5, ShadowFilter::Tent7x7,
-            ShadowFilter::Poisson, ShadowFilter::PCSS };
-        static_assert(IM_ARRAYSIZE(kFilterOrder) == kShadowFilterMax + 1, "every ShadowFilter needs a list entry");
-        const char* filterNames[] = { Translate("light.shadow_filter_none"), "PCF 3x3", "PCF 5x5", "PCF 7x7",
-                                      Translate("light.shadow_filter_poisson"),
-                                      Translate("light.shadow_filter_pcss") };
-        int filter = 0;
-        for (int i = 0; i < IM_ARRAYSIZE(kFilterOrder); ++i)
-            if (kFilterOrder[i] == light->shadowSettings.filter)
-                filter = i;
-        const std::string filterKey = MakeEditHistoryKey(entity, "light.shadowFilter");
-        if (value_ui::Combo(TranslateLabel("light.shadow_filter", "Shadow Filter").c_str(), &filter, filterNames, IM_ARRAYSIZE(filterNames)))
-        {
-            BeginPendingComponentEdit<LightComponent>(ctx, filterKey, "history.shadow_filter", entity);
-            light->shadowSettings.filter = kFilterOrder[std::clamp(filter, 0, IM_ARRAYSIZE(kFilterOrder) - 1)];
-        }
-        if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingComponentEdit(ctx, filterKey);
-        ImGui::SetItemTooltip("%s", Translate("light.shadow_filter_tip"));
-
-        if (light->shadowSettings.filter == ShadowFilter::PCSS)
-        {
-            const LightComponent beforeLightSize = *light;
-            const std::string lightSizeKey = MakeEditHistoryKey(entity, "light.shadowLightSize");
-            if (value_ui::DragFloat(TranslateLabel("light.shadow_light_size", "Light Size").c_str(),
-                                    &light->shadowSettings.lightSize, 0.005f,
-                                    kShadowLightSizeMin, kShadowLightSizeMax, "%.3f"))
-            {
-                light->shadowSettings.lightSize = std::clamp(light->shadowSettings.lightSize,
-                                                             kShadowLightSizeMin, kShadowLightSizeMax);
-                BeginPendingComponentEdit<LightComponent>(ctx, lightSizeKey, "history.shadow_light_size", entity, &beforeLightSize);
-            }
-            if (ImGui::IsItemDeactivatedAfterEdit())
-                CommitPendingComponentEdit(ctx, lightSizeKey);
-            ImGui::SetItemTooltip("%s", Translate("light.shadow_light_size_tip"));
-        }
-
-        const float minShadowBias = light->type == LightType::Directional ? 0.0005f : 0.0001f;
-
-        const LightComponent beforeBias = *light;
-        const std::string biasKey = MakeEditHistoryKey(entity, "light.shadowBias");
-        if (value_ui::DragFloat(TranslateLabel("light.shadow_bias", "Shadow Bias").c_str(), &light->shadowSettings.bias, 0.0001f, minShadowBias, 1.f, "%.5f"))
-        {
-            light->shadowSettings.bias = std::max(light->shadowSettings.bias, minShadowBias);
-            BeginPendingComponentEdit<LightComponent>(ctx, biasKey, "history.shadow_bias", entity, &beforeBias);
-        }
-        if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingComponentEdit(ctx, biasKey);
-        ImGui::SetItemTooltip("%s", Translate("light.shadow_bias_tip"));
-
-        const LightComponent beforeNormalBias = *light;
-        const std::string normalBiasKey = MakeEditHistoryKey(entity, "light.normalBias");
-        if (value_ui::DragFloat(TranslateLabel("light.normal_bias", "Normal Bias").c_str(), &light->shadowSettings.normalBias,
-                                0.01f, kShadowNormalBiasMin, kShadowNormalBiasMax, "%.2f texel"))
-        {
-            light->shadowSettings.normalBias = std::clamp(light->shadowSettings.normalBias,
-                                                          kShadowNormalBiasMin, kShadowNormalBiasMax);
-            BeginPendingComponentEdit<LightComponent>(ctx, normalBiasKey, "history.normal_bias", entity, &beforeNormalBias);
-        }
-        if (ImGui::IsItemDeactivatedAfterEdit())
-            CommitPendingComponentEdit(ctx, normalBiasKey);
-        ImGui::SetItemTooltip("%s", Translate("light.normal_bias_tip"));
-
         const LightComponent beforeStrength = *light;
         const std::string strengthKey = MakeEditHistoryKey(entity, "light.shadowStrength");
         if (value_ui::DragFloat(TranslateLabel("light.shadow_strength", "Shadow Strength").c_str(), &light->shadowSettings.strength, 0.01f, 0.f, 1.f))
@@ -2145,6 +2070,57 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
                         "1.0 = logarithmisch — nahe Cascades sehr scharf (klein), ferne groeber.\n"
                         "Hoeher stellen, wenn Schatten direkt vor der Kamera noch unscharf sind.");
             }
+        }
+
+        // Rarely needed: defaults work for most scenes (as in Unreal, where bias
+        // sits under the advanced light settings). Resolution and filter are
+        // global quality settings (project settings, quality level).
+        if (ImGui::TreeNodeEx(TranslateLabel("light.shadow_advanced", "Advanced").c_str(),
+                              ImGuiTreeNodeFlags_SpanAvailWidth))
+        {
+            const float minShadowBias = light->type == LightType::Directional ? 0.0005f : 0.0001f;
+
+            const LightComponent beforeBias = *light;
+            const std::string biasKey = MakeEditHistoryKey(entity, "light.shadowBias");
+            if (value_ui::DragFloat(TranslateLabel("light.shadow_bias", "Shadow Bias").c_str(), &light->shadowSettings.bias, 0.0001f, minShadowBias, 1.f, "%.5f"))
+            {
+                light->shadowSettings.bias = std::max(light->shadowSettings.bias, minShadowBias);
+                BeginPendingComponentEdit<LightComponent>(ctx, biasKey, "history.shadow_bias", entity, &beforeBias);
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                CommitPendingComponentEdit(ctx, biasKey);
+            ImGui::SetItemTooltip("%s", Translate("light.shadow_bias_tip"));
+
+            const LightComponent beforeNormalBias = *light;
+            const std::string normalBiasKey = MakeEditHistoryKey(entity, "light.normalBias");
+            if (value_ui::DragFloat(TranslateLabel("light.normal_bias", "Normal Bias").c_str(), &light->shadowSettings.normalBias,
+                                    0.01f, kShadowNormalBiasMin, kShadowNormalBiasMax, "%.2f texel"))
+            {
+                light->shadowSettings.normalBias = std::clamp(light->shadowSettings.normalBias,
+                                                              kShadowNormalBiasMin, kShadowNormalBiasMax);
+                BeginPendingComponentEdit<LightComponent>(ctx, normalBiasKey, "history.normal_bias", entity, &beforeNormalBias);
+            }
+            if (ImGui::IsItemDeactivatedAfterEdit())
+                CommitPendingComponentEdit(ctx, normalBiasKey);
+            ImGui::SetItemTooltip("%s", Translate("light.normal_bias_tip"));
+
+            if (ctx.projectSettings.rendering.shadowFilter == static_cast<uint8_t>(ShadowFilter::PCSS))
+            {
+                const LightComponent beforeLightSize = *light;
+                const std::string lightSizeKey = MakeEditHistoryKey(entity, "light.shadowLightSize");
+                if (value_ui::DragFloat(TranslateLabel("light.shadow_light_size", "Light Size").c_str(),
+                                        &light->shadowSettings.lightSize, 0.005f,
+                                        kShadowLightSizeMin, kShadowLightSizeMax, "%.3f"))
+                {
+                    light->shadowSettings.lightSize = std::clamp(light->shadowSettings.lightSize,
+                                                                 kShadowLightSizeMin, kShadowLightSizeMax);
+                    BeginPendingComponentEdit<LightComponent>(ctx, lightSizeKey, "history.shadow_light_size", entity, &beforeLightSize);
+                }
+                if (ImGui::IsItemDeactivatedAfterEdit())
+                    CommitPendingComponentEdit(ctx, lightSizeKey);
+                ImGui::SetItemTooltip("%s", Translate("light.shadow_light_size_tip"));
+            }
+            ImGui::TreePop();
         }
     }
 }

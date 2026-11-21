@@ -1,9 +1,22 @@
 #pragma once
+#include "addons/lighting/ShadowTypes.hpp"
 #include "ecs/World.hpp"
 #include "renderer/RenderExtractionContext.hpp"
+#include <memory>
 #include <vector>
 
 namespace engine::addons::shadow {
+
+// Shadow-map quality of the render quality level (project / player setting).
+// When set, it replaces resolution and filter of every light: lights keep only
+// scene values such as distance, cascades, bias and strength (as in Unreal).
+// The application owns it and may change it between frames.
+struct ShadowQualitySettings
+{
+    uint32_t     directionalResolution = 2048u;   // tile edge of each sun cascade
+    uint32_t     localResolution = 1024u;         // tile edge of each point/spot view
+    ShadowFilter filter = ShadowFilter::Tent5x5;
+};
 
 struct ShadowExtractionConfig
 {
@@ -14,6 +27,7 @@ struct ShadowExtractionConfig
     // large when the lights need it.
     uint32_t maxShadowAtlasResolution = 6144u;
     uint32_t hysteresisFrames = 3u;
+    std::shared_ptr<const ShadowQualitySettings> quality;   // null: per-light values
 };
 
 // Frames the atlas must be larger than needed before it shrinks.

@@ -381,9 +381,14 @@ float KromShadowNormalOffset(vec3 positionWS, mat4 shadowVP, vec4 atlasRect, flo
     return normalBiasTexels / max(texelsPerWorld, 1e-6);
 }
 
+// Direction to the light being shaded; set before the shadow lookups.
+vec3 gKromShadowToLight = vec3(0.0, 1.0, 0.0);
+
 vec4 ComputeShadowReceiverCS(vec3 positionWS, vec3 normalWS, mat4 shadowVP, float normalBiasTexels, vec4 atlasRect)
 {
-    float offset = KromShadowNormalOffset(positionWS, shadowVP, atlasRect, normalBiasTexels);
+    // As in Unity: less offset where the surface faces the light (1 - NdotL).
+    float facing = 1.0 - clamp(dot(normalWS, gKromShadowToLight), 0.0, 1.0);
+    float offset = KromShadowNormalOffset(positionWS, shadowVP, atlasRect, normalBiasTexels) * facing;
     return shadowVP * vec4(positionWS + normalWS * offset, 1.0);
 }
 
@@ -692,6 +697,7 @@ void main()
                                              lights[i].params.x, lights[i].params.y);
         }
 
+        gKromShadowToLight = L;
         if ((debugFlags & DBG_DISABLE_SHADOWS) == 0u && shadowLightCount > 0u && type < 2.5)
         {
             for (uint shadowIndex = 0u; shadowIndex < shadowLightCount; ++shadowIndex)

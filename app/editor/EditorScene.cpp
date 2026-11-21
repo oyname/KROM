@@ -30,7 +30,7 @@ bool EditorScene::Build(AppSceneContext& context)
     lc.shadowSettings.enabled    = true;
     lc.shadowSettings.resolution = 2048u;
     lc.shadowSettings.bias       = 0.0015f;
-    lc.shadowSettings.maxDistance = 100.f;
+    ApplyDirectionalShadowDefaults(lc.shadowSettings);
     context.world.Add<LightComponent>(light, lc);
 
     return true;

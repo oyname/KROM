@@ -257,10 +257,16 @@ float KromShadowNormalOffset(float3 positionWS, float4x4 shadowVP, float4 atlasR
     return normalBiasTexels / max(texelsPerWorld, 1e-6f);
 }
 
+// Direction to the light being shaded; set before the shadow lookups.
+static float3 gKromShadowToLight = float3(0.0f, 1.0f, 0.0f);
+
 float4 ComputeShadowReceiverCS(float3 positionWS, float3 normalWS, float4x4 shadowVP, float normalBiasTexels,
                                float4 atlasRect)
 {
-    const float offset = KromShadowNormalOffset(positionWS, shadowVP, atlasRect, normalBiasTexels);
+    // As in Unity: less offset where the surface faces the light (1 - NdotL);
+    // a floor under a low sun keeps most of it, a wall facing the sun none.
+    const float facing = 1.0f - saturate(dot(normalWS, gKromShadowToLight));
+    const float offset = KromShadowNormalOffset(positionWS, shadowVP, atlasRect, normalBiasTexels) * facing;
     return mul(shadowVP, float4(positionWS + normalWS * offset, 1.0f));
 }
 
@@ -405,6 +411,7 @@ float4 main(PSInput IN) : SV_Target
                                                    lights[i].params.x, lights[i].params.y);
         }
 
+        gKromShadowToLight = L;
         if (!(debugFlags & DBG_DISABLE_SHADOWS) && shadowLightCount > 0u && type < 2.5f)
         {
             [loop]

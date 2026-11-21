@@ -536,7 +536,8 @@ public:
               ShadowExtractionConfig{
                   .maxShadowLights = config.maxShadowLights,
                   .maxShadowViews = config.maxShadowViews,
-                  .maxShadowAtlasResolution = config.maxShadowAtlasResolution
+                  .maxShadowAtlasResolution = config.maxShadowAtlasResolution,
+                  .quality = config.quality
               }))
         , m_frameContributor(std::make_shared<ShadowFrameConstantsContributor>())
         , m_passContributor(std::make_shared<ShadowPassContributor>())

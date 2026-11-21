@@ -181,10 +181,10 @@ void ExpandMinMax(const math::Vec3& point, math::Vec3& minPoint, math::Vec3& max
         splits[i] = splitUniform + (splitLog - splitUniform) * std::clamp(cascadeLambda, 0.f, 1.f);
     }
 
-    // The PBR shaders let pixels in the last kCascadeBlendBand of a cascade pick the
-    // next one (dithered transition, kKromCascadeBlendBand in pbr_lit/pbr_forward_plus).
+    // In the last kCascadeBlendBand of a cascade the PBR shaders mix in the
+    // next one (kKromCascadeBlendBand in pbr_lit/pbr_forward_plus).
     // Every cascade after the first starts that much earlier so it covers the band.
-    constexpr float kCascadeBlendBand = 0.1f;
+    constexpr float kCascadeBlendBand = 0.2f;
 
     result.reserve(cascadeCount);
     outCorners.reserve(cascadeCount);
@@ -735,6 +735,12 @@ void ExtractShadow(const renderer::SceneExtractionContext& context,
         request.lightType = lightComponent->type;
         request.technique = ChooseShadowTechnique(*lightComponent);
         request.settings = lightComponent->shadowSettings;
+        if (config.quality)
+        {
+            request.settings.resolution = request.lightType == LightType::Directional
+                ? config.quality->directionalResolution : config.quality->localResolution;
+            request.settings.filter = config.quality->filter;
+        }
         request.casterBoundsWorld = casterBoundsWorld;
         request.cacheable = false;
         request.needsUpdate = true;

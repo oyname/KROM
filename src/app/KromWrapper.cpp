@@ -251,6 +251,9 @@ struct State
     std::shared_ptr<engine::renderer::addons::ssr::SsrGpuResources> ssrResources;
     // Contact shadow add-on resources; null without it (OpenGL, enableContactShadows off).
     std::shared_ptr<engine::renderer::addons::contact_shadow::ContactShadowGpuResources> contactShadowResources;
+    // Shadow resolution and filter of the quality level (read by the shadow add-on).
+    std::shared_ptr<engine::addons::shadow::ShadowQualitySettings> shadowQuality =
+        std::make_shared<engine::addons::shadow::ShadowQualitySettings>();
     // Quality level a player picked (Krom::SetQualityLevel, scripts), remembered on
     // this computer (user-settings.json); replaces the project's level options.
     // Not used by runs started from the editor (editor live state).
@@ -2415,6 +2418,13 @@ static void ApplyProjectRenderSettings(State& state, const engine::ProjectRender
         probeSettings.specularOcclusion = rendering.specularOcclusion;
         state.probeRuntime->SetSettings(probeSettings);
     }
+    if (state.shadowQuality)
+    {
+        state.shadowQuality->directionalResolution = rendering.shadowSunResolution;
+        state.shadowQuality->localResolution = rendering.shadowLocalResolution;
+        state.shadowQuality->filter = static_cast<engine::ShadowFilter>(
+            std::min<uint8_t>(rendering.shadowFilter, engine::kMaxShadowQualityFilter));
+    }
 }
 
 // IScriptContext::GetRenderSettings(): the same values as the Set*/Get* functions of krom.h.
@@ -2448,6 +2458,7 @@ public:
                                             : engine::script::PostAAMode::Off;
         if (m_state.tonemapSettings)
             out.grading = engine::script::ToScriptColorGrading(m_state.tonemapSettings->grading);
+        Krom::GetShadowQuality(out.sunShadowResolution, out.localShadowResolution, out.shadowFilter);
         return out;
     }
 
@@ -2482,6 +2493,7 @@ public:
             m_state.contactShadowResources->settings.enabled = in.contactShadowsEnabled;
         if (m_state.postAASettings)
             m_state.postAASettings->mode = static_cast<PostAAMode>(std::min<uint8_t>(static_cast<uint8_t>(in.postAA), 2u));
+        Krom::SetShadowQuality(in.sunShadowResolution, in.localShadowResolution, in.shadowFilter);
     }
 
     // Also remembered on this computer, like Krom::SetQualityLevel.
@@ -2871,6 +2883,7 @@ bool RegisterEngineFeatures(State& state)
     addons::shadow::ShadowFeatureConfig shadowConfig{};
     shadowConfig.maxShadowLights = state.config.maxShadowLights;
     shadowConfig.maxShadowViews = state.config.maxShadowViews;
+    shadowConfig.quality = state.shadowQuality;
 
     renderer::RenderSystem& renderSystem = state.renderLoop.GetRenderSystem();
     if (!renderSystem.RegisterFeature(addons::mesh_renderer::CreateMeshRendererFeature()) ||
@@ -3938,7 +3951,7 @@ LPENTITY CreateDirectionalLight(const char* name,
     light.shadowSettings.enabled = true;
     light.shadowSettings.resolution = 2048u;
     light.shadowSettings.bias = 0.0015f;
-    light.shadowSettings.maxDistance = 100.0f;
+    engine::ApplyDirectionalShadowDefaults(light.shadowSettings);
     state.world->Add<engine::LightComponent>(entity, light);
     return entity;
 }
@@ -4636,6 +4649,7 @@ void SetQualityLevel(engine::RenderQualityLevel level)
     SetGtaoEnabled(options.gtaoEnabled);
     SetSsrEnabled(options.ssrEnabled);
     SetContactShadowsEnabled(options.contactShadowsEnabled);
+    SetShadowQuality(options.sunShadowResolution, options.localShadowResolution, options.shadowFilter);
     if (state.editorLiveStateEnabled)
         return;   // started from the editor: nothing to remember
     if (state.userQualityLevel != level)
@@ -4653,6 +4667,7 @@ engine::RenderQualityLevel GetQualityLevel()
     options.gtaoEnabled = GetGtaoEnabled();
     options.ssrEnabled = GetSsrEnabled();
     options.contactShadowsEnabled = GetContactShadowsEnabled();
+    GetShadowQuality(options.sunShadowResolution, options.localShadowResolution, options.shadowFilter);
     return engine::DetectRenderQualityLevel(options);
 }
 
@@ -4682,6 +4697,26 @@ bool GetContactShadowsEnabled()
 {
     const State& state = Get();
     return state.contactShadowResources && state.contactShadowResources->settings.enabled;
+}
+
+void SetShadowQuality(uint32_t sunResolution, uint32_t localResolution, uint8_t filter)
+{
+    State& state = Get();
+    if (!state.shadowQuality)
+        return;
+    state.shadowQuality->directionalResolution = engine::ClampShadowQualityResolution(sunResolution);
+    state.shadowQuality->localResolution = engine::ClampShadowQualityResolution(localResolution);
+    state.shadowQuality->filter = static_cast<engine::ShadowFilter>(std::min<uint8_t>(filter, engine::kMaxShadowQualityFilter));
+}
+
+void GetShadowQuality(uint32_t& sunResolution, uint32_t& localResolution, uint8_t& filter)
+{
+    const State& state = Get();
+    const engine::addons::shadow::ShadowQualitySettings quality =
+        state.shadowQuality ? *state.shadowQuality : engine::addons::shadow::ShadowQualitySettings{};
+    sunResolution = quality.directionalResolution;
+    localResolution = quality.localResolution;
+    filter = static_cast<uint8_t>(quality.filter);
 }
 
 void SetMsaa(uint32_t sampleCount)

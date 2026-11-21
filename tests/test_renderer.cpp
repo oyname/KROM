@@ -2181,6 +2181,98 @@ static void TestForwardPlusShaderClampsTileLightCountToStoredRange(test::TestCon
     CHECK(ctx, shaderSource.find("shadowIndex<shadowBufferLightCount") != std::string::npos);
 }
 
+// The quality level (project setting) replaces resolution and filter of every
+// light; distance, bias and the rest stay per light.
+static void TestShadowQualityOverridesLightResolutionAndFilter(test::TestContext& ctx)
+{
+    RegisterRendererTestComponents();
+    ecs::ComponentMetaRegistry componentRegistry = CreateRendererTestRegistry();
+    ecs::World world(componentRegistry);
+    for (LightType type : {LightType::Spot, LightType::Directional})
+    {
+        const EntityID light = world.CreateEntity();
+        TransformComponent transform{};
+        transform.localPosition = math::Vec3(0.0f, 4.0f, -4.0f);
+        world.Add<TransformComponent>(light, transform);
+        WorldTransformComponent worldTransform{};
+        worldTransform.matrix = math::Mat4::LookAtRH(transform.localPosition, math::Vec3::Zero(), math::Vec3::Up()).InverseAffine();
+        world.Add<WorldTransformComponent>(light, worldTransform);
+        LightComponent lc{};
+        lc.type = type;
+        lc.range = 20.0f;
+        lc.spotInnerDeg = 20.0f;
+        lc.spotOuterDeg = 35.0f;
+        lc.castShadows = true;
+        lc.shadowSettings.enabled = true;
+        lc.shadowSettings.resolution = 256u;
+        lc.shadowSettings.maxDistance = 25.0f;
+        lc.shadowSettings.normalBias = 2.5f;
+        lc.shadowSettings.filter = engine::ShadowFilter::PCSS;
+        world.Add<LightComponent>(light, lc);
+    }
+    const EntityID receiver = world.CreateEntity();
+    world.Add<TransformComponent>(receiver);
+    world.Add<WorldTransformComponent>(receiver);
+    MeshComponent receiverMesh{};
+    receiverMesh.mesh = MeshHandle::Make(1u, 1u);
+    receiverMesh.castShadows = true;
+    receiverMesh.receiveShadows = true;
+    world.Add<MeshComponent>(receiver, receiverMesh);
+    BoundsComponent receiverBounds{};
+    receiverBounds.centerWorld = { 0.f, 0.f, 0.f };
+    receiverBounds.extentsWorld = { 1.f, 1.f, 1.f };
+    receiverBounds.boundingSphere = receiverBounds.extentsWorld.Length();
+    world.Add<BoundsComponent>(receiver, receiverBounds);
+
+    auto quality = std::make_shared<engine::addons::shadow::ShadowQualitySettings>();
+    quality->directionalResolution = 1024u;
+    quality->localResolution = 512u;
+    quality->filter = engine::ShadowFilter::Tent3x3;
+    FeatureRegistry registry;
+    CHECK(ctx, registry.AddFeature(engine::addons::lighting::CreateLightingFeature()));
+    CHECK(ctx, registry.AddFeature(engine::addons::shadow::CreateShadowFeature({.quality = quality})));
+    RecordingComputeDevice device;
+    CHECK(ctx, device.Initialize(IDevice::DeviceDesc{}));
+    ShaderRuntime shaderRuntime;
+    CHECK(ctx, shaderRuntime.Initialize(device));
+    CHECK(ctx, registry.InitializeAll(FeatureInitializationContext{device, shaderRuntime, nullptr}));
+
+    renderer::RenderView view{};
+    view.view = math::Mat4::LookAtRH({ 0.f, 2.f, -8.f }, { 0.f, 0.f, 0.f }, math::Vec3::Up());
+    view.projection = math::Mat4::PerspectiveFovRH(60.f * math::DEG_TO_RAD, 16.f / 9.f, 0.1f, 100.f);
+    view.cameraPosition = { 0.f, 2.f, -8.f };
+    view.cameraForward = { 0.f, 0.f, 1.f };
+    view.nearPlane = 0.1f;
+    view.farPlane = 100.f;
+    RenderSceneSnapshot snapshot;
+    FrameExtractionStage extractionStage;
+    FrameExtractionStageResult extractionResult{};
+    CHECK(ctx, extractionStage.Execute(FrameExtractionStageContext{world, registry.GetSceneExtractionSteps(), snapshot, &view},
+                                       extractionResult));
+    const auto* shadow = snapshot.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+    CHECK(ctx, shadow != nullptr);
+    CHECK_EQ(ctx, shadow ? shadow->requests.size() : 0u, size_t(2));
+    for (size_t i = 0; shadow && i < shadow->requests.size(); ++i)
+    {
+        const auto& request = shadow->requests[i];
+        CHECK_EQ(ctx, request.settings.resolution, request.lightType == LightType::Directional ? 1024u : 512u);
+        CHECK(ctx, request.settings.filter == engine::ShadowFilter::Tent3x3);
+        CHECK_EQ(ctx, request.settings.normalBias, 2.5f);   // scene value stays
+    }
+
+    // Changing the shared settings takes effect on the next extraction.
+    quality->filter = engine::ShadowFilter::Tent7x7;
+    RenderSceneSnapshot snapshot2;
+    CHECK(ctx, extractionStage.Execute(FrameExtractionStageContext{world, registry.GetSceneExtractionSteps(), snapshot2, &view},
+                                       extractionResult));
+    const auto* shadow2 = snapshot2.GetFrameDataView().GetFrameData<engine::addons::shadow::ShadowFrameData>();
+    CHECK(ctx, shadow2 && !shadow2->requests.empty() && shadow2->requests.front().settings.filter == engine::ShadowFilter::Tent7x7);
+
+    registry.ShutdownAll(FeatureShutdownContext{});
+    shaderRuntime.Shutdown();
+    device.Shutdown();
+}
+
 static void TestForwardPlusShadowBuffersPackMoreThanFourShadowLights(test::TestContext& ctx)
 {
     RegisterRendererTestComponents();
@@ -2314,6 +2406,7 @@ static void TestForwardPlusShadowBuffersPackMoreThanFourShadowLights(test::TestC
     // Filter and light size per light: constant-buffer lights 0..3 in
     // featureParams[5]/[6].y (pbr_lit), all lights in GpuShadowLightData::params (Forward+).
     const FrameConstants& shadowFc = constantResult.frameConstants;
+    // No quality settings in this registry: every light keeps its own values.
     uint32_t packedFilters = 0u;
     std::memcpy(&packedFilters, &shadowFc.featureParams[6][1], sizeof(packedFilters));
     for (uint32_t k = 0u; shadow && k < 5u; ++k)
@@ -5031,12 +5124,12 @@ static void TestDirectionalShadowSlicesMatchCameraDepth(test::TestContext& ctx)
             return uniform + (logarithmic - uniform) * settings->cascadeLambda;
         };
         // Cascades after the first start 10% of the previous cascade earlier: the
-        // shaders dither into the next cascade over that band (kCascadeBlendBand).
+        // shaders blend into the next cascade over that band (kCascadeBlendBand).
         auto sliceNear = [&](uint32_t cascade)
         {
             return cascade == 0u
                 ? splitDepth(0u)
-                : splitDepth(cascade) - 0.1f * (splitDepth(cascade) - splitDepth(cascade - 1u));
+                : splitDepth(cascade) - 0.2f * (splitDepth(cascade) - splitDepth(cascade - 1u));
         };
         for (size_t cascade = 0; cascade < request->cascadeFrustumCornersWorld.size(); ++cascade)
         for (size_t corner = 0; corner < 8u; ++corner)
@@ -7355,6 +7448,7 @@ int RunRendererTests()
         .Add("RenderWorld extract+cull",    TestRenderWorldExtract)
         .Add("RenderWorld parallel draw lists match serial", TestRenderWorldParallelDrawListsMatchSerial)
         .Add("Shadow atlas packs tiles of different sizes", TestShadowAtlasLayout)
+        .Add("Shadow quality overrides light resolution and filter", TestShadowQualityOverridesLightResolutionAndFilter)
         .Add("GPU pass profiler", TestGpuPassProfiler)
         .Add("Tonemap operator names", TestTonemapOperatorNames)
         .Add("Shading settings flags", TestShadingSettingsFlags)
