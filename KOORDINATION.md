@@ -88,6 +88,23 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
   normal bias of 1 m) light bled through and shadows detached (`out/claude-msm/contact-*.png`).
   The user wants sharp shadows, so MSM was dropped; all its code was reverted. Room 2 saved with
   shadowFilter 6 now loads as Tent7x7 (clamped to kShadowFilterMax).
+- Normal bias in texels (like Unity/Unreal): `ShadowSettings::normalBias` is now shadow-map texels of
+  the sampled view (default 1, presets 1.5/1/0.75, range 0..8), saved as `shadowNormalBiasTexels`;
+  the old world-unit key `shadowNormalBias` is ignored on load (no texel equivalent). All five
+  shadow shaders (pbr_lit, Forward+, lit, and the frozen OpenGL pbr_lit/lit, which would otherwise
+  read texels as metres) compute the world offset per view in `KromShadowNormalOffset` from the
+  view-projection x row, the tile rect and the receiver's clip w (works for ortho and
+  perspective). Point lights pick the cube face from the unbiased position. Editor/script default
+  lights no longer set 0.001 m. Inspector shows "texel" with a tooltip (de/en).
+- Shadow distance fade: directional shadow strength fades to 0 over the last 10% of the shadow
+  distance (`KromShadowDistanceFade`, pbr_lit and Forward+) instead of a hard end.
+- Not done: cascade split control. Unity (percent splits) and Unreal (distribution exponent) also
+  scale every cascade with the shadow distance, so the "better/worse" sawtooth when changing the
+  distance is normal CSM behaviour there too.
+- Checked (binaries by target 17:05): build, `krom_tests` all pass; fxc/dxc pbr_lit, Forward+, lit;
+  Room 2 copy (sun PCF 5x5) DX11, Vulkan `KROM_VALIDATION=1` no messages, OpenGL runs without
+  errors (`out/claude-bias`). 1 texel vs. the old 0.02 m looks the same there (no acne); the fade
+  is not in that camera view, so not checked by eye.
 
 ## PBR: Specular-Materialeingang (Codex, 2026-11-20)
 

@@ -29,6 +29,10 @@ inline constexpr uint8_t kShadowFilterMax = static_cast<uint8_t>(ShadowFilter::T
 inline constexpr float kShadowLightSizeMin = 0.f;
 inline constexpr float kShadowLightSizeMax = 2.f;
 
+// Range of ShadowSettings::normalBias (shadow-map texels).
+inline constexpr float kShadowNormalBiasMin = 0.f;
+inline constexpr float kShadowNormalBiasMax = 8.f;
+
 struct ShadowSettings
 {
     bool         enabled      = false;
@@ -38,7 +42,10 @@ struct ShadowSettings
     // Directional: world units, stable across cascade sizes and camera distance.
     // Point/spot: normalized shadow depth.
     float        bias         = 0.001f;
-    float        normalBias   = 0.002f;
+    // Receiver offset along the surface normal, in shadow-map texels of the
+    // view that is sampled (as in Unity/Unreal): one value fits every cascade
+    // and resolution. Saved as "shadowNormalBiasTexels".
+    float        normalBias   = 1.0f;
     float        maxDistance  = 100.0f;
     float        strength     = 1.0f;
     float        cascadeLambda = 0.75f;
@@ -60,7 +67,7 @@ namespace ShadowPresets {
     s.filter      = ShadowFilter::None;
     s.resolution  = 512u;
     s.bias        = 0.002f;
-    s.normalBias  = 0.003f;
+    s.normalBias  = 1.5f;
     s.maxDistance = 30.0f;
     s.strength    = 1.0f;
     return s;
@@ -74,7 +81,7 @@ namespace ShadowPresets {
     s.resolution    = 1024u;
     s.cascadeCount  = 3u;
     s.bias          = 0.001f;
-    s.normalBias    = 0.002f;
+    s.normalBias    = 1.0f;
     s.maxDistance   = 60.0f;
     s.strength      = 1.0f;
     return s;
@@ -88,7 +95,7 @@ namespace ShadowPresets {
     s.resolution    = 2048u;
     s.cascadeCount  = 4u;
     s.bias          = 0.0005f;
-    s.normalBias    = 0.001f;
+    s.normalBias    = 0.75f;
     s.maxDistance   = 100.0f;
     s.strength      = 1.0f;
     return s;

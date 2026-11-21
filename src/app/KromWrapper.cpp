@@ -3938,7 +3938,6 @@ LPENTITY CreateDirectionalLight(const char* name,
     light.shadowSettings.enabled = true;
     light.shadowSettings.resolution = 2048u;
     light.shadowSettings.bias = 0.0015f;
-    light.shadowSettings.normalBias = 0.001f;
     light.shadowSettings.maxDistance = 100.0f;
     state.world->Add<engine::LightComponent>(entity, light);
     return entity;
@@ -3966,7 +3965,6 @@ LPENTITY CreatePointLight(const char* name,
     light.shadowSettings.enabled = true;
     light.shadowSettings.resolution = 1024u;
     light.shadowSettings.bias = 0.0015f;
-    light.shadowSettings.normalBias = 0.001f;
     light.shadowSettings.maxDistance = range;
     state.world->Add<engine::LightComponent>(entity, light);
     return entity;
@@ -4000,7 +3998,6 @@ LPENTITY CreateSpotLight(const char* name,
     light.shadowSettings.enabled = true;
     light.shadowSettings.resolution = 1024u;
     light.shadowSettings.bias = 0.0015f;
-    light.shadowSettings.normalBias = 0.001f;
     light.shadowSettings.maxDistance = range;
     state.world->Add<engine::LightComponent>(entity, light);
     return entity;

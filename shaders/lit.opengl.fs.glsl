@@ -199,10 +199,21 @@ float CompareShadowAtlas(vec2 uv, float cmpDepth, vec4 atlasRect)
     return (cmpDepth <= sampledDepth) ? 1.0 : 0.0;
 }
 
-vec4 ComputeShadowReceiverCS(vec3 positionWS, vec3 normalWS, mat4 shadowVP, float normalBiasValue)
+// Normal offset (world units) of normalBiasTexels shadow-map texels of this
+// view at the receiver; see KromShadowNormalOffset in the HLSL shaders.
+float KromShadowNormalOffset(vec3 positionWS, mat4 shadowVP, vec4 atlasRect, float normalBiasTexels)
 {
-    vec3 offsetPositionWS = positionWS + normalWS * normalBiasValue;
-    return shadowVP * vec4(offsetPositionWS, 1.0);
+    vec4 clip = shadowVP * vec4(positionWS, 1.0);
+    vec3 xRow = vec3(shadowVP[0][0], shadowVP[1][0], shadowVP[2][0]);
+    float texelsPerWorld = 0.5 * length(xRow) * atlasRect.z /
+                           (max(shadowTexelSize, 1e-8) * max(abs(clip.w), 1e-6));
+    return normalBiasTexels / max(texelsPerWorld, 1e-6);
+}
+
+vec4 ComputeShadowReceiverCS(vec3 positionWS, vec3 normalWS, mat4 shadowVP, float normalBiasTexels, vec4 atlasRect)
+{
+    float offset = KromShadowNormalOffset(positionWS, shadowVP, atlasRect, normalBiasTexels);
+    return shadowVP * vec4(positionWS + normalWS * offset, 1.0);
 }
 
 uint ChoosePointShadowFace(vec3 lightToPoint)
@@ -338,13 +349,13 @@ void main()
                 uint viewCount = uint(shadowLightExtra[shadowIndex].y + 0.5);
                 if (viewCount >= 6u)
                 {
-                    vec3 receiverWS = vPositionWS + geomN * shadowLightMeta[shadowIndex].z;
-                    uint faceIndex = ChoosePointShadowFace(receiverWS - lights[i].positionWS.xyz);
+                    uint faceIndex = ChoosePointShadowFace(vPositionWS - lights[i].positionWS.xyz);
                     uint viewIndex = firstViewIndex + faceIndex;
                     if (viewIndex < shadowViewCount && viewIndex < 16u)
                     {
                         shadowVisibility = SampleShadowAtlas(
-                            shadowViewProjArray[viewIndex] * vec4(receiverWS, 1.0),
+                            ComputeShadowReceiverCS(vPositionWS, geomN, shadowViewProjArray[viewIndex],
+                                                    shadowLightMeta[shadowIndex].z, shadowViewRect[viewIndex]),
                             shadowLightMeta[shadowIndex].y,
                             shadowLightMeta[shadowIndex].w,
                             shadowViewRect[viewIndex], shadowViewProjArray[viewIndex]);
@@ -374,7 +385,8 @@ void main()
                         {
                             vec4 posLCS = ComputeShadowReceiverCS(vPositionWS, geomN,
                                                                    shadowViewProjArray[viewIndex],
-                                                                   shadowLightMeta[shadowIndex].z);
+                                                                   shadowLightMeta[shadowIndex].z,
+                                                                   shadowViewRect[viewIndex]);
                             vec3 ndcPos = posLCS.xyz / posLCS.w;
                             if (abs(ndcPos.x) < 1.0 && abs(ndcPos.y) < 1.0 &&
                                 ndcPos.z > -1.0 && ndcPos.z < 1.0) // OpenGL clip depth is -1..1
@@ -392,7 +404,8 @@ void main()
                 {
                     // Spot or single-cascade directional
                     shadowVisibility = SampleShadowAtlas(
-                        ComputeShadowReceiverCS(vPositionWS, geomN, shadowViewProjArray[firstViewIndex], shadowLightMeta[shadowIndex].z),
+                        ComputeShadowReceiverCS(vPositionWS, geomN, shadowViewProjArray[firstViewIndex],
+                                                shadowLightMeta[shadowIndex].z, shadowViewRect[firstViewIndex]),
                         shadowLightMeta[shadowIndex].y,
                         shadowLightMeta[shadowIndex].w,
                         shadowViewRect[firstViewIndex], shadowViewProjArray[firstViewIndex]);

@@ -2056,7 +2056,6 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
         }
 
         const float minShadowBias = light->type == LightType::Directional ? 0.0005f : 0.0001f;
-        const float minNormalBias = light->type == LightType::Directional ? 0.0010f : 0.0010f;
 
         const LightComponent beforeBias = *light;
         const std::string biasKey = MakeEditHistoryKey(entity, "light.shadowBias");
@@ -2071,13 +2070,16 @@ static void DrawLightSection(EditorFrameContext& ctx, EntityID entity)
 
         const LightComponent beforeNormalBias = *light;
         const std::string normalBiasKey = MakeEditHistoryKey(entity, "light.normalBias");
-        if (value_ui::DragFloat(TranslateLabel("light.normal_bias", "Normal Bias").c_str(), &light->shadowSettings.normalBias, 0.0001f, minNormalBias, 1.f, "%.5f"))
+        if (value_ui::DragFloat(TranslateLabel("light.normal_bias", "Normal Bias").c_str(), &light->shadowSettings.normalBias,
+                                0.01f, kShadowNormalBiasMin, kShadowNormalBiasMax, "%.2f texel"))
         {
-            light->shadowSettings.normalBias = std::max(light->shadowSettings.normalBias, minNormalBias);
+            light->shadowSettings.normalBias = std::clamp(light->shadowSettings.normalBias,
+                                                          kShadowNormalBiasMin, kShadowNormalBiasMax);
             BeginPendingComponentEdit<LightComponent>(ctx, normalBiasKey, "history.normal_bias", entity, &beforeNormalBias);
         }
         if (ImGui::IsItemDeactivatedAfterEdit())
             CommitPendingComponentEdit(ctx, normalBiasKey);
+        ImGui::SetItemTooltip("%s", Translate("light.normal_bias_tip"));
 
         const LightComponent beforeStrength = *light;
         const std::string strengthKey = MakeEditHistoryKey(entity, "light.shadowStrength");

@@ -518,6 +518,7 @@
   "light.shadow_filter_tip": "Filter of the shadow edge. Each light uses its own filter. PCF 3x3/5x5/7x7 are weighted tent filters: smooth edges without noise, larger = softer. Recommended: PCF 5x5. Tent filters, Poisson and PCSS work in PBR materials; legacy lit materials and OpenGL still use the filter of the first light as a simple 3x3 filter.",
   "light.shadow_bias": "Shadow Bias",
   "light.shadow_bias_tip": "Directional light: distance in world units, independent of camera distance and cascade size. Point and spot lights: normalized shadow depth. Small values preserve contact at wall joints; excessive values cause light leaks.",
+  "light.normal_bias_tip": "Offset along the surface normal against shadow acne, in shadow-map texels. Works the same in every cascade. Recommended: 0.5 to 1.5. Too large: shadows detach from the base of objects.",
   "light.normal_bias": "Normal Bias",
   "light.shadow_strength": "Shadow Strength",
   "light.shadow_distance": "Shadow Distance",

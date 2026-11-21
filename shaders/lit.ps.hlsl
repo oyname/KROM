@@ -244,10 +244,24 @@ float CompareShadowManualBilinear(float2 uv, float cmpDepth, float4 atlasRect)
     return lerp(cx0, cx1, fracTexel.y);
 }
 
-float4 ComputeShadowReceiverCS(float3 positionWS, float3 normalWS, float4x4 shadowVP, float normalBiasValue)
+// Normal offset (world units) of normalBiasTexels shadow-map texels of this
+// view at the receiver. The bias is set in texels like in Unity/Unreal, so one
+// value fits every cascade: coarse cascades get a larger offset, fine ones a
+// smaller one (a fixed world offset was too large near and too small far away).
+float KromShadowNormalOffset(float3 positionWS, float4x4 shadowVP, float4 atlasRect, float normalBiasTexels)
 {
-    float3 offsetPositionWS = positionWS + normalWS * normalBiasValue;
-    return mul(shadowVP, float4(offsetPositionWS, 1.0f));
+    const float4 clip = mul(shadowVP, float4(positionWS, 1.0f));
+    const float3 xRow = float3(shadowVP[0][0], shadowVP[0][1], shadowVP[0][2]);
+    const float texelsPerWorld = 0.5f * length(xRow) * atlasRect.z /
+                                 (max(shadowTexelSize, 1e-8f) * max(abs(clip.w), 1e-6f));
+    return normalBiasTexels / max(texelsPerWorld, 1e-6f);
+}
+
+float4 ComputeShadowReceiverCS(float3 positionWS, float3 normalWS, float4x4 shadowVP, float normalBiasTexels,
+                               float4 atlasRect)
+{
+    const float offset = KromShadowNormalOffset(positionWS, shadowVP, atlasRect, normalBiasTexels);
+    return mul(shadowVP, float4(positionWS + normalWS * offset, 1.0f));
 }
 
 uint ChoosePointShadowFace(float3 lightToPoint)
@@ -402,13 +416,13 @@ float4 main(PSInput IN) : SV_Target
                 const uint viewCount = (uint)(shadowLightExtra[shadowIndex].y + 0.5f);
                 if (viewCount >= 6u)
                 {
-                    const float3 receiverWS = IN.positionWS + geomN * shadowLightMeta[shadowIndex].z;
-                    const uint faceIndex = ChoosePointShadowFace(receiverWS - lights[i].positionWS.xyz);
+                    const uint faceIndex = ChoosePointShadowFace(IN.positionWS - lights[i].positionWS.xyz);
                     const uint viewIndex = firstViewIndex + faceIndex;
                     if (viewIndex < shadowViewCount && viewIndex < 16u)
                     {
                         shadowVisibility = SampleShadowAtlas(
-                            mul(shadowViewProjArray[viewIndex], float4(receiverWS, 1.0f)),
+                            ComputeShadowReceiverCS(IN.positionWS, geomN, shadowViewProjArray[viewIndex],
+                                                    shadowLightMeta[shadowIndex].z, shadowViewRect[viewIndex]),
                             shadowLightMeta[shadowIndex].y,
                             shadowLightMeta[shadowIndex].w,
                             shadowViewRect[viewIndex], shadowViewProjArray[viewIndex]);
@@ -438,7 +452,8 @@ float4 main(PSInput IN) : SV_Target
                         const uint viewIndex = firstViewIndex + candidate;
                         if (viewIndex < shadowViewCount && viewIndex < 16u)
                         {
-                            float4 posLCS = ComputeShadowReceiverCS(IN.positionWS, geomN, shadowViewProjArray[viewIndex], shadowLightMeta[shadowIndex].z);
+                            float4 posLCS = ComputeShadowReceiverCS(IN.positionWS, geomN, shadowViewProjArray[viewIndex],
+                                                                    shadowLightMeta[shadowIndex].z, shadowViewRect[viewIndex]);
                             float3 ndcPos = posLCS.xyz / posLCS.w;
                             if (abs(ndcPos.x) < 1.0f && abs(ndcPos.y) < 1.0f &&
                                 ndcPos.z > 0.0f && ndcPos.z < 1.0f)
@@ -455,7 +470,8 @@ float4 main(PSInput IN) : SV_Target
                 else if (firstViewIndex < shadowViewCount && firstViewIndex < 16u)
                 {
                     shadowVisibility = SampleShadowAtlas(
-                        ComputeShadowReceiverCS(IN.positionWS, geomN, shadowViewProjArray[firstViewIndex], shadowLightMeta[shadowIndex].z),
+                        ComputeShadowReceiverCS(IN.positionWS, geomN, shadowViewProjArray[firstViewIndex],
+                                                shadowLightMeta[shadowIndex].z, shadowViewRect[firstViewIndex]),
                         shadowLightMeta[shadowIndex].y,
                         shadowLightMeta[shadowIndex].w,
                         shadowViewRect[firstViewIndex], shadowViewProjArray[firstViewIndex]);
