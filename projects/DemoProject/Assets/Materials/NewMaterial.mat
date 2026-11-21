@@ -9,6 +9,7 @@ baseColorFactor 0.875862062 0.875862062 0.875862062 1
 emissiveFactor 0 0 0
 metallicFactor 0.0399999991
 roughnessFactor 0.5
+specularFactor 0.5
 normalScale 4
 occlusionStrength 0
 emissiveStrength 1
@@ -21,6 +22,6 @@ metallicRoughnessTexture
 normalTexture 
 occlusionTexture 
 emissiveTexture 
-graphOutputs 1 0 2 0 0 0 0 0 0 1 0 0
+graphOutputs 1 0 2 0 0 0 0 0 0 1 0 0 0
 graphNode 1 0 0 0 1 1 1 100 -100 "Textures/checkered_pavement_tiles_diff_2k.png" 0 1 1 0 0 0 0 0 0 0
 graphNode 2 0 0 0 1 1 1 100 140 "Textures/checkered_pavement_tiles_nor_dx_2k.png" 0 1 1 0 0 0 0 0 0 0
