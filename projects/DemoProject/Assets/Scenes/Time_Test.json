@@ -1,12 +1,12 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 16,
+  "entityCount": 9,
   "entities": [
     {
-      "entityId": 2,
-      "entityIndex": 0,
-      "entityGeneration": 2,
+      "entityId": 16646,
+      "entityIndex": 65,
+      "entityGeneration": 6,
       "components": [
         {
           "type": "NameComponent",
@@ -90,9 +90,95 @@
       ]
     },
     {
-      "entityId": 257,
-      "entityIndex": 1,
-      "entityGeneration": 1,
+      "entityId": 20742,
+      "entityIndex": 81,
+      "entityGeneration": 6,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "RaketeA"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "fee0d18f-6484-558e-97c6-be4304205ad3"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [-1.5, 1, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [0.5, 0.5, 0.5]
+        },
+        {
+          "type": "OBBComponent",
+          "centerOffset": [0, 0, 0],
+          "halfExtents": [0.5, 0.5, 0.5],
+          "orientation": [0, 0, 0, 1],
+          "showInEditor": true,
+          "isTrigger": false
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Rot.mat"
+            }
+          ]
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "Thruster",
+              "fields": {
+                "force": 15,
+                "useFixed": true
+              }
+            }
+          ]
+        },
+        {
+          "type": "RigidBodyComponent",
+          "bodyType": 1,
+          "enabled": true,
+          "mass": 1,
+          "friction": 0.5,
+          "restitution": 0,
+          "linearDamping": 0,
+          "angularDamping": 0.05,
+          "gravityScale": 1,
+          "lockRotationX": true,
+          "lockRotationY": false,
+          "lockRotationZ": true
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
+        }
+      ]
+    },
+    {
+      "entityId": 23302,
+      "entityIndex": 91,
+      "entityGeneration": 6,
       "components": [
         {
           "type": "NameComponent",
@@ -142,9 +228,9 @@
       ]
     },
     {
-      "entityId": 513,
-      "entityIndex": 2,
-      "entityGeneration": 1,
+      "entityId": 25350,
+      "entityIndex": 99,
+      "entityGeneration": 6,
       "components": [
         {
           "type": "NameComponent",
@@ -216,9 +302,9 @@
       ]
     },
     {
-      "entityId": 769,
-      "entityIndex": 3,
-      "entityGeneration": 1,
+      "entityId": 26118,
+      "entityIndex": 102,
+      "entityGeneration": 6,
       "components": [
         {
           "type": "NameComponent",
@@ -277,9 +363,9 @@
       ]
     },
     {
-      "entityId": 1025,
-      "entityIndex": 4,
-      "entityGeneration": 1,
+      "entityId": 27910,
+      "entityIndex": 109,
+      "entityGeneration": 6,
       "components": [
         {
           "type": "NameComponent",
@@ -351,9 +437,9 @@
       ]
     },
     {
-      "entityId": 1281,
-      "entityIndex": 5,
-      "entityGeneration": 1,
+      "entityId": 28932,
+      "entityIndex": 113,
+      "entityGeneration": 4,
       "components": [
         {
           "type": "NameComponent",
@@ -437,9 +523,9 @@
       ]
     },
     {
-      "entityId": 1537,
-      "entityIndex": 6,
-      "entityGeneration": 1,
+      "entityId": 29955,
+      "entityIndex": 117,
+      "entityGeneration": 3,
       "components": [
         {
           "type": "NameComponent",
@@ -473,99 +559,13 @@
           "order": 6
         }
       ]
-    },
-    {
-      "entityId": 1793,
-      "entityIndex": 7,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "RaketeA"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "fee0d18f-6484-558e-97c6-be4304205ad3"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [-1.5, 1, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [0.5, 0.5, 0.5]
-        },
-        {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
-          "showInEditor": true,
-          "isTrigger": false
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/wuerfel.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Rot.mat"
-            }
-          ]
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "Thruster",
-              "fields": {
-                "force": 15,
-                "useFixed": true
-              }
-            }
-          ]
-        },
-        {
-          "type": "RigidBodyComponent",
-          "bodyType": 1,
-          "enabled": true,
-          "mass": 1,
-          "friction": 0.5,
-          "restitution": 0,
-          "linearDamping": 0,
-          "angularDamping": 0.05,
-          "gravityScale": 1,
-          "lockRotationX": true,
-          "lockRotationY": false,
-          "lockRotationZ": true
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 1
-        }
-      ]
     }
   ]
 ,
   "editorCamera":{
-    "position":[10.7191887, 2.69275498, -9.20134163],
-    "pitchDeg":-21.6250629,
-    "yawDeg":1191.90076,
+    "position":[12.8293123, 8.03992844, -7.80285692],
+    "pitchDeg":-19.1501064,
+    "yawDeg":1230.95007,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,
@@ -575,7 +575,7 @@
     "texturePath":"Textures\\autumn_field_puresky_2k.hdr",
     "enableIBL":true,
     "showSkybox":true,
-    "iblIntensity":0.5,
+    "iblIntensity":0.25,
     "backgroundColor":[0, 0, 0, 1],
     "ambientColor":[0.0199999996, 0.0199999996, 0.0299999993],
     "ambientIntensity":1,

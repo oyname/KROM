@@ -215,6 +215,98 @@ Benutzereinstellungen unter `%LOCALAPPDATA%/KROM/`.
   SDK-Compiler-/ABI-Regel, Paket-Script, echte schreibgeschuetzte Installation und
   saubere Offline-VM. Bestehende Compiler-/ABI-Regeln sind unveraendert.
 
+## Plan: prebuilt editor package / SDK (editor distribution, point 3) (Claude, 2026-11-20)
+
+Plan only, nothing implemented. Point 1 (vswhere) and point 2 (projects anywhere, 8e0381d) are done.
+Original point-3 plan with the Codex review of 2026-11-05: `doc/KOORDINATION-archiv-2026-11-06.md`,
+"Punkt 3" and "Punkt 4"; its [Review] decisions still hold and are not repeated in full here.
+Core problem: a script DLL must link exactly the engine libs the editor exe was built with. Today that
+only works with the full source tree and one's own build (CMakeCache with fixed paths).
+
+### Current state (checked against the code today)
+
+- Engine paths in the editor come from three sources:
+  - Compile defines `KROM_SOURCE_DIR` / `KROM_BUILD_DIR` (`CMakeLists.txt` ~854, `addons/editor/CMakeLists.txt`
+    ~51, PUBLIC on `engine_editor`). Uses in `app/KromEditorApp.cpp`: `RuntimeProfileDir` ~203 (runtime-<config>
+    next to the build dir), `PrepareRuntimeBuild` ~473/490 (`cmake -S` = source tree, editor-owned check),
+    Testbuild "editor" profile ~2514, `projectsRootDirectory` ~2699, script reload ~6040-6088
+    (`CheckEngineLibraries`, `LibraryPath`, `CheckSharedEngineHeaders`).
+  - `__FILE__`: `ResolveSourceRoot` ~914 (-> `assets/`, `shaders/`, `editor/`), `ResolveProjectsRoot` ~986,
+    `engineEditorDir` ~2825 (duplicate of `ResolveEditorDir`).
+  - `current_path()` fallbacks when no project is open (`EditorAssetBrowser.cpp` ~455/2460,
+    `EditorFileHistory.cpp` ~95, `EditorMaterialLibrary.cpp` ~238, project browse default ~2693).
+- Script DLL (`krom_scripts_<name>`) and runtime exe (`krom_runtime_<name>_<backend>`) are targets inside the
+  engine's own CMake tree; the first Testbuild/Export per profile builds the whole engine in `runtime-<config>`.
+  The helpers they need (`krom_link_self_registering_addon` with `/WHOLEARCHIVE`, `krom_copy_assets`,
+  `krom_copy_d3dcompiler`, `krom_apply_release_runtime_options`, `cmake/WriteScriptModulePdb.cmake`,
+  `cmake/LinkUtf8.cmake`, `cmake/KromProjects.cmake`) live in the top-level `CMakeLists.txt`.
+- No `install()` rules, no `KromConfig.cmake`, no `tools/package_sdk.cmd`. Jolt and miniaudio come via
+  FetchContent (network on first configure).
+- ABI: `CompatibleScriptModuleAbi` (`addons/script/ScriptModuleApi.hpp` ~58) and `CompilerCompatible` for
+  script builds (`app/editor/BuildTools.cpp` ~309) require the exact `_MSC_FULL_VER`. With an SDK the user's
+  Visual Studio will usually differ -> every script DLL would be rejected. The relaxed rule from the
+  2026-11-05 review (toolset family, module toolset >= SDK toolset, SDK build ID) is a prerequisite.
+- `CheckEngineLibraries` (timestamps of `engine_core.lib`/`engine_script.lib` vs exe) and
+  `CheckSharedEngineHeaders` (Ninja deps of the editor build) need the editor build folder.
+- Writable files: preferences already in `%LOCALAPPDATA%` (`EditorPreferences.cpp`); ImGui keeps its default
+  `imgui.ini` in the current directory (`io.IniFilename` never set) - fails silently in a read-only install.
+- Runtime shader tools: d3dcompiler copied next to the exe; dxc/glslang searched via settings, `DXC_PATH`,
+  `PATH`, `VULKAN_SDK` (`src/renderer/ShaderToolPaths.cpp`). Stays as is (Vulkan SDK is a prerequisite).
+
+### Step 1 (first measure, as agreed on 2026-11-16): SDK mode + `EnginePaths()`
+
+Goal: one place that answers "where is what". Without a package nothing changes.
+
+1. New `app/editor/EnginePaths.{hpp,cpp}` (in `krom_editor_build_tools`, so tests can use it):
+   `struct EnginePaths { Mode mode (SourceTree|Sdk); root; resources (assets, shaders, editor);
+   defaultProjectsDir; engineSourceDir; editorBuildDir; runtimeBuildRoot; sdkCMakeDir; SdkInfo sdk; }`,
+   grouped by purpose (Codex review point 4.2), not "everything relative to the exe".
+   `const EnginePaths& GetEnginePaths()` resolves once; `ResolveEnginePaths(exePath, sourceDefine,
+   buildDefine)` is the testable core.
+2. Detection: `krom-sdk.json` next to the exe or one level up (`bin/` -> SDK root). Fields: `format`,
+   `version`, `sdkBuildId`, `os`, `arch`, `compiler` (`_MSC_FULL_VER`), `toolset`, `configuration`.
+   Unreadable/invalid file -> clear log error and source-tree mode only if the defines' folders exist,
+   otherwise the editor refuses to build scripts with a message (never silently uses stale defines).
+3. Source-tree mode returns exactly today's values (defines + `__FILE__` root). Replace every use listed
+   above, including the duplicate `engineEditorDir` and the `current_path()` fallbacks (-> `resources.assets`
+   / project). `KROM_SOURCE_DIR`/`KROM_BUILD_DIR` may then only be read inside `EnginePaths.cpp`.
+4. SDK mode in this step: resources relative to the SDK root; script build, Testbuild and Export stop with
+   a clear message ("not available in SDK mode yet") until steps 3/4 exist. Default projects folder:
+   `Documents\KromProjects` (`SHGetKnownFolderPath`).
+5. `io.IniFilename` -> `%LOCALAPPDATA%\Krom\imgui.ini` (or nullptr if the layout slots in `editor.settings` cover
+   it - check first).
+6. Tests in `krom_tests` / `krom_build_tools_tests`: temp folder with `bin/editor.exe` + `krom-sdk.json` -> SDK
+   mode and paths; invalid json; no json -> values identical to the defines; Umlaut/space path.
+Check: Debug build, all tests; editor starts and behaves as before (DemoProject, Play, Testbuild, Export);
+a copied exe in a temp folder with a hand-written `krom-sdk.json` starts in SDK mode and finds no source tree.
+
+### Later steps (order; each its own review)
+
+2. `install()` + `KromConfig.cmake`: editor exes, Release engine libs, public + generated headers, Jolt/
+   miniaudio as imported targets (with their `JPH_*` defines), assets/, shaders/, editor/, d3dcompiler, CRT,
+   licenses. Release only, IPO/`/GL`/`/LTCG` off and checked. Move the project helpers into
+   `cmake/KromProjectTargets.cmake`, used by the source tree and shipped in the SDK (one definition).
+3. Project build in SDK mode: `find_package(Krom CONFIG)` with a template CMakeLists in the SDK
+   (`templates/project/`), build folder `<project>/.krom/build/<sdkBuildId>/<arch>/<toolset>/<config>/`
+   (Codex review). Script DLL and runtime exe built there; no engine sources, no network.
+4. ABI policy for SDK mode: toolset family + module toolset >= SDK toolset, `sdkBuildId` in
+   `ScriptModuleAbi` (ABI bump); `CheckEngineLibraries`/`CheckSharedEngineHeaders` skipped in SDK mode (libs
+   immutable). Debug and RelWithDebInfo profiles disabled with a message until there are matching libs.
+5. `tools/package_sdk.cmd`: fresh Release build folder, build, `cmake --install`, write `krom-sdk.json`
+   (build ID = commit + date), zip.
+6. Test: first on the dev machine with the source tree renamed; then a clean VM (VS 2022 or Build Tools +
+   Vulkan SDK), SDK moved and read-only, empty shader cache, project path with space + umlaut: new project,
+   script, Play, Testbuild, Export, exported game starts - all without network.
+
+### Please review before step 1
+
+- Is the list of engine-path uses complete (anything outside `app/` and `addons/editor` reading the source
+  or build tree at runtime)?
+- Template in the SDK (project stays source-only, updates with the SDK) vs. a CMakeLists copied into each
+  project (user can edit it, but it ages with the SDK)?
+- `krom-sdk.json` next to the exe vs. one level up: is supporting both worth it?
+- Anything against making `__FILE__`-based paths source-tree-only from step 1 on?
+
 ## Plan: projects in any folder (editor distribution, point 2) (Claude, 2026-11-20)
 
 **Integration auf lokalem `main` (Codex, 2026-11-20):** Auf Nutzerauftrag Commit

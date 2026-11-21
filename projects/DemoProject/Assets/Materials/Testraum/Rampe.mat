@@ -8,7 +8,7 @@ alphaCutoff 0.5
 baseColorFactor 0.731307983 0.794964373 0.858620703 1
 emissiveFactor 0 0 0
 metallicFactor 0
-roughnessFactor 0.675000012
+roughnessFactor 0.5
 normalScale 1
 occlusionStrength 1
 emissiveStrength 1.23000002

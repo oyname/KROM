@@ -5,7 +5,7 @@
   "backend": "vulkan",
   "assetRoot": "Assets",
   "shaderCache": "shader-bin",
-  "editorScene": "Assets/Scenes/Room 0.json",
+  "editorScene": "Assets/Scenes/Time_Test.json",
   "sceneOrder": [
     "Room 2",
     "car",
@@ -70,6 +70,7 @@
       "brdfHeightCorrelated": true,
       "brdfPerLightFresnel": true,
       "brdfMultiScatter": true,
+      "brdfBurleyDiffuse": true,
       "specularAntiAliasing": true,
       "specularOcclusion": true,
       "ssrEnabled": true,
