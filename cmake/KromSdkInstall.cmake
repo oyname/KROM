@@ -61,13 +61,22 @@ install(DIRECTORY licenses DESTINATION bin)
 install(FILES LICENSE DESTINATION .)
 install(FILES LICENSE DESTINATION bin/licenses RENAME KROM-LICENSE.txt)
 install(FILES ${KROM_MSVC_RUNTIME_DLLS} DESTINATION bin)
+# Only the Windows SDK redist copy may be shipped; never fall back to System32.
+set(_krom_programfiles_x86_var "ProgramFiles(x86)")
 foreach(_runtime IN ITEMS d3dcompiler_47.dll)
     find_file(_krom_redist_${_runtime} "${_runtime}" PATHS
-        "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64" "$ENV{WINDIR}/System32" NO_DEFAULT_PATH)
+        "$ENV{WindowsSdkDir}/Redist/D3D/x64"
+        "$ENV{${_krom_programfiles_x86_var}}/Windows Kits/10/Redist/D3D/x64"
+        "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64"
+        NO_DEFAULT_PATH)
     if(_krom_redist_${_runtime})
         install(FILES "${_krom_redist_${_runtime}}" DESTINATION bin)
     else()
-        message(FATAL_ERROR "SDK redistributable missing: ${_runtime}")
+        message(FATAL_ERROR
+            "SDK redistributable missing: ${_runtime}. It must come from the Windows SDK "
+            "(Windows Kits/10/Redist/D3D/x64); the System32 copy may not be redistributed. "
+            "Install the Windows SDK via the Visual Studio Installer (\"Windows 11 SDK\" or "
+            "\"Windows 10 SDK\" under Individual components) and package again.")
     endif()
 endforeach()
 find_program(_krom_dxc dxc HINTS "$ENV{VULKAN_SDK}/Bin")

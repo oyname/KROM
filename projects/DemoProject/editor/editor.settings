@@ -2,15 +2,21 @@
   "lastScene":"Room 2",
   "hierarchy":
 {
+  "Room 0": {
+    "prefab-98153419941200-1": false
+  },
+  "Room 2": {
+    "prefab-16316348756700-546": false
+  },
   "car": {
-    "7e5887fe-0c6e-687c-865f-2660d35099fa": false,
-    "fe614c09-1812-cab7-12c6-bb9d20ba0e01": false,
-    "prefab-1219236775500-1": false,
-    "prefab-1219236775500-3": false,
-    "prefab-1219236775500-5": false,
-    "prefab-181548400935600-10": false,
-    "prefab-51008682747000-10": false,
-    "prefab-8837162749800-6": false
+    "7e5887fe-0c6e-687c-865f-2660d35099fa": true,
+    "fe614c09-1812-cab7-12c6-bb9d20ba0e01": true,
+    "prefab-1219236775500-1": true,
+    "prefab-1219236775500-3": true,
+    "prefab-1219236775500-5": true,
+    "prefab-181548400935600-10": true,
+    "prefab-51008682747000-10": true,
+    "prefab-8837162749800-6": true
   }
 },
   "camera":{
@@ -34,7 +40,7 @@
     "showGrid":false
   },
   "gizmo":{
-    "mode":1,
+    "mode":0,
     "space":1
   },
   "viewport":{

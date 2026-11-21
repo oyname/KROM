@@ -64,12 +64,23 @@ function(krom_copy_d3dcompiler target)
         return()
     endif()
 
+    # Only redistributable copies: the SDK's bundled one or the Windows SDK
+    # redist folder. The System32 copy belongs to the OS and may not be shipped.
+    set(_krom_programfiles_x86_var "ProgramFiles(x86)")
     set(_krom_d3dcompiler_candidates
         "${KROM_ENGINE_RESOURCES_DIR}/d3dcompiler_47.dll"
-        "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64/d3dcompiler_47.dll"
-        "$ENV{WINDIR}/System32/D3DCompiler_47.dll"
     )
+    if(DEFINED ENV{WindowsSdkDir})
+        list(APPEND _krom_d3dcompiler_candidates "$ENV{WindowsSdkDir}/Redist/D3D/x64/d3dcompiler_47.dll")
+    endif()
+    if(DEFINED ENV{${_krom_programfiles_x86_var}})
+        list(APPEND _krom_d3dcompiler_candidates
+            "$ENV{${_krom_programfiles_x86_var}}/Windows Kits/10/Redist/D3D/x64/d3dcompiler_47.dll")
+    endif()
+    list(APPEND _krom_d3dcompiler_candidates
+        "C:/Program Files (x86)/Windows Kits/10/Redist/D3D/x64/d3dcompiler_47.dll")
     foreach(_krom_d3dcompiler_path IN LISTS _krom_d3dcompiler_candidates)
+        file(TO_CMAKE_PATH "${_krom_d3dcompiler_path}" _krom_d3dcompiler_path)
         if(EXISTS "${_krom_d3dcompiler_path}")
             add_custom_command(TARGET ${target} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different
@@ -79,6 +90,17 @@ function(krom_copy_d3dcompiler target)
             return()
         endif()
     endforeach()
+
+    get_property(_krom_d3dcompiler_warned GLOBAL PROPERTY KROM_D3DCOMPILER_WARNED)
+    if(NOT _krom_d3dcompiler_warned)
+        set_property(GLOBAL PROPERTY KROM_D3DCOMPILER_WARNED TRUE)
+        message(WARNING
+            "d3dcompiler_47.dll (redistributable) not found, so it is not copied next to the "
+            "executables. They still run on Windows 10/11 with the system copy, but builds meant "
+            "for distribution should include it. Install the Windows SDK via the Visual Studio "
+            "Installer (\"Windows 11 SDK\" or \"Windows 10 SDK\" under Individual components); "
+            "the file is then found in Windows Kits/10/Redist/D3D/x64.")
+    endif()
 endfunction()
 
 function(krom_apply_release_runtime_options target)
