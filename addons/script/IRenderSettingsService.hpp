@@ -62,13 +62,19 @@ struct RenderSettings
     bool        ssrEnabled = true;           // SSR add-on; no effect under OpenGL
     bool        contactShadowsEnabled = true; // contact shadow add-on; no effect under OpenGL
     PostAAMode  postAA = PostAAMode::Off;    // after tonemapping; no effect under OpenGL
+    // Shadow maps: tile edge of each sun cascade / point-spot view (256..4096,
+    // power of two) and filter (0 none, 1 PCF 3x3, 2 PCF 5x5, 3 Poisson, 4 PCSS, 5 PCF 7x7).
+    uint32_t    sunShadowResolution = 2048u;
+    uint32_t    localShadowResolution = 1024u;
+    uint8_t     shadowFilter = 2u;
     ColorGrading grading{};                  // per scene, see ColorGrading
 };
 
 [[nodiscard]] inline engine::RenderQualityOptions QualityOptionsOf(const RenderSettings& settings) noexcept
 {
     return {settings.msaaSamples >= 4u ? 4u : (settings.msaaSamples >= 2u ? 2u : 1u), settings.postAA,
-            settings.gtaoEnabled, settings.ssrEnabled, settings.contactShadowsEnabled};
+            settings.gtaoEnabled, settings.ssrEnabled, settings.contactShadowsEnabled,
+            settings.sunShadowResolution, settings.localShadowResolution, settings.shadowFilter};
 }
 
 inline void SetQualityOptions(RenderSettings& settings, const engine::RenderQualityOptions& options) noexcept
@@ -78,6 +84,9 @@ inline void SetQualityOptions(RenderSettings& settings, const engine::RenderQual
     settings.gtaoEnabled = options.gtaoEnabled;
     settings.ssrEnabled = options.ssrEnabled;
     settings.contactShadowsEnabled = options.contactShadowsEnabled;
+    settings.sunShadowResolution = options.sunShadowResolution;
+    settings.localShadowResolution = options.localShadowResolution;
+    settings.shadowFilter = options.shadowFilter;
 }
 
 class IRenderSettingsService
@@ -95,7 +104,7 @@ public:
     {
         return engine::DetectRenderQualityLevel(QualityOptionsOf(Get()));
     }
-    // Sets MSAA, post-AA, GTAO, SSR and contact shadows of a level (Custom:
+    // Sets MSAA, post-AA, GTAO, SSR, contact shadows and shadow quality of a level (Custom:
     // no change); the other options stay. Meant for a player's options menu: an
     // exported game remembers the level on this computer and starts with it
     // next time (instead of the project's options). The editor does not.

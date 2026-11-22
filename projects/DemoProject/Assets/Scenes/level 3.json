@@ -4,21 +4,17 @@
   "entityCount": 4,
   "entities": [
     {
-      "entityId": 3586,
-      "entityIndex": 14,
+      "entityId": 28418,
+      "entityIndex": 111,
       "entityGeneration": 2,
       "components": [
         {
           "type": "NameComponent",
-          "name": "Sphere"
+          "name": "sphere"
         },
         {
           "type": "GuidComponent",
-          "guid": "prefab-184522712264500-2"
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 5890
+          "guid": "prefab-184522712264500-1"
         },
         {
           "type": "ActiveComponent",
@@ -26,46 +22,24 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
+          "localPosition": [0, 0, -4.25],
           "localRotation": [0, 0, 0, 1],
           "localScale": [1, 1, 1],
           "inheritParentScale": true
         },
         {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [1, 1, 1]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/sphere.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Schwarz.mat"
-            }
-          ]
-        },
-        {
           "type": "PrefabSourceComponent",
-          "recordId": "legacy-1"
+          "recordId": "legacy-0"
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 0
+          "order": 1
         }
       ]
     },
     {
-      "entityId": 5634,
-      "entityIndex": 22,
+      "entityId": 28674,
+      "entityIndex": 112,
       "entityGeneration": 2,
       "components": [
         {
@@ -113,17 +87,21 @@
       ]
     },
     {
-      "entityId": 5890,
-      "entityIndex": 23,
+      "entityId": 28930,
+      "entityIndex": 113,
       "entityGeneration": 2,
       "components": [
         {
           "type": "NameComponent",
-          "name": "sphere"
+          "name": "Sphere"
         },
         {
           "type": "GuidComponent",
-          "guid": "prefab-184522712264500-1"
+          "guid": "prefab-184522712264500-2"
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 28418
         },
         {
           "type": "ActiveComponent",
@@ -131,18 +109,40 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0, 0, -4.25],
+          "localPosition": [0, 0, 0],
           "localRotation": [0, 0, 0, 1],
           "localScale": [1, 1, 1],
           "inheritParentScale": true
         },
         {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [1, 1, 1]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/sphere.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Schwarz.mat"
+            }
+          ]
+        },
+        {
           "type": "PrefabSourceComponent",
-          "recordId": "legacy-0"
+          "recordId": "legacy-1"
         },
         {
           "type": "EditorHierarchyComponent",
-          "order": 1
+          "order": 0
         }
       ]
     }
@@ -160,6 +160,7 @@
   "environment":{
     "texturePath":"Textures\\autumn_field_puresky_2k.hdr",
     "enableIBL":true,
+    "removeSunFromLighting":true,
     "showSkybox":true,
     "iblIntensity":1,
     "backgroundColor":[0, 0, 0, 1],

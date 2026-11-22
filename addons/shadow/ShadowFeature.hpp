@@ -1,4 +1,5 @@
 #pragma once
+#include "addons/shadow/ShadowExtraction.hpp"
 #include "renderer/RenderFeatureInterfaces.hpp"
 #include "renderer/RenderFrameConstants.hpp"
 #include <cstdint>
@@ -10,19 +11,29 @@ struct ShadowFeatureConfig
 {
     uint32_t maxShadowLights = 16u;
     uint32_t maxShadowViews = 64u;
-    uint32_t maxShadowAtlasResolution = 4096u;
+    uint32_t maxShadowAtlasResolution = 6144u;   // see ShadowExtractionConfig
+    // Resolution and filter of the quality level for all lights (see
+    // ShadowQualitySettings); null keeps the values of each light.
+    std::shared_ptr<const ShadowQualitySettings> quality;
 };
 
-// Filter parameters of the first shadow-casting light, in the add-on's frame
-// parameter block. The PBR shaders read featureParams[6]
-// (assets/pbr_shadow_poisson.*); keep the slot in sync with them.
+// Shadow filter parameters in the add-on's frame parameter block, slots 5 and 6.
+// The PBR shaders read them (shaders/pbr_shadow_poisson.*); keep both in sync.
+//   featureParams[5]   = lightSizes: ShadowSettings::lightSize per shadow light 0..3
+//                        (constant-buffer order, shadowLightMeta)
+//   featureParams[6].x = lightSize of the first shadow-casting light (OpenGL, legacy lit)
+//   featureParams[6].y = filterModes: ShadowFilter per shadow light 0..3, 4 bits each
+// Forward+ reads filter and light size per light from GpuShadowLightData::params.
 struct ShadowFilterFrameParams
 {
-    float lightSize = 0.f;   // ShadowSettings::lightSize (ShadowFilter::PCSS)
-    float _pad[3] = { 0.f, 0.f, 0.f };
+    float    lightSizes[4] = { 0.f, 0.f, 0.f, 0.f };
+    float    lightSize = 0.f;
+    uint32_t filterModes = 0u;
+    float    _pad[2] = { 0.f, 0.f };
 };
-static_assert(sizeof(ShadowFilterFrameParams) == 16u, "ShadowFilterFrameParams must fill one slot");
-inline constexpr renderer::FrameParameterBlockDesc kShadowFilterFrameParameterBlock{ "krom-shadow-filter", 6u, 1u };
+static_assert(sizeof(ShadowFilterFrameParams) == 32u, "ShadowFilterFrameParams must fill two slots");
+static_assert(renderer::kMaxShadowLightsPerFrame <= 4u, "filterModes and lightSizes hold 4 lights");
+inline constexpr renderer::FrameParameterBlockDesc kShadowFilterFrameParameterBlock{ "krom-shadow-filter", 5u, 2u };
 
 [[nodiscard]] std::unique_ptr<renderer::IEngineFeature> CreateShadowFeature(
     ShadowFeatureConfig config = {});

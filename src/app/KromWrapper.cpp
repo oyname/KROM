@@ -1,4 +1,9 @@
 #include "krom.h"
+#include "KromAssetApi.hpp"
+#include "KromEntityApi.hpp"
+#include "KromRenderSettings.hpp"
+#include "KromRuntimeMaterials.hpp"
+#include "KromSceneManager.hpp"
 #include "KromSurfaces.hpp"
 #include "core/AtomicTextFile.hpp"
 #include "core/PathUtf8.hpp"
@@ -158,59 +163,12 @@ namespace Krom {
 
 namespace {
 
-// =============================================================================
-// Scene-Datenstrukturen
-// =============================================================================
-
-struct KromSceneData
-{
-    std::string name;
-    bool persistent = false;
-    int  version = 1;
-    std::string sourceJson;
-    std::string environmentTexturePath;
-    bool hasEnvironment = false;
-    bool environmentEnableIBL = false;
-    bool environmentRemoveSunFromLighting = true;
-    float environmentIntensity = 1.0f;
-    std::array<float, 4> backgroundColor{0.f, 0.f, 0.f, 1.f};
-    bool hasBackgroundColor = false;
-    engine::math::Vec3 ambientColor{0.06f, 0.06f, 0.08f};
-    bool hasAmbientColor = false;
-    float ambientIntensity = 1.0f;
-    bool hasAmbientIntensity = false;
-    float exposureEv = 0.0f;
-    engine::renderer::addons::forward::ExposureMode exposureMode = engine::renderer::addons::forward::ExposureMode::Fixed;
-    engine::renderer::addons::forward::AutoExposureSettings autoExposure{};
-    engine::renderer::addons::forward::ColorGradingSettings grading{};   // neutral when missing
-    // Render options of scenes written before they moved to the project settings;
-    // used only when the project file has no "rendering" block.
-    engine::ProjectRenderSettings legacyRendering = engine::ReadLegacySceneRenderSettings({});
-    uint32_t probeBakePasses = 2u;    // probe add-on
-    bool valid = false;
-};
-
-struct SceneRecord
-{
-    std::string name;
-    std::string path;
-    bool persistent = false;
-    bool active = false;
-    std::vector<LPENTITY> rootEntities;
-
-    // Async-Support
-    std::shared_future<KromSceneData> asyncFuture;
-    KromSceneData stagedData;
-    bool staging = false;  // Hintergrund-Load läuft
-    bool staged  = false;  // Parsing fertig, Entity-Erstellung aussteht
-};
-
 using internal::SurfaceRecord;
+using internal::GenerateMissingNormals;
 
 // =============================================================================
 
-// Bloom strength of the forward feature (base of the post-process volumes).
-constexpr float kRuntimeBloomIntensity = 0.12f;
+using internal::kRuntimeBloomIntensity;
 
 struct State
 {
@@ -226,40 +184,8 @@ struct State
     // asset pipeline, game simulation) so that it is destroyed after them.
     engine::jobs::JobSystem jobSystem;
     engine::renderer::PlatformRenderLoop renderLoop;
-    // Read every frame by the forward tonemap pass (Krom::SetTonemapping, scene files).
-    std::shared_ptr<engine::renderer::addons::forward::TonemapSettings> tonemapSettings =
-        std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
-    // What the tonemap pass reads: tonemapSettings with the post-process volumes
-    // at the camera blended over it, rewritten every frame (tonemapSettings stays).
-    std::shared_ptr<engine::renderer::addons::forward::TonemapSettings> effectiveTonemapSettings =
-        std::make_shared<engine::renderer::addons::forward::TonemapSettings>();
-    // Project effect intensities (base of the post-process volumes); the add-on
-    // settings receive the blended values every frame.
-    float baseGtaoIntensity = 0.65f;
-    float baseSsrIntensity = 1.0f;
-    float baseContactShadowIntensity = 1.0f;
-    // Reset request of the automatic exposure on scene loads.
-    std::shared_ptr<engine::renderer::addons::forward::AutoExposureStatus> autoExposureStatus =
-        std::make_shared<engine::renderer::addons::forward::AutoExposureStatus>();
-    std::shared_ptr<engine::renderer::addons::forward::MsaaSettings> msaaSettings =
-        std::make_shared<engine::renderer::addons::forward::MsaaSettings>();
-    // Post-process AA after tonemapping (project settings, KROM_POST_AA).
-    std::shared_ptr<engine::renderer::addons::forward::PostAASettings> postAASettings =
-        std::make_shared<engine::renderer::addons::forward::PostAASettings>();
-    // GTAO add-on resources (settings); null without GTAO (OpenGL, enableGtao off).
-    std::shared_ptr<engine::renderer::addons::gtao::GtaoGpuResources> gtaoResources;
-    std::shared_ptr<engine::renderer::addons::ssr::SsrGpuResources> ssrResources;
-    // Contact shadow add-on resources; null without it (OpenGL, enableContactShadows off).
-    std::shared_ptr<engine::renderer::addons::contact_shadow::ContactShadowGpuResources> contactShadowResources;
-    // Quality level a player picked (Krom::SetQualityLevel, scripts), remembered on
-    // this computer (user-settings.json); replaces the project's level options.
-    // Not used by runs started from the editor (editor live state).
-    std::optional<engine::RenderQualityLevel> userQualityLevel;
-    // BRDF options of the PBR shaders (Krom::SetShading, scene files).
-    std::shared_ptr<engine::renderer::addons::forward::ShadingSettings> shadingSettings =
-        std::make_shared<engine::renderer::addons::forward::ShadingSettings>();
-    // Local reflection probes (baked .kprobe files below the asset root).
-    std::shared_ptr<engine::addons::probes::ProbeRuntime> probeRuntime;
+    // Render options and the add-on settings they drive (KromRenderSettings.hpp).
+    internal::RenderSettingsState render;
     engine::assets::AssetRegistry assetRegistry;
     std::unique_ptr<engine::assets::AssetPipeline> assetPipeline;
     engine::renderer::MaterialSystem materialSystem;
@@ -282,16 +208,13 @@ struct State
     bool running = false;
     bool forwardPlusActive = false;
 
-    // Scene-Management
-    std::unordered_map<uint32_t, SceneRecord> scenes;
-    std::unordered_set<uint32_t>              persistentEntityIds;
+    // Scenes, persistent entities and the project scene order (KromSceneManager.hpp).
+    internal::SceneManagerState               sceneManager;
     std::unordered_map<uint32_t, std::string> texturePaths;
     std::unordered_map<uint64_t, LPMATERIAL>  runtimeMaterialCache;
     std::unordered_map<uint32_t, SurfaceRecord> surfaces;
     uint32_t                                  nextSurfaceId = 1u;
-    uint32_t                                  nextSceneId = 1u;
     std::filesystem::path                     projectRoot;
-    std::vector<std::string>                  projectScenePaths;
     std::filesystem::path                     runtimeStatePath;
     float                                     runtimeStateWriteTimer = 0.0f;
     bool                                      editorLiveStateEnabled = false;
@@ -315,8 +238,6 @@ State& Get()
     return state;
 }
 
-void GenerateMissingNormals(engine::assets::SubMeshData& submesh);
-
 // Engine shader root: "shaders" next to the running EXE, otherwise "shaders"
 // relative to the current working directory.
 static std::filesystem::path ResolveEngineAssetRootOnDisk()
@@ -333,36 +254,6 @@ static std::filesystem::path ResolveEngineAssetRootOnDisk()
     if (auto p = std::filesystem::current_path() / "shaders"; std::filesystem::is_directory(p))
         return p;
     return {};
-}
-
-std::string ResolveEngineAssetPath(State& state, const char* path)
-{
-    if (!path || path[0] == '\0')
-        return {};
-
-    const std::filesystem::path requested = PathFromUtf8(path);
-    if (requested.is_absolute() && std::filesystem::exists(requested))
-        return PathToUtf8(requested);
-
-    // 1. Projekt-Assets (Custom-Shader des Users)
-    if (!state.assetRoot.empty() && std::filesystem::exists(state.assetRoot / requested))
-        return PathToUtf8(std::filesystem::absolute(state.assetRoot / requested));
-
-    // 2. Engine-Assets (builtin Shader neben der EXE / im CWD)
-    if (!state.engineAssetRoot.empty() && std::filesystem::exists(state.engineAssetRoot / requested))
-        return PathToUtf8(std::filesystem::absolute(state.engineAssetRoot / requested));
-
-    return path;
-}
-
-engine::ShaderHandle LoadEngineShader(State& state,
-                                      const char* path,
-                                      engine::assets::ShaderStage stage)
-{
-    if (!state.assetPipeline)
-        return engine::ShaderHandle::Invalid();
-
-    return state.assetPipeline->LoadShader(ResolveEngineAssetPath(state, path), stage);
 }
 
 engine::renderer::DeviceFactory::BackendType ToBackend(int backend) noexcept
@@ -389,146 +280,6 @@ const char* BackendName(engine::renderer::DeviceFactory::BackendType backend) no
     case BackendType::Vulkan: return "Vulkan";
     default: return "Unknown";
     }
-}
-
-engine::math::Quat QuatFromRotationMatrix(const engine::math::Mat4& m) noexcept
-{
-    const float trace = m.m[0][0] + m.m[1][1] + m.m[2][2];
-    if (trace > 0.f)
-    {
-        const float s = std::sqrt(trace + 1.f) * 2.f;
-        return {(m.m[1][2] - m.m[2][1]) / s,
-                (m.m[2][0] - m.m[0][2]) / s,
-                (m.m[0][1] - m.m[1][0]) / s,
-                0.25f * s};
-    }
-    if (m.m[0][0] > m.m[1][1] && m.m[0][0] > m.m[2][2])
-    {
-        const float s = std::sqrt(1.f + m.m[0][0] - m.m[1][1] - m.m[2][2]) * 2.f;
-        return {0.25f * s,
-                (m.m[1][0] + m.m[0][1]) / s,
-                (m.m[2][0] + m.m[0][2]) / s,
-                (m.m[1][2] - m.m[2][1]) / s};
-    }
-    if (m.m[1][1] > m.m[2][2])
-    {
-        const float s = std::sqrt(1.f + m.m[1][1] - m.m[0][0] - m.m[2][2]) * 2.f;
-        return {(m.m[1][0] + m.m[0][1]) / s,
-                0.25f * s,
-                (m.m[2][1] + m.m[1][2]) / s,
-                (m.m[2][0] - m.m[0][2]) / s};
-    }
-
-    const float s = std::sqrt(1.f + m.m[2][2] - m.m[0][0] - m.m[1][1]) * 2.f;
-    return {(m.m[2][0] + m.m[0][2]) / s,
-            (m.m[2][1] + m.m[1][2]) / s,
-            0.25f * s,
-            (m.m[0][1] - m.m[1][0]) / s};
-}
-
-engine::math::Vec3 ResolveEntityPosition(const State& state, LPENTITY entity) noexcept
-{
-    if (!state.world || !state.world->IsAlive(entity))
-        return {};
-    if (const auto* wt = state.world->Get<engine::WorldTransformComponent>(entity))
-        return wt->position;
-    if (const auto* tr = state.world->Get<engine::TransformComponent>(entity))
-        return tr->localPosition;
-    return {};
-}
-
-bool CollectWorldBoundsRecursive(const engine::ecs::World& world,
-                                 LPENTITY entity,
-                                 engine::math::Vec3& ioMin,
-                                 engine::math::Vec3& ioMax,
-                                 bool& ioHasBounds)
-{
-    if (!world.IsAlive(entity))
-        return false;
-
-    if (const auto* bounds = world.Get<engine::BoundsComponent>(entity))
-    {
-        const engine::math::Vec3 localMin = bounds->centerWorld - bounds->extentsWorld;
-        const engine::math::Vec3 localMax = bounds->centerWorld + bounds->extentsWorld;
-        if (!ioHasBounds)
-        {
-            ioMin = localMin;
-            ioMax = localMax;
-            ioHasBounds = true;
-        }
-        else
-        {
-            ioMin.x = std::min(ioMin.x, localMin.x);
-            ioMin.y = std::min(ioMin.y, localMin.y);
-            ioMin.z = std::min(ioMin.z, localMin.z);
-            ioMax.x = std::max(ioMax.x, localMax.x);
-            ioMax.y = std::max(ioMax.y, localMax.y);
-            ioMax.z = std::max(ioMax.z, localMax.z);
-        }
-    }
-
-    if (const auto* children = world.Get<engine::ChildrenComponent>(entity))
-    {
-        for (const LPENTITY child : children->children)
-            CollectWorldBoundsRecursive(world, child, ioMin, ioMax, ioHasBounds);
-    }
-
-    return ioHasBounds;
-}
-
-engine::math::Vec3 ComputeImportedModelCenter(const engine::assets::ImportedAssetBundle& bundle) noexcept
-{
-    using namespace engine;
-    math::Vec3 boundsMin{FLT_MAX, FLT_MAX, FLT_MAX};
-    math::Vec3 boundsMax{-FLT_MAX, -FLT_MAX, -FLT_MAX};
-    bool hasPosition = false;
-
-    std::vector<math::Mat4> nodeWorld(bundle.nodes.size(), math::Mat4::Identity());
-    std::vector<uint8_t> nodeWorldReady(bundle.nodes.size(), 0u);
-    auto resolveNodeWorld = [&](auto&& self, size_t i) -> const math::Mat4& {
-        if (nodeWorldReady[i] != 0u)
-            return nodeWorld[i];
-        const assets::ImportedSceneNode& node = bundle.nodes[i];
-        const math::Mat4 local = math::Mat4::TRS(node.translation, node.rotation, node.scale);
-        if (node.parentIndex >= 0 && static_cast<size_t>(node.parentIndex) < nodeWorld.size())
-            nodeWorld[i] = self(self, static_cast<size_t>(node.parentIndex)) * local;
-        else
-            nodeWorld[i] = local;
-        nodeWorldReady[i] = 1u;
-        return nodeWorld[i];
-    };
-    for (size_t i = 0; i < bundle.nodes.size(); ++i)
-        resolveNodeWorld(resolveNodeWorld, i);
-
-    auto include = [&](const math::Vec3& p) {
-        boundsMin.x = std::min(boundsMin.x, p.x); boundsMax.x = std::max(boundsMax.x, p.x);
-        boundsMin.y = std::min(boundsMin.y, p.y); boundsMax.y = std::max(boundsMax.y, p.y);
-        boundsMin.z = std::min(boundsMin.z, p.z); boundsMax.z = std::max(boundsMax.z, p.z);
-        hasPosition = true;
-    };
-
-    if (!bundle.nodes.empty())
-    {
-        for (size_t ni = 0; ni < bundle.nodes.size(); ++ni)
-        {
-            const assets::ImportedSceneNode& node = bundle.nodes[ni];
-            if (node.meshIndex < 0 || static_cast<size_t>(node.meshIndex) >= bundle.meshes.size())
-                continue;
-            const assets::MeshAsset& mesh = bundle.meshes[static_cast<size_t>(node.meshIndex)];
-            for (const assets::SubMeshData& sm : mesh.submeshes)
-                for (size_t pi = 0; pi + 2 < sm.positions.size(); pi += 3)
-                    include(nodeWorld[ni].TransformPoint({sm.positions[pi], sm.positions[pi + 1], sm.positions[pi + 2]}));
-        }
-    }
-    else
-    {
-        for (const assets::MeshAsset& mesh : bundle.meshes)
-            for (const assets::SubMeshData& sm : mesh.submeshes)
-                for (size_t pi = 0; pi + 2 < sm.positions.size(); pi += 3)
-                    include({sm.positions[pi], sm.positions[pi + 1], sm.positions[pi + 2]});
-    }
-
-    return hasPosition ? (boundsMin + boundsMax) * 0.5f : math::Vec3::Zero();
 }
 
 float ComputeImportedModelRadius(const engine::assets::ImportedAssetBundle& bundle,
@@ -584,1003 +335,14 @@ float ComputeImportedModelRadius(const engine::assets::ImportedAssetBundle& bund
     return hasPosition ? std::max(std::sqrt(radiusSq), 0.1f) : 1.0f;
 }
 
-bool MeshHasSkinning(const engine::assets::MeshAsset& mesh) noexcept
+internal::RuntimeMaterialContext MakeMaterialContext(State& state)
 {
-    return mesh.HasSkinning();
-}
-
-engine::TextureHandle LoadRuntimeTexture(State& state, const std::string& path,
-                                         engine::assets::TextureLoadRole role);
-
-void ApplyRuntimeMaterialGraph(State& state, engine::MaterialHandle material,
-                               const engine::assets::CompiledMaterialGraph& graph,
-                               const engine::assets::MaterialAsset& asset)
-{
-    std::array<engine::TextureHandle, engine::assets::kMaterialGraphMaxTextures> textures{};
-    for (size_t i = 0; i < textures.size(); ++i)
-        textures[i] = LoadRuntimeTexture(state, graph.textures[i],
-                                         graph.textureNormal[i] ? engine::assets::TextureLoadRole::NormalMap :
-                                         graph.textureLinear[i] ? engine::assets::TextureLoadRole::LinearData
-                                                                : engine::assets::TextureLoadRole::Auto);
-    engine::renderer::SetMaterialGraph(state.materialSystem, material, graph, textures, asset.uvScale, asset.uvOffset);
-    state.materialSystem.MarkDirty(material);
-}
-
-bool EnsureTangentsForPbr(engine::assets::MeshAsset& mesh);
-
-engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(State& state,
-                                                          engine::assets::MeshAsset& mesh,
-                                                          const engine::assets::MaterialAsset* asset,
-                                                          const char* name)
-{
-    if (mesh.submeshes.empty())
-    {
-        engine::Debug::LogError("krom.h: runtime material '%s' cannot be created because mesh has no submeshes",
-            name ? name : "KromRuntimeLit");
-        return engine::MaterialHandle::Invalid();
-    }
-
-    const bool skinned = MeshHasSkinning(mesh);
-    // The skinned lit layout requires tangents; models often ship without them.
-    if (skinned && !EnsureTangentsForPbr(mesh))
-    {
-        engine::Debug::LogError("krom.h: skinned material '%s' requires tangents", name ? name : "KromRuntimeLit");
-        return engine::MaterialHandle::Invalid();
-    }
-    const char* vsPath = skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl";
-    const char* fsPath = "lit.ps.hlsl";
-    const char* shadowPath = skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl";
-    const char* shadowFsPath = "shadow.ps.hlsl";
-    const bool opengl = ToBackend(state.config.backend) == engine::renderer::DeviceFactory::BackendType::OpenGL;
-    if (opengl)
-    {
-        vsPath = "lit.opengl.vs.glsl";
-        fsPath = "lit.opengl.fs.glsl";
-        shadowPath = "shadow.opengl.vs.glsl";
-        shadowFsPath = "shadow.opengl.fs.glsl";
-    }
-
-    const engine::ShaderHandle vs = LoadEngineShader(state, vsPath, engine::assets::ShaderStage::Vertex);
-    const engine::ShaderHandle fs = LoadEngineShader(state, fsPath, engine::assets::ShaderStage::Fragment);
-    const engine::ShaderHandle shadow = LoadEngineShader(state, shadowPath, engine::assets::ShaderStage::Vertex);
-    if (!vs.IsValid() || !fs.IsValid() || !shadow.IsValid())
-    {
-        engine::Debug::LogError("krom.h: failed to load runtime lit shaders vs='%s' fs='%s' shadow='%s'",
-            vsPath, fsPath, shadowPath);
-        return engine::MaterialHandle::Invalid();
-    }
-
-    const bool hasLegacyNormalMap = asset && !asset->PbrNormalPath().empty();
-    std::string layoutError;
-    const auto contract = skinned
-        ? engine::renderer::VertexContracts::SkinnedLit()
-        : hasLegacyNormalMap
-        ? engine::renderer::VertexContracts::PbrLit()
-        : engine::renderer::VertexContracts::StaticLit();
-    const engine::renderer::VertexLayout layout =
-        engine::assets::ResolveVertexLayout(contract, mesh.submeshes[0], &layoutError);
-    if (layout.attributes.empty())
-    {
-        engine::Debug::LogError("krom.h: vertex layout resolution failed for '%s': %s",
-            name ? name : "<material>", layoutError.c_str());
-        return engine::MaterialHandle::Invalid();
-    }
-
-    engine::TextureHandle albedoTexture = engine::TextureHandle::Invalid();
-    engine::TextureHandle normalTexture = engine::TextureHandle::Invalid();
-    engine::TextureHandle emissiveTexture = engine::TextureHandle::Invalid();
-    if (asset && !asset->baseColorTexture.path.empty())
-        albedoTexture = state.assetPipeline->LoadTexture(asset->baseColorTexture.path);
-    if (hasLegacyNormalMap)
-        normalTexture = state.assetPipeline->LoadTexture(asset->PbrNormalPath());
-    if (asset && !asset->emissiveTexture.path.empty())
-        emissiveTexture = state.assetPipeline->LoadTexture(asset->emissiveTexture.path);
-    if (albedoTexture.IsValid() || normalTexture.IsValid() || emissiveTexture.IsValid())
-    {
-        state.assetPipeline->UploadPendingGpuAssets();
-        if (albedoTexture.IsValid())
-            albedoTexture = state.assetPipeline->GetGpuTexture(albedoTexture);
-        if (normalTexture.IsValid())
-            normalTexture = state.assetPipeline->GetGpuTexture(normalTexture);
-        if (emissiveTexture.IsValid())
-            emissiveTexture = state.assetPipeline->GetGpuTexture(emissiveTexture);
-    }
-
-    engine::renderer::lit::LitMaterialCreateInfo info{};
-    info.name = name ? name : "KromRuntimeLit";
-    info.vertexShader = vs;
-    info.fragmentShader = fs;
-    info.shadowShader = shadow;
-    info.shadowFragmentShader = LoadEngineShader(state, shadowFsPath, engine::assets::ShaderStage::Fragment);
-    info.vertexLayout = layout;
-    info.baseColorFactor = asset ? asset->baseColorFactor : engine::math::Vec4::One();
-    info.emissiveFactor = asset
-        ? engine::math::Vec4{asset->RuntimeEmissive().x, asset->RuntimeEmissive().y, asset->RuntimeEmissive().z, 1.0f}
-        : engine::math::Vec4::Zero();
-    info.specularStrength = asset ? asset->PbrMetallic() : 0.0f;
-    info.roughnessFactor = asset ? asset->PbrRoughness() : 1.0f;
-    info.normalStrength = asset ? asset->PbrNormalStrength() : 1.0f;
-    const engine::assets::CompiledMaterialGraph graph =
-        asset ? engine::assets::CompileMaterialGraph(asset->graph) : engine::assets::CompiledMaterialGraph{};
-    info.materialGraph = graph.Active();
-    info.openGL = opengl;
-    info.opacityFactor = asset ? asset->baseColorFactor.w : 1.0f;
-    info.alphaCutoff = asset ? asset->alphaCutoff : 0.5f;
-    info.enableBaseColorMap = albedoTexture.IsValid();
-    info.enableNormalMap = normalTexture.IsValid();
-    info.enableEmissiveMap = emissiveTexture.IsValid();
-    info.alphaTest = asset && asset->alphaMode == engine::assets::MaterialAlphaMode::Mask;
-    info.doubleSided = asset && asset->doubleSided;
-    info.castShadows = !asset || asset->castShadows;
-    info.cullMode = (asset && asset->doubleSided)
-        ? engine::renderer::MaterialCullMode::None
-        : engine::renderer::MaterialCullMode::Back;
-
-    const engine::MaterialHandle handle =
-        engine::renderer::lit::LitMaterial::Register(state.materialSystem, info);
-    if (!handle.IsValid())
-    {
-        engine::Debug::LogError("krom.h: failed to register runtime lit material '%s'",
-            name ? name : "KromRuntimeLit");
-        return handle;
-    }
-
-    engine::renderer::lit::LitMaterial litMaterial(state.materialSystem, handle);
-    if (albedoTexture.IsValid())
-        (void)litMaterial.SetAlbedo(albedoTexture);
-    if (normalTexture.IsValid())
-        (void)litMaterial.SetNormal(normalTexture);
-    if (emissiveTexture.IsValid())
-        (void)litMaterial.SetEmissive(emissiveTexture);
-    if (graph.Active())
-        ApplyRuntimeMaterialGraph(state, handle, graph, *asset);
-    return handle;
-}
-
-// Gibt einen MaterialSystem-Handle zurück: Wenn 'material' ein AssetRegistry-Handle
-// ist (MaterialAsset vorhanden) und die Entity ein Mesh hat, wird ein LitMaterial
-// erstellt und im MaterialSystem registriert. Sonst wird 'material' unverändert zurückgegeben.
-bool EnsureTangentsForPbr(engine::assets::MeshAsset& mesh)
-{
-    bool changed = false;
-    for (engine::assets::SubMeshData& submesh : mesh.submeshes)
-    {
-        GenerateMissingNormals(submesh);
-        if (engine::assets::HasValidTangents(submesh))
-            continue;
-        if (!engine::assets::EnsureTangents(submesh))
-            return false;
-        submesh.rawInterleavedBytes.clear();
-        submesh.rawVertexStride = 0u;
-        changed = true;
-    }
-    if (changed)
-    {
-        mesh.gpuStatus.dirty = true;
-        mesh.gpuStatus.uploaded = false;
-    }
-    return true;
-}
-
-engine::TextureHandle LoadRuntimeTexture(State& state, const std::string& path,
-                                        engine::assets::TextureLoadRole role = engine::assets::TextureLoadRole::Auto)
-{
-    if (!state.assetPipeline || path.empty())
-        return engine::TextureHandle::Invalid();
-    const engine::TextureHandle assetTexture = state.assetPipeline->LoadTexture(path, role);
-    if (!assetTexture.IsValid())
-        return engine::TextureHandle::Invalid();
-    state.texturePaths[assetTexture.value] = path;
-    state.assetPipeline->UploadPendingGpuAssets();
-    return state.assetPipeline->GetGpuTexture(assetTexture);
-}
-
-bool IsBuiltInMaterialParamName(const std::string& name) noexcept
-{
-    static constexpr const char* kNames[] = {
-        "baseColorFactor", "emissiveFactor", "metallicFactor", "roughnessFactor",
-        "normalStrength", "normalScale", "occlusionStrength", "opacityFactor",
-        "alphaCutoff", "uvScale", "uvOffset", "materialFeatureMask", "materialModel",
-        "albedo", "baseColor", "baseColorMap", "normal", "normalMap", "orm",
-        "ormMap", "emissive", "emissiveMap", "tAlbedo", "tNormal", "tORM",
-        "tEmissive", "uAlbedo", "uNormal", "uORM", "uEmissive", "sLinear",
-        "sLinearWrap"
-    };
-    if (!name.empty() && name[0] == '_')
-        return true;
-    for (const char* builtIn : kNames)
-        if (name == builtIn)
-            return true;
-    return false;
-}
-
-engine::renderer::MaterialParam ToRuntimeParam(const engine::assets::MaterialParam& src)
-{
-    engine::renderer::MaterialParam dst{};
-    dst.name = src.name;
-    switch (src.type)
-    {
-    case engine::assets::MaterialParam::Type::Float:   dst.type = engine::renderer::MaterialParam::Type::Float; break;
-    case engine::assets::MaterialParam::Type::Vec2:    dst.type = engine::renderer::MaterialParam::Type::Vec2; break;
-    case engine::assets::MaterialParam::Type::Vec3:    dst.type = engine::renderer::MaterialParam::Type::Vec3; break;
-    case engine::assets::MaterialParam::Type::Vec4:    dst.type = engine::renderer::MaterialParam::Type::Vec4; break;
-    case engine::assets::MaterialParam::Type::Int:     dst.type = engine::renderer::MaterialParam::Type::Int; break;
-    case engine::assets::MaterialParam::Type::Bool:    dst.type = engine::renderer::MaterialParam::Type::Bool; break;
-    case engine::assets::MaterialParam::Type::Texture: dst.type = engine::renderer::MaterialParam::Type::Texture; break;
-    }
-    switch (src.type)
-    {
-    case engine::assets::MaterialParam::Type::Float:
-    case engine::assets::MaterialParam::Type::Vec2:
-    case engine::assets::MaterialParam::Type::Vec3:
-    case engine::assets::MaterialParam::Type::Vec4:
-        dst.value.f[0] = src.value.f[0];
-        dst.value.f[1] = src.value.f[1];
-        dst.value.f[2] = src.value.f[2];
-        dst.value.f[3] = src.value.f[3];
-        break;
-    case engine::assets::MaterialParam::Type::Int:
-        dst.value.i = src.value.i;
-        break;
-    case engine::assets::MaterialParam::Type::Bool:
-        dst.value.b = src.value.b;
-        break;
-    case engine::assets::MaterialParam::Type::Texture:
-        dst.texture = src.texture;
-        break;
-    }
-    return dst;
-}
-
-std::string ResolveRuntimeShaderPath(State& state,
-                                     const std::string& shaderPath,
-                                     engine::assets::ShaderStage stage)
-{
-    if (ToBackend(state.config.backend) != engine::renderer::DeviceFactory::BackendType::OpenGL)
-        return shaderPath;
-
-    std::filesystem::path candidate = PathFromUtf8(shaderPath);
-    const std::string filename = PathToUtf8(candidate.filename());
-    std::string variantName;
-    if (stage == engine::assets::ShaderStage::Vertex)
-    {
-        constexpr std::string_view suffix = ".vs.hlsl";
-        if (filename.size() > suffix.size() &&
-            filename.compare(filename.size() - suffix.size(), suffix.size(), suffix.data(), suffix.size()) == 0)
-            variantName = filename.substr(0, filename.size() - suffix.size()) + ".opengl.vs.glsl";
-    }
-    else if (stage == engine::assets::ShaderStage::Fragment)
-    {
-        constexpr std::string_view suffix = ".ps.hlsl";
-        if (filename.size() > suffix.size() &&
-            filename.compare(filename.size() - suffix.size(), suffix.size(), suffix.data(), suffix.size()) == 0)
-            variantName = filename.substr(0, filename.size() - suffix.size()) + ".opengl.fs.glsl";
-    }
-    if (variantName.empty())
-        return shaderPath;
-
-    candidate.replace_filename(PathFromUtf8(variantName));
-    const std::string variantPath = PathToGenericUtf8(candidate);
-    const std::string resolved = ResolveEngineAssetPath(state, variantPath.c_str());
-    return std::filesystem::exists(PathFromUtf8(resolved)) ? variantPath : shaderPath;
-}
-
-engine::ShaderHandle LoadRuntimeShader(State& state,
-                                       const std::string& shaderPath,
-                                       engine::assets::ShaderStage stage)
-{
-    if (!state.assetPipeline)
-        return engine::ShaderHandle::Invalid();
-    const std::string resolvedShaderPath = ResolveRuntimeShaderPath(state, shaderPath, stage);
-    return state.assetPipeline->LoadShader(ResolveEngineAssetPath(state, resolvedShaderPath.c_str()), stage);
-}
-
-// Custom-Shader: Textur-Register und PerMaterial-Offsets aus dem kompilierten
-// Shader lesen (wie im Editor), unabhaengig vom Backend-Addon.
-void ReflectCustomShaderBindings(State& state,
-                                 engine::ShaderHandle vs,
-                                 engine::ShaderHandle fs,
-                                 engine::renderer::unlit::UnlitMaterialCreateInfo& info)
-{
-    const engine::assets::ShaderAsset* vsAsset = state.assetRegistry.shaders.Get(vs);
-    const engine::assets::ShaderAsset* fsAsset = state.assetRegistry.shaders.Get(fs);
-    const engine::renderer::IDevice* device = state.renderLoop.GetRenderSystem().GetDevice();
-    if (!vsAsset || !fsAsset || !device)
-        return;
-
-    const engine::assets::ShaderTargetProfile target = device->GetShaderTargetProfile();
-    std::string error;
-    if (!engine::renderer::ReflectProgramTextureBindings(*vsAsset, *fsAsset, target, info.textureBindingOverrides, &error))
-        engine::Debug::LogWarning("krom.h: texture register reflection failed for '%s' (%s), custom textures use name/order slots",
-                                  info.name.c_str(), error.c_str());
-    if (!engine::renderer::ReflectProgramConstantBuffer(*vsAsset, *fsAsset, target,
-                                                        "PerMaterial", engine::renderer::CBSlots::PerMaterial,
-                                                        info.perMaterialReflection, &error))
-        engine::Debug::LogWarning("krom.h: PerMaterial reflection failed for '%s' (%s), packing parameters in fixed order",
-                                  info.name.c_str(), error.c_str());
-}
-
-engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(State& state,
-                                                            engine::assets::MeshAsset& mesh,
-                                                            const engine::assets::MaterialAsset& asset,
-                                                            const char* name,
-                                                            engine::ShaderHandle customVS = engine::ShaderHandle::Invalid(),
-                                                            engine::ShaderHandle customFS = engine::ShaderHandle::Invalid())
-{
-    using namespace engine;
-
-    for (assets::SubMeshData& submesh : mesh.submeshes)
-        GenerateMissingNormals(submesh);
-
-    // Custom shaders bring their own vertex stage and stay on the static layout.
-    const bool skinned = mesh.HasSkinning() && !customVS.IsValid();
-
-    std::string layoutError;
-    const renderer::VertexLayout layout = assets::ResolveVertexLayout(
-        skinned ? renderer::VertexContracts::SkinnedUnlit() : renderer::VertexContracts::StaticLit(),
-        mesh.submeshes[0], &layoutError);
-    if (layout.attributes.empty())
-    {
-        Debug::LogError("krom.h: unlit/custom vertex layout failed for '%s': %s",
-                        name ? name : "<material>", layoutError.c_str());
-        return MaterialHandle::Invalid();
-    }
-
-    ShaderHandle vs = customVS;
-    ShaderHandle fs = customFS;
-    if (!vs.IsValid() || !fs.IsValid())
-    {
-        const bool opengl = ToBackend(state.config.backend) == renderer::DeviceFactory::BackendType::OpenGL;
-        vs = LoadEngineShader(state, opengl ? "quad_unlit.opengl.vs.glsl"
-                                            : (skinned ? "skinned_unlit.vs.hlsl" : "quad_unlit.vs.hlsl"),
-                              assets::ShaderStage::Vertex);
-        fs = LoadEngineShader(state, opengl ? "quad_unlit.opengl.fs.glsl" : "quad_unlit.ps.hlsl", assets::ShaderStage::Fragment);
-    }
-    if (!vs.IsValid() || !fs.IsValid())
-    {
-        Debug::LogError("krom.h: failed to load unlit/custom shaders for '%s'",
-                        name ? name : "<material>");
-        return MaterialHandle::Invalid();
-    }
-
-    renderer::unlit::UnlitMaterialCreateInfo info{};
-    info.name = name ? name : "KromRuntimeUnlit";
-    info.vertexShader = vs;
-    info.fragmentShader = fs;
-    info.vertexLayout = layout;
-    info.baseColorFactor = asset.baseColorFactor;
-    info.emissiveFactor = {asset.RuntimeEmissive().x, asset.RuntimeEmissive().y, asset.RuntimeEmissive().z, 1.f};
-    info.opacityFactor = asset.baseColorFactor.w;
-    info.alphaCutoff = asset.alphaCutoff;
-    // Standard-PBR-Faktoren: wirken nur bei Custom-Shadern, die sie deklarieren.
-    info.metallicFactor = asset.metallicFactor;
-    info.roughnessFactor = asset.roughnessFactor;
-    info.occlusionStrength = asset.occlusionStrength;
-    info.enableBaseColorMap = !asset.baseColorTexture.path.empty();
-    info.enableEmissiveMap = !asset.emissiveTexture.path.empty();
-    info.alphaTest = asset.alphaMode == assets::MaterialAlphaMode::Mask;
-    info.doubleSided = asset.doubleSided;
-    info.castShadows = asset.castShadows;
-    info.cullMode = asset.doubleSided ? renderer::MaterialCullMode::None : renderer::MaterialCullMode::Back;
-    const assets::CompiledMaterialGraph graph =
-        customVS.IsValid() ? assets::CompiledMaterialGraph{} : assets::CompileMaterialGraph(asset.graph);
-    info.materialGraph = graph.Active();
-    info.openGL = ToBackend(state.config.backend) == renderer::DeviceFactory::BackendType::OpenGL;
-
-    info.extraParameters.reserve(asset.params.size() + 1u);
-    for (const assets::MaterialParam& param : asset.params)
-    {
-        if (IsBuiltInMaterialParamName(param.name))
-            continue;
-        renderer::MaterialParam runtimeParam = ToRuntimeParam(param);
-        if (param.type == assets::MaterialParam::Type::Texture && !param.texturePath.empty())
-            runtimeParam.texture = LoadRuntimeTexture(state, param.texturePath);
-        info.extraParameters.push_back(runtimeParam);
-    }
-    if (customVS.IsValid())
-    {
-        // Normalen-Staerke ist kein Unlit-Standardfeld; Custom-Shader lesen sie per Name.
-        assets::MaterialParam normal{};
-        normal.name = "normalScale";
-        normal.type = assets::MaterialParam::Type::Float;
-        normal.value.f[0] = asset.normalScale;
-        info.extraParameters.push_back(ToRuntimeParam(normal));
-    }
-    if (customVS.IsValid())
-        ReflectCustomShaderBindings(state, vs, fs, info);
-
-    const MaterialHandle handle = renderer::unlit::UnlitMaterial::Register(state.materialSystem, info);
-    if (!handle.IsValid())
-        return handle;
-
-    if (const TextureHandle albedo = LoadRuntimeTexture(state, asset.baseColorTexture.path); albedo.IsValid())
-        state.materialSystem.SetTexture(handle, "albedo", albedo);
-    if (const TextureHandle emissive = LoadRuntimeTexture(state, asset.emissiveTexture.path); emissive.IsValid())
-        state.materialSystem.SetTexture(handle, "emissive", emissive);
-    for (const assets::MaterialParam& param : asset.params)
-    {
-        if (IsBuiltInMaterialParamName(param.name) || param.type != assets::MaterialParam::Type::Texture || param.texturePath.empty())
-            continue;
-        if (const TextureHandle tex = LoadRuntimeTexture(state, param.texturePath); tex.IsValid())
-            state.materialSystem.SetTexture(handle, param.name, tex);
-    }
-    if (graph.Active())
-        ApplyRuntimeMaterialGraph(state, handle, graph, asset);
-    state.materialSystem.MarkDirty(handle);
-    return handle;
-}
-
-engine::MaterialHandle CreateRuntimeCustomMaterialFromAssets(State& state,
-                                                             engine::assets::MeshAsset& mesh,
-                                                             const engine::assets::MaterialAsset& asset,
-                                                             const char* name)
-{
-    engine::ShaderHandle vs = asset.vertexShader;
-    engine::ShaderHandle fs = asset.fragmentShader;
-    if (!vs.IsValid() && !asset.vertexShaderPath.empty())
-        vs = LoadRuntimeShader(state, asset.vertexShaderPath, engine::assets::ShaderStage::Vertex);
-    if (!fs.IsValid() && !asset.fragmentShaderPath.empty())
-        fs = LoadRuntimeShader(state, asset.fragmentShaderPath, engine::assets::ShaderStage::Fragment);
-    if (!vs.IsValid() || !fs.IsValid())
-    {
-        engine::Debug::LogError("krom.h: custom material '%s' missing shaders (vs='%s', fs='%s')",
-                                name ? name : "<material>",
-                                asset.vertexShaderPath.c_str(),
-                                asset.fragmentShaderPath.c_str());
-        return engine::MaterialHandle::Invalid();
-    }
-    return CreateRuntimeUnlitMaterialFromAssets(state, mesh, asset.WithGraphTextures(), name, vs, fs);
-}
-
-uint64_t RuntimeMaterialCacheKey(LPMATERIAL material, LPMESH mesh) noexcept
-{
-    return (static_cast<uint64_t>(material.value) << 32u) | static_cast<uint64_t>(mesh.value);
-}
-
-engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(State& state,
-                                                          engine::assets::MeshAsset& mesh,
-                                                          const engine::assets::MaterialAsset& asset,
-                                                          const char* name)
-{
-    using namespace engine;
-    if (!EnsureTangentsForPbr(mesh))
-    {
-        Debug::LogError("krom.h: PBR material requires tangents");
-        return MaterialHandle::Invalid();
-    }
-
-    const bool opengl = ToBackend(state.config.backend) == renderer::DeviceFactory::BackendType::OpenGL;
-    const bool skinned = mesh.HasSkinning();
-
-    std::string layoutError;
-    renderer::VertexLayout layout = assets::ResolveVertexLayout(
-        skinned ? renderer::VertexContracts::SkinnedLit() : renderer::VertexContracts::PbrLit(),
-        mesh.submeshes[0], &layoutError);
-    if (layout.attributes.empty())
-    {
-        Debug::LogError("krom.h: PBR vertex layout failed: %s", layoutError.c_str());
-        return MaterialHandle::Invalid();
-    }
-
-    const bool forwardPlus = state.config.enableForwardPlus && !opengl;
-    const char* vsPath = opengl ? "pbr_lit.opengl.vs.glsl"
-                       : (skinned ? "skinned_pbr_lit.vs.hlsl" : "pbr_lit.vs.hlsl");
-    const char* fsPath = opengl ? "pbr_lit.opengl.fs.glsl" : (forwardPlus ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl");
-    const char* shadowPath = opengl ? "shadow_pbr.opengl.vs.glsl"
-                           : (skinned ? "skinned_shadow_pbr.vs.hlsl" : "shadow_pbr.vs.hlsl");
-    const char* shadowFsPath = opengl ? "shadow_pbr.opengl.fs.glsl" : "shadow_pbr.ps.hlsl";
-
-    const ShaderHandle vs = LoadEngineShader(state, vsPath, assets::ShaderStage::Vertex);
-    const ShaderHandle fs = LoadEngineShader(state, fsPath, assets::ShaderStage::Fragment);
-    const ShaderHandle shadow = LoadEngineShader(state, shadowPath, assets::ShaderStage::Vertex);
-    const ShaderHandle shadowFs = LoadEngineShader(state, shadowFsPath, assets::ShaderStage::Fragment);
-    if (!vs.IsValid() || !fs.IsValid() || !shadow.IsValid())
-    {
-        Debug::LogError("krom.h: failed to load PBR shaders vs='%s' fs='%s' shadow='%s'",
-            vsPath, fsPath, shadowPath);
-        return MaterialHandle::Invalid();
-    }
-
-    renderer::pbr::PbrMasterMaterial::Config config{};
-    config.vs = vs;
-    config.fs = fs;
-    config.shadow = shadow;
-    config.shadowFs = shadowFs;
-    config.vertexLayout = layout;
-    config.cullMode = asset.doubleSided ? renderer::MaterialCullMode::None : renderer::MaterialCullMode::Back;
-    config.castShadows = asset.castShadows;
-    config.receiveShadows = true;
-    const auto graph = assets::CompileMaterialGraph(asset.graph);
-    config.materialGraph = graph.Active();
-    config.openGL = opengl;
-
-    renderer::pbr::PbrMasterMaterial master =
-        renderer::pbr::PbrMasterMaterial::Create(state.materialSystem, config);
-    if (!master.IsValid())
-        return MaterialHandle::Invalid();
-
-    TextureHandle baseColorTex = LoadRuntimeTexture(state, asset.baseColorTexture.path);
-    TextureHandle ormTex = LoadRuntimeTexture(state, asset.PbrOrmPath(), assets::TextureLoadRole::LinearData);
-    TextureHandle normalTex = LoadRuntimeTexture(state, asset.PbrNormalPath(), assets::TextureLoadRole::NormalMap);
-    TextureHandle emissiveTex = LoadRuntimeTexture(state, asset.emissiveTexture.path);
-
-    auto builder = master.CreateInstance(name ? name : "KromPBR");
-    builder.Specular(asset.PbrSpecular());
-    if (baseColorTex.IsValid()) builder.BaseColor(baseColorTex);
-    else builder.BaseColor(asset.baseColorFactor);
-
-    if (ormTex.IsValid())
-    {
-        builder.Occlusion(ormTex, renderer::pbr::MaterialChannel::R, asset.PbrOcclusion());
-        builder.Roughness(ormTex, renderer::pbr::MaterialChannel::G, asset.PbrRoughness());
-        builder.Metallic(ormTex, renderer::pbr::MaterialChannel::B, asset.PbrMetallic());
-    }
-    else
-    {
-        builder.Occlusion(asset.PbrOcclusion());
-        builder.Roughness(asset.PbrRoughness());
-        builder.Metallic(asset.PbrMetallic());
-    }
-
-    if (normalTex.IsValid())
-        builder.Normal(normalTex, asset.PbrNormalStrength());
-    if (emissiveTex.IsValid())
-        builder.Emissive(emissiveTex);
-    else
-    {
-        const math::Vec3 emissive = asset.RuntimeEmissive();
-        builder.Emissive(emissive.x, emissive.y, emissive.z);
-    }
-
-    builder.Opacity(asset.baseColorFactor.w)
-           .DoubleSided(asset.doubleSided)
-           .IBL(false);
-    if (asset.alphaMode == assets::MaterialAlphaMode::Mask)
-        builder.AlphaTest(asset.alphaCutoff);
-
-    const MaterialHandle material = builder.Build();
-    if (material.IsValid())
-    {
-        // baseColorFactor wird im Builder nur gesetzt wenn KEINE Textur verwendet wird.
-        // Hat das Material eine BaseColor-Textur, muss der Factor explizit nachgesetzt
-        // werden, damit er die Textur im Shader korrekt multipliziert (Standard-PBR).
-        if (baseColorTex.IsValid())
-            state.materialSystem.SetVec4(material, "baseColorFactor", asset.baseColorFactor);
-        // The builder sets the factor only without a texture, like baseColorFactor above.
-        const math::Vec3 emissiveFactor = asset.RuntimeEmissive();
-        state.materialSystem.SetVec4(material, "emissiveFactor", {emissiveFactor.x, emissiveFactor.y, emissiveFactor.z, 0.f});
-        state.materialSystem.SetVec2(material, "uvScale", asset.uvScale);
-        state.materialSystem.SetVec2(material, "uvOffset", asset.uvOffset);
-        // Computed graph normals have no direct normal texture for the builder to set this from.
-        state.materialSystem.SetFloat(material, "normalStrength", asset.PbrNormalStrength());
-        state.materialSystem.SetFloat(material, "boxTileSize", asset.BoxProjectionTileSize());
-        engine::renderer::pbr::SetPbrClearcoat(state.materialSystem, material, asset.ClearcoatStrength(),
-                                               asset.ClearcoatRoughness());
-        if (graph.Active())
-        {
-            ApplyRuntimeMaterialGraph(state, material, graph, asset);
-        }
-        state.materialSystem.MarkDirty(material);
-    }
-    return material;
-}
-
-LPMATERIAL RealizeMaterialForEntity(State& state, LPENTITY entity, LPMATERIAL material)
-{
-    if (!state.world || !material.IsValid())
-        return material;
-
-    const engine::assets::MaterialAsset* asset = state.assetRegistry.materials.Get(material);
-    if (!asset)
-        return material;  // Kein AssetRegistry-Handle → bereits ein MaterialSystem-Handle
-
-    const engine::MeshComponent* meshComp = state.world->Get<engine::MeshComponent>(entity);
-    if (!meshComp || !meshComp->mesh.IsValid())
-        return material;
-
-    engine::assets::MeshAsset* mesh = state.assetRegistry.meshes.Get(meshComp->mesh);
-    if (!mesh || mesh->submeshes.empty())
-        return material;
-
-    for (engine::assets::SubMeshData& submesh : mesh->submeshes)
-        GenerateMissingNormals(submesh);
-
-    const uint64_t cacheKey = RuntimeMaterialCacheKey(material, meshComp->mesh);
-    if (const auto cached = state.runtimeMaterialCache.find(cacheKey); cached != state.runtimeMaterialCache.end())
-        return cached->second.IsValid() ? cached->second : material;
-
-    if (asset->templateName == "custom")
-    {
-        const LPMATERIAL realized = CreateRuntimeCustomMaterialFromAssets(
-            state, *mesh, *asset,
-            asset->debugName.empty() ? nullptr : asset->debugName.c_str());
-        if (realized.IsValid())
-            state.runtimeMaterialCache[cacheKey] = realized;
-        return realized.IsValid() ? realized : material;
-    }
-
-    if (asset->templateName == "unlit")
-    {
-        const LPMATERIAL realized = CreateRuntimeUnlitMaterialFromAssets(
-            state, *mesh, *asset,
-            asset->debugName.empty() ? nullptr : asset->debugName.c_str());
-        if (realized.IsValid())
-            state.runtimeMaterialCache[cacheKey] = realized;
-        return realized.IsValid() ? realized : material;
-    }
-
-    if (asset->templateName == "pbr-lit")
-    {
-        const LPMATERIAL realized = CreateRuntimePbrMaterialFromAssets(
-            state, *mesh, *asset,
-            asset->debugName.empty() ? nullptr : asset->debugName.c_str());
-        if (realized.IsValid())
-            state.runtimeMaterialCache[cacheKey] = realized;
-        return realized.IsValid() ? realized : material;
-    }
-
-    const LPMATERIAL realized = CreateRuntimeLitMaterialFromAssets(
-        state, *mesh, asset,
-        asset->debugName.empty() ? nullptr : asset->debugName.c_str());
-    if (realized.IsValid())
-        state.runtimeMaterialCache[cacheKey] = realized;
-    return realized.IsValid() ? realized : material;
-}
-
-// Default-Lit-Material (matt, weiß) für Meshes ohne zugewiesenes Material.
-// Nutzt denselben gültigen Lit-Pfad wie importierte Materialien, damit das
-// Vertex-Layout pro Mesh korrekt aufgelöst wird (static/skinned). Pro Mesh-Handle
-// gecached über runtimeMaterialCache: material.value == 0 → CacheKey == mesh.value,
-// kollidiert also nicht mit echten Materialien (deren material.value != 0 ist).
-bool ParseImportedMeshAssetPath(const std::string& assetPath,
-                                std::string& basePath,
-                                size_t& meshIndex)
-{
-    const size_t hashPos = assetPath.rfind('#');
-    if (hashPos == std::string::npos)
-        return false;
-
-    constexpr std::string_view meshPrefix = "mesh/";
-    const std::string_view fragment(assetPath.data() + hashPos + 1u,
-                                    assetPath.size() - hashPos - 1u);
-    if (fragment.size() <= meshPrefix.size() ||
-        fragment.compare(0u, meshPrefix.size(), meshPrefix) != 0)
-        return false;
-
-    try
-    {
-        meshIndex = static_cast<size_t>(std::stoul(
-            std::string(fragment.substr(meshPrefix.size()))));
-    }
-    catch (const std::exception&)
-    {
-        return false;
-    }
-
-    basePath = assetPath.substr(0u, hashPos);
-    return true;
-}
-
-uint32_t RequiredRuntimeMaterialSlotCount(const engine::assets::MeshAsset& mesh)
-{
-    uint32_t count = static_cast<uint32_t>(mesh.materialHandles.size());
-    for (const engine::assets::SubMeshData& submesh : mesh.submeshes)
-        count = std::max(count, submesh.materialIndex + 1u);
-    return count;
-}
-
-engine::MaterialHandle CreateRuntimeMaterialFromImportedAsset(
-    State& state,
-    engine::assets::MeshAsset& mesh,
-    const engine::assets::MaterialAsset& asset,
-    const char* name)
-{
-    if (asset.templateName == "custom")
-        return CreateRuntimeCustomMaterialFromAssets(state, mesh, asset, name);
-    if (asset.templateName == "unlit")
-        return CreateRuntimeUnlitMaterialFromAssets(state, mesh, asset, name);
-    if (asset.templateName == "pbr-lit")
-    {
-        const LPMATERIAL pbr = CreateRuntimePbrMaterialFromAssets(state, mesh, asset, name);
-        if (pbr.IsValid())
-            return pbr;
-    }
-    return CreateRuntimeLitMaterialFromAssets(state, mesh, &asset, name);
-}
-
-bool MaterialComponentHasExplicitAssignment(const engine::MaterialComponent& material)
-{
-    if (material.material.IsValid() || !material.materialAssetPath.empty())
-        return true;
-    for (const engine::MaterialComponent::SlotOverride& slot : material.slotOverrides)
-        if (slot.material.IsValid() || !slot.materialAssetPath.empty())
-            return true;
-    return false;
-}
-
-void ApplyImportedMeshMaterialsForEntity(
-    State& state,
-    LPENTITY entity,
-    std::unordered_map<std::string, engine::assets::ImportedAssetBundle>& bundleCache,
-    std::unordered_map<std::string, LPMATERIAL>& runtimeMaterialCache)
-{
-    if (!state.world || !state.assetPipeline || !state.world->IsAlive(entity))
-        return;
-
-    const auto* meshComp = state.world->Get<engine::MeshComponent>(entity);
-    if (!meshComp || !meshComp->mesh.IsValid() || meshComp->meshAssetPath.empty())
-        return;
-
-    auto* material = state.world->Get<engine::MaterialComponent>(entity);
-    if (material && MaterialComponentHasExplicitAssignment(*material))
-        return;
-
-    std::string basePath;
-    size_t meshIndex = 0u;
-    if (!ParseImportedMeshAssetPath(meshComp->meshAssetPath, basePath, meshIndex))
-        return;
-
-    engine::assets::ImportedAssetBundle* bundle = nullptr;
-    if (auto cached = bundleCache.find(basePath); cached != bundleCache.end())
-    {
-        bundle = &cached->second;
-    }
-    else
-    {
-        engine::assets::ImportedAssetBundle imported = state.assetPipeline->ImportBundle(basePath);
-        if (!imported.Ok())
-            return;
-        auto [it, inserted] = bundleCache.emplace(basePath, std::move(imported));
-        (void)inserted;
-        bundle = &it->second;
-    }
-
-    if (!bundle || meshIndex >= bundle->meshes.size())
-        return;
-
-    engine::assets::MeshAsset* runtimeMesh = state.assetRegistry.meshes.Get(meshComp->mesh);
-    if (!runtimeMesh || runtimeMesh->submeshes.empty())
-        return;
-
-    const engine::assets::MeshAsset& importedMesh = bundle->meshes[meshIndex];
-    const uint32_t requiredSlots = RequiredRuntimeMaterialSlotCount(importedMesh);
-    if (requiredSlots == 0u || bundle->materials.empty())
-        return;
-
-    std::vector<LPMATERIAL> runtimeMaterials(requiredSlots, LPMATERIAL::Invalid());
-    for (uint32_t slotIndex = 0u; slotIndex < requiredSlots; ++slotIndex)
-    {
-        if (slotIndex >= bundle->materials.size())
-            continue;
-
-        const engine::assets::MaterialAsset& importedMaterial = bundle->materials[slotIndex];
-        const std::string cacheKey =
-            meshComp->meshAssetPath + "#mat/" + std::to_string(slotIndex);
-        if (const auto cached = runtimeMaterialCache.find(cacheKey);
-            cached != runtimeMaterialCache.end())
-        {
-            runtimeMaterials[slotIndex] = cached->second;
-            continue;
-        }
-
-        const std::string runtimeName = importedMaterial.debugName.empty()
-            ? (PathToUtf8(PathFromUtf8(basePath).stem()) + "_mat" + std::to_string(slotIndex))
-            : importedMaterial.debugName;
-        const LPMATERIAL runtimeMaterial = CreateRuntimeMaterialFromImportedAsset(
-            state, *runtimeMesh, importedMaterial, runtimeName.c_str());
-        if (runtimeMaterial.IsValid())
-        {
-            runtimeMaterialCache[cacheKey] = runtimeMaterial;
-            runtimeMaterials[slotIndex] = runtimeMaterial;
-        }
-    }
-
-    if (!material)
-    {
-        state.world->Add<engine::MaterialComponent>(entity);
-        material = state.world->Get<engine::MaterialComponent>(entity);
-    }
-    if (!material)
-        return;
-
-    if (runtimeMesh->submeshes.size() == 1u)
-    {
-        const uint32_t materialIndex = runtimeMesh->submeshes[0].materialIndex;
-        if (materialIndex < runtimeMaterials.size() && runtimeMaterials[materialIndex].IsValid())
-            material->material = runtimeMaterials[materialIndex];
-        return;
-    }
-
-    for (uint32_t submeshIndex = 0u;
-         submeshIndex < runtimeMesh->submeshes.size();
-         ++submeshIndex)
-    {
-        const uint32_t materialIndex = runtimeMesh->submeshes[submeshIndex].materialIndex;
-        if (materialIndex >= runtimeMaterials.size() ||
-            !runtimeMaterials[materialIndex].IsValid())
-            continue;
-
-        engine::MaterialComponent::SlotOverride* slot = material->FindSlotOverride(submeshIndex);
-        if (!slot)
-        {
-            engine::MaterialComponent::SlotOverride newSlot{};
-            newSlot.submeshIndex = submeshIndex;
-            material->slotOverrides.push_back(newSlot);
-            slot = &material->slotOverrides.back();
-        }
-        if (!slot->material.IsValid() && slot->materialAssetPath.empty())
-            slot->material = runtimeMaterials[materialIndex];
-    }
-}
-
-LPMATERIAL GetOrCreateDefaultLitMaterial(State& state, LPMESH meshHandle)
-{
-    if (!meshHandle.IsValid())
-        return NULL_MATERIAL;
-
-    engine::assets::MeshAsset* mesh = state.assetRegistry.meshes.Get(meshHandle);
-    if (!mesh || mesh->submeshes.empty())
-        return NULL_MATERIAL;
-
-    const uint64_t cacheKey = RuntimeMaterialCacheKey(NULL_MATERIAL, meshHandle);
-    if (const auto cached = state.runtimeMaterialCache.find(cacheKey); cached != state.runtimeMaterialCache.end())
-        return cached->second;
-
-    for (engine::assets::SubMeshData& submesh : mesh->submeshes)
-        GenerateMissingNormals(submesh);
-
-    engine::assets::MaterialAsset defaultMat{};
-    defaultMat.debugName       = "DefaultLit";
-    defaultMat.baseColorFactor = engine::math::Vec4{1.0f, 1.0f, 1.0f, 1.0f};
-    defaultMat.metallicFactor  = 0.0f;
-    defaultMat.roughnessFactor = 0.65f;
-
-    const LPMATERIAL handle = CreateRuntimeLitMaterialFromAssets(state, *mesh, &defaultMat, "DefaultLit");
-    state.runtimeMaterialCache[cacheKey] = handle;
-    return handle;
-}
-
-// Weist einem Mesh-Entity ohne eigenes Material das Default-Lit-Material zu.
-// Greift nicht, wenn bereits ein gültiges Material gesetzt ist oder das MeshAsset
-// eigene materialHandles liefert (z.B. glTF-Import) — diese sollen laut
-// Fallback-Kette in MeshRendererExtraction nicht überschrieben werden.
-void EnsureDefaultMaterialForEntity(State& state, LPENTITY entity)
-{
-    if (!state.world || !state.world->IsAlive(entity))
-        return;
-
-    const auto* meshComp = state.world->Get<engine::MeshComponent>(entity);
-    if (!meshComp || !meshComp->mesh.IsValid())
-        return;
-
-    if (const auto* mat = state.world->Get<engine::MaterialComponent>(entity); mat && mat->material.IsValid())
-        return;
-
-    if (const engine::assets::MeshAsset* mesh = state.assetRegistry.meshes.Get(meshComp->mesh))
-    {
-        for (const auto& mh : mesh->materialHandles)
-            if (mh.IsValid())
-                return;  // Import liefert eigene Submesh-Materialien → nicht überschreiben
-    }
-
-    const LPMATERIAL fallback = GetOrCreateDefaultLitMaterial(state, meshComp->mesh);
-    if (!fallback.IsValid())
-        return;
-
-    if (!state.world->Has<engine::MaterialComponent>(entity))
-        state.world->Add<engine::MaterialComponent>(entity, engine::MaterialComponent{fallback});
-    else
-        state.world->Get<engine::MaterialComponent>(entity)->material = fallback;
-}
-
-// Erstellt ein MaterialAsset im Registry und gibt einen AssetRegistry-Handle zurück.
-// RealizeMaterialForEntity wandelt ihn beim SetMaterial(Recursive)-Aufruf pro Entity
-// in ein richtiges LitMaterial (mit korrektem Vertex-Layout) um.
-LPMATERIAL BuildCodeMaterial(State& state,
-                              const char* albedoPath,
-                              const engine::math::Vec4& baseColorFactor,
-                              float roughness,
-                              float metallic)
-{
-    auto asset = std::make_unique<engine::assets::MaterialAsset>();
-    if (albedoPath && albedoPath[0] != '\0')
-    {
-        asset->baseColorTexture.path = albedoPath;
-        asset->debugName = albedoPath;
-    }
-    else
-    {
-        asset->debugName = "KromCodeMaterial";
-    }
-    asset->baseColorFactor   = baseColorFactor;
-    asset->metallicFactor    = metallic;
-    asset->roughnessFactor   = roughness;
-    asset->castShadows       = true;
-    return state.assetRegistry.materials.Add(std::move(asset));
-}
-
-LPMATERIAL BuildPbrCodeMaterial(State& state, const PBR& pbr)
-{
-    auto asset = std::make_unique<engine::assets::MaterialAsset>();
-    asset->templateName = "pbr-lit";
-    asset->debugName = pbr.color.texture && pbr.color.texture[0] != '\0'
-        ? pbr.color.texture
-        : "KromPBRMaterial";
-    asset->baseColorFactor = pbr.color.color;
-    asset->roughnessFactor = pbr.roughness;
-    asset->metallicFactor = pbr.metallic;
-    asset->occlusionStrength = pbr.occlusion;
-    asset->normalScale = pbr.normalStrength;
-    asset->uvScale = pbr.uvScale;
-    asset->uvOffset = pbr.uvOffset;
-    asset->castShadows = true;
-
-    if (pbr.color.texture && pbr.color.texture[0] != '\0')
-        asset->baseColorTexture.path = pbr.color.texture;
-    if (pbr.normal && pbr.normal[0] != '\0')
-        asset->normalTexture.path = pbr.normal;
-    if (pbr.orm && pbr.orm[0] != '\0')
-        asset->metallicRoughnessTexture.path = pbr.orm;
-
-    return state.assetRegistry.materials.Add(std::move(asset));
-}
-
-void AddVertex(engine::assets::SubMeshData& submesh, const MeshVertex& vertex)
-{
-    submesh.positions.insert(submesh.positions.end(), {vertex.position.x, vertex.position.y, vertex.position.z});
-    submesh.normals.insert(submesh.normals.end(), {vertex.normal.x, vertex.normal.y, vertex.normal.z});
-    submesh.uvs.insert(submesh.uvs.end(), {vertex.uv.x, vertex.uv.y});
-    submesh.colors.insert(submesh.colors.end(), {vertex.color.x, vertex.color.y, vertex.color.z, vertex.color.w});
-}
-
-void GenerateMissingNormals(engine::assets::SubMeshData& submesh)
-{
-    const size_t vertexCount = submesh.positions.size() / 3u;
-    if (vertexCount == 0u)
-        return;
-
-    if (submesh.normals.size() < vertexCount * 3u)
-        submesh.normals.resize(vertexCount * 3u, 0.0f);
-
-    std::vector<engine::math::Vec3> generated(vertexCount, engine::math::Vec3::Zero());
-    const auto indexAt = [&](size_t i) -> uint32_t {
-        return submesh.indices.empty() ? static_cast<uint32_t>(i) : submesh.indices[i];
-    };
-    const size_t indexCount = submesh.indices.empty() ? vertexCount : submesh.indices.size();
-    for (size_t i = 0; i + 2u < indexCount; i += 3u)
-    {
-        const uint32_t ia = indexAt(i);
-        const uint32_t ib = indexAt(i + 1u);
-        const uint32_t ic = indexAt(i + 2u);
-        if (ia >= vertexCount || ib >= vertexCount || ic >= vertexCount)
-            continue;
-
-        const engine::math::Vec3 a{submesh.positions[ia * 3u], submesh.positions[ia * 3u + 1u], submesh.positions[ia * 3u + 2u]};
-        const engine::math::Vec3 b{submesh.positions[ib * 3u], submesh.positions[ib * 3u + 1u], submesh.positions[ib * 3u + 2u]};
-        const engine::math::Vec3 c{submesh.positions[ic * 3u], submesh.positions[ic * 3u + 1u], submesh.positions[ic * 3u + 2u]};
-        const engine::math::Vec3 normal = engine::math::Vec3::Cross(b - a, c - a).Normalized();
-        if (normal.LengthSq() <= engine::math::EPSILON)
-            continue;
-
-        for (const uint32_t idx : {ia, ib, ic})
-            generated[idx] += normal;
-    }
-
-    for (size_t vertex = 0u; vertex < vertexCount; ++vertex)
-    {
-        const size_t i = vertex * 3u;
-        engine::math::Vec3 normal{submesh.normals[i], submesh.normals[i + 1u], submesh.normals[i + 2u]};
-        if (normal.LengthSq() <= engine::math::EPSILON)
-            normal = generated[vertex].LengthSq() > engine::math::EPSILON
-                ? generated[vertex].Normalized()
-                : engine::math::Vec3::Up();
-        else
-            normal = normal.Normalized();
-
-        submesh.normals[i] = normal.x;
-        submesh.normals[i + 1u] = normal.y;
-        submesh.normals[i + 2u] = normal.z;
-    }
+    return internal::RuntimeMaterialContext{
+        state.assetRegistry, state.assetPipeline.get(), state.materialSystem,
+        state.renderLoop.GetRenderSystem(), state.world.get(), state.assetRoot, state.engineAssetRoot,
+        state.runtimeMaterialCache, state.texturePaths,
+        ToBackend(state.config.backend) == engine::renderer::DeviceFactory::BackendType::OpenGL,
+        state.config.enableForwardPlus};
 }
 
 internal::SurfaceContext MakeSurfaceContext(State& state)
@@ -1588,466 +350,19 @@ internal::SurfaceContext MakeSurfaceContext(State& state)
     return internal::SurfaceContext{state.surfaces, state.nextSurfaceId, state.assetRegistry, state.world.get()};
 }
 
-LPMESH RegisterProceduralMesh(State& state, engine::assets::SubMeshData submesh, const char* name, bool generateTangents)
+internal::SceneContext MakeSceneContext(State& state)
 {
-    if (submesh.positions.empty())
-        return NULL_MESH;
-
-    GenerateMissingNormals(submesh);
-    if (submesh.uvs.empty())
-        submesh.uvs.assign((submesh.positions.size() / 3u) * 2u, 0.0f);
-    if (submesh.colors.empty())
-        submesh.colors.assign((submesh.positions.size() / 3u) * 4u, 1.0f);
-    if (generateTangents)
-        (void)engine::assets::EnsureTangents(submesh);
-
-    auto mesh = std::make_unique<engine::assets::MeshAsset>();
-    mesh->debugName = (name && name[0] != '\0') ? name : "KromProceduralMesh";
-    mesh->path = mesh->debugName;
-    mesh->state = engine::assets::AssetState::Loaded;
-    mesh->submeshes.push_back(std::move(submesh));
-    mesh->gpuStatus.dirty = true;
-    return state.assetRegistry.meshes.Add(std::move(mesh));
+    return internal::SceneContext{
+        state.sceneManager, state.world.get(), state.assetPipeline.get(), state.assetRegistry,
+        state.transformSystem, state.boundsSystem, state.eventBus, state.scriptAddonRegistry, state.game,
+        state.assetRoot, state.projectSettings, state.editorLiveStateEnabled, state.render,
+        state.cameraOptions, state.activeEnvironment, state.renderLoop.GetRenderSystem(),
+        MakeMaterialContext(state)};
 }
 
-LPENTITY CreateProceduralEntity(State& state, LPMESH mesh, const char* name)
+internal::EntityContext MakeEntityContext(State& state)
 {
-    if (!mesh.IsValid())
-        return NULL_LPENTITY;
-
-    LPENTITY entity = CreateEntity((name && name[0] != '\0') ? name : "ProceduralEntity");
-    if (!entity.IsValid() || !SetMesh(entity, mesh))
-        return NULL_LPENTITY;
-
-    const LPMATERIAL material = BuildCodeMaterial(
-        state,
-        nullptr,
-        engine::math::Vec4{0.82f, 0.82f, 0.78f, 1.0f},
-        0.8f,
-        0.0f);
-    if (material.IsValid())
-        (void)SetMaterial(entity, material);
-    return entity;
-}
-
-// =============================================================================
-// .kscene Parser
-// =============================================================================
-
-// .kscene ist das SceneSerializer-Format (Entities mit "components"-Array)
-// plus Root-Metadaten (scene, version, persistent, environment).
-// Das alte, handgeschriebene Schema (model/light/camera direkt am Entity)
-// wird nicht mehr unterstuetzt — solche Dateien im Editor neu bauen.
-static bool HasLegacyKsceneEntities(const engine::serialization::JsonValue& root) noexcept
-{
-    const auto* arr = root.Get("entities");
-    if (!arr || !arr->IsArray())
-        return false;
-
-    for (const auto& e : arr->arrayVal)
-    {
-        const auto* components = e.Get("components");
-        if (!components || !components->IsArray())
-            return true;
-    }
-    return false;
-}
-
-static KromSceneData ParseKscene(const std::string& json)
-{
-    KromSceneData data;
-    std::string err;
-    const engine::serialization::JsonValue root =
-        engine::serialization::JsonParser::Parse(json, err);
-    if (!err.empty())
-    {
-        engine::Debug::LogError("krom.h: kscene JSON-Fehler: %s", err.c_str());
-        return data;
-    }
-
-    if (const auto* s = root.Get("scene"))     data.name       = s->AsString();
-    if (const auto* p = root.Get("persistent")) data.persistent = p->AsBool();
-    if (const auto* v = root.Get("version"))    data.version    = v->AsInt();
-    if (const auto* env = root.Get("environment"))
-    {
-        if (env->IsObject())
-        {
-            if (const auto* path = env->Get("texturePath"); path && path->IsString())
-            {
-                data.environmentTexturePath = path->AsString();
-                data.hasEnvironment = !data.environmentTexturePath.empty();
-            }
-            if (const auto* enable = env->Get("enableIBL"); enable && enable->IsBool())
-                data.environmentEnableIBL = enable->AsBool();
-            if (const auto* removeSun = env->Get("removeSunFromLighting"); removeSun && removeSun->IsBool())
-                data.environmentRemoveSunFromLighting = removeSun->AsBool();
-            if (const auto* intensity = env->Get("iblIntensity"); intensity && intensity->IsNumber())
-                data.environmentIntensity = std::max(0.0f, intensity->AsFloat());
-            if (const auto* bg = env->Get("backgroundColor"); bg && bg->IsArray() && bg->arrayVal.size() >= 3u)
-            {
-                data.backgroundColor[0] = bg->arrayVal[0].AsFloat();
-                data.backgroundColor[1] = bg->arrayVal[1].AsFloat();
-                data.backgroundColor[2] = bg->arrayVal[2].AsFloat();
-                data.backgroundColor[3] = bg->arrayVal.size() >= 4u ? bg->arrayVal[3].AsFloat() : 1.f;
-                data.hasBackgroundColor = true;
-            }
-            if (const auto* amb = env->Get("ambientColor"); amb && amb->IsArray() && amb->arrayVal.size() >= 3u)
-            {
-                data.ambientColor = {amb->arrayVal[0].AsFloat(),
-                                     amb->arrayVal[1].AsFloat(),
-                                     amb->arrayVal[2].AsFloat()};
-                data.hasAmbientColor = true;
-            }
-            if (const auto* ambI = env->Get("ambientIntensity"); ambI && ambI->IsNumber())
-            {
-                data.ambientIntensity = std::max(0.0f, ambI->AsFloat());
-                data.hasAmbientIntensity = true;
-            }
-            if (const auto* ev = env->Get("exposureEv"); ev && ev->IsNumber())
-                data.exposureEv = std::clamp(ev->AsFloat(), engine::renderer::addons::forward::kMinExposureEv,
-                                             engine::renderer::addons::forward::kMaxExposureEv);
-            engine::renderer::addons::forward::ReadSceneExposureJson(*env, data.exposureMode, data.autoExposure);
-            engine::renderer::addons::forward::ReadSceneColorGradingJson(*env, data.grading);
-            data.legacyRendering = engine::ReadLegacySceneRenderSettings(root);
-            if (const auto* passes = env->Get("probeBakePasses"); passes && passes->IsNumber())
-                data.probeBakePasses = passes->AsInt() >= 2 ? 2u : 1u;
-        }
-    }
-
-    if (HasLegacyKsceneEntities(root))
-    {
-        engine::Debug::LogError("krom.h: kscene '%s' nutzt das alte Format (version %d) — "
-            "bitte im Editor neu bauen (Build)", data.name.c_str(), data.version);
-        return data;
-    }
-
-    data.sourceJson = json;
-    data.valid = true;
-    return data;
-}
-
-// =============================================================================
-// Scene Entity-Instantiierung
-// =============================================================================
-
-static void DetachEntityFromParent(engine::ecs::World& world, LPENTITY entity);
-
-static void DestroyEntityRecursive(engine::ecs::World& world, LPENTITY entity)
-{
-    if (!world.IsAlive(entity))
-        return;
-    if (const auto* children = world.Get<engine::ChildrenComponent>(entity))
-    {
-        const auto copy = children->children;
-        for (const LPENTITY child : copy)
-            DestroyEntityRecursive(world, child);
-    }
-    DetachEntityFromParent(world, entity);
-    world.DestroyEntity(entity);
-}
-
-static void DetachEntityFromParent(engine::ecs::World& world, LPENTITY entity)
-{
-    if (!world.IsAlive(entity) || !world.Has<engine::ParentComponent>(entity))
-        return;
-
-    const LPENTITY parent = world.Get<engine::ParentComponent>(entity)->parent;
-    if (world.IsAlive(parent) && world.Has<engine::ChildrenComponent>(parent))
-        world.Get<engine::ChildrenComponent>(parent)->Remove(entity);
-    world.Remove<engine::ParentComponent>(entity);
-}
-
-struct CapturedTransform
-{
-    engine::math::Vec3 position{0.0f, 0.0f, 0.0f};
-    engine::math::Quat rotation = engine::math::Quat::Identity();
-    engine::math::Vec3 scale{1.0f, 1.0f, 1.0f};
-};
-
-static CapturedTransform CaptureWorldTransform(State& state, LPENTITY entity)
-{
-    CapturedTransform result{};
-    if (!state.world || !state.world->IsAlive(entity))
-        return result;
-
-    state.transformSystem.Update(*state.world);
-    if (const auto* worldTransform = state.world->Get<engine::WorldTransformComponent>(entity))
-    {
-        result.position = worldTransform->position;
-        result.rotation = worldTransform->rotation;
-        result.scale = worldTransform->scale;
-        return result;
-    }
-    if (const auto* transform = state.world->Get<engine::TransformComponent>(entity))
-    {
-        result.position = transform->localPosition;
-        result.rotation = transform->localRotation;
-        result.scale = transform->localScale;
-    }
-    return result;
-}
-
-static bool IsDescendantOf(const engine::ecs::World& world, LPENTITY entity, LPENTITY possibleAncestor)
-{
-    LPENTITY cursor = entity;
-    uint32_t depth = 0u;
-    while (world.IsAlive(cursor) && depth < 1024u)
-    {
-        if (cursor == possibleAncestor)
-            return true;
-        const auto* parent = world.Get<engine::ParentComponent>(cursor);
-        if (!parent || !parent->parent.IsValid())
-            return false;
-        cursor = parent->parent;
-        ++depth;
-    }
-    return false;
-}
-
-static void ApplyLocalFromWorld(State& state, LPENTITY entity, const CapturedTransform& worldTransform)
-{
-    if (!state.world || !state.world->IsAlive(entity))
-        return;
-
-    auto* transform = state.world->Get<engine::TransformComponent>(entity);
-    if (!transform)
-        return;
-
-    const auto* parent = state.world->Get<engine::ParentComponent>(entity);
-    if (parent && parent->parent.IsValid() && state.world->IsAlive(parent->parent))
-    {
-        state.transformSystem.Update(*state.world);
-        if (const auto* parentWorld = state.world->Get<engine::WorldTransformComponent>(parent->parent))
-        {
-            const engine::math::Quat inverseParentRotation = parentWorld->rotation.Conjugate().Normalized();
-            engine::math::Vec3 localPosition = inverseParentRotation.Rotate(worldTransform.position - parentWorld->position);
-            if (transform->inheritParentScale)
-            {
-                localPosition.x = std::abs(parentWorld->scale.x) > engine::math::EPSILON
-                    ? localPosition.x / parentWorld->scale.x : localPosition.x;
-                localPosition.y = std::abs(parentWorld->scale.y) > engine::math::EPSILON
-                    ? localPosition.y / parentWorld->scale.y : localPosition.y;
-                localPosition.z = std::abs(parentWorld->scale.z) > engine::math::EPSILON
-                    ? localPosition.z / parentWorld->scale.z : localPosition.z;
-            }
-
-            transform->localPosition = localPosition;
-            transform->localRotation = (inverseParentRotation * worldTransform.rotation).Normalized();
-            transform->localScale = transform->inheritParentScale
-                ? engine::math::Vec3{
-                    std::abs(parentWorld->scale.x) > engine::math::EPSILON ? worldTransform.scale.x / parentWorld->scale.x : worldTransform.scale.x,
-                    std::abs(parentWorld->scale.y) > engine::math::EPSILON ? worldTransform.scale.y / parentWorld->scale.y : worldTransform.scale.y,
-                    std::abs(parentWorld->scale.z) > engine::math::EPSILON ? worldTransform.scale.z / parentWorld->scale.z : worldTransform.scale.z}
-                : worldTransform.scale;
-            transform->dirty = true;
-            return;
-        }
-    }
-
-    transform->localPosition = worldTransform.position;
-    transform->localRotation = worldTransform.rotation;
-    transform->localScale = worldTransform.scale;
-    transform->dirty = true;
-}
-
-static void MarkPersistentRecursive(State& state, LPENTITY entity)
-{
-    if (!state.world || !state.world->IsAlive(entity))
-        return;
-
-    state.persistentEntityIds.insert(entity.value);
-    if (const auto* children = state.world->Get<engine::ChildrenComponent>(entity))
-    {
-        for (const LPENTITY child : children->children)
-            MarkPersistentRecursive(state, child);
-    }
-}
-
-static void PreservePersistentSubtrees(engine::ecs::World& world,
-                                       LPENTITY entity,
-                                       const std::unordered_set<uint32_t>& persistentEntityIds)
-{
-    if (!world.IsAlive(entity))
-        return;
-
-    if (const auto* children = world.Get<engine::ChildrenComponent>(entity))
-    {
-        const auto copy = children->children;
-        for (const LPENTITY child : copy)
-        {
-            if (!world.IsAlive(child))
-                continue;
-
-            if (persistentEntityIds.count(child.value) != 0u)
-            {
-                DetachEntityFromParent(world, child);
-                continue;
-            }
-
-            PreservePersistentSubtrees(world, child, persistentEntityIds);
-        }
-    }
-}
-
-// Spawns gehoeren zur Szene des aufrufenden Objekts, nicht einfach zur zuletzt
-// geladenen Szene. Parent-Ketten decken auch Scripts auf Prefab-Kindern ab.
-static void RegisterScriptSpawn(State& state, LPENTITY owner, LPENTITY root)
-{
-    if (!state.world || !state.world->IsAlive(root))
-        return;
-    std::unordered_set<uint32_t> visited;
-    for (LPENTITY current = owner; state.world->IsAlive(current) && visited.insert(current.value).second;)
-    {
-        for (auto& [sceneId, scene] : state.scenes)
-        {
-            (void)sceneId;
-            if (std::find(scene.rootEntities.begin(), scene.rootEntities.end(), current) != scene.rootEntities.end())
-            {
-                scene.rootEntities.push_back(root);
-                if (scene.persistent)
-                    MarkPersistentRecursive(state, root);
-                return;
-            }
-        }
-        const auto* parent = state.world->Get<engine::ParentComponent>(current);
-        current = parent ? parent->parent : NULL_LPENTITY;
-    }
-    // Ein explizit persistentes Objekt kann seine Ursprungsszene bereits
-    // ueberlebt haben. Seine Spawns erhalten dann denselben Lebenszyklus.
-    if (state.persistentEntityIds.count(owner.value))
-        MarkPersistentRecursive(state, root);
-    else
-        engine::Debug::LogWarning("krom.h: Script-Spawn ohne besitzende Szene (owner=%u root=%u)",
-            owner.value, root.value);
-}
-
-static void UnloadSceneById(State& state, uint32_t sceneId)
-{
-    auto it = state.scenes.find(sceneId);
-    if (it == state.scenes.end())
-        return;
-    SceneRecord& record = it->second;
-    if (state.world)
-    {
-        for (const LPENTITY entity : record.rootEntities)
-        {
-            if (!state.world->IsAlive(entity))
-                continue;
-            if (state.persistentEntityIds.count(entity.value))
-                continue;
-            PreservePersistentSubtrees(*state.world, entity, state.persistentEntityIds);
-            DestroyEntityRecursive(*state.world, entity);
-        }
-    }
-    if (record.active && !record.name.empty())
-        state.eventBus.Emit<engine::events::SceneUnloadedEvent>(record.name);
-    state.scenes.erase(it);
-}
-
-static void RebuildChildrenComponentsForLoadedEntities(State& state,
-                                                       const std::vector<LPENTITY>& loadedEntities)
-{
-    if (!state.world)
-        return;
-
-    for (const LPENTITY entity : loadedEntities)
-    {
-        if (!state.world->IsAlive(entity))
-            continue;
-
-        const auto* parent = state.world->Get<engine::ParentComponent>(entity);
-        if (!parent || !parent->parent.IsValid() || !state.world->IsAlive(parent->parent))
-            continue;
-
-        if (!state.world->Has<engine::ChildrenComponent>(parent->parent))
-            state.world->Add<engine::ChildrenComponent>(parent->parent);
-        state.world->Get<engine::ChildrenComponent>(parent->parent)->Add(entity);
-    }
-}
-
-static void EnsureRuntimeTransformComponents(State& state,
-                                             const std::vector<LPENTITY>& loadedEntities)
-{
-    if (!state.world)
-        return;
-
-    for (const LPENTITY entity : loadedEntities)
-    {
-        if (!state.world->IsAlive(entity))
-            continue;
-
-        auto* transform = state.world->Get<engine::TransformComponent>(entity);
-        if (!transform)
-            continue;
-
-        if (!state.world->Has<engine::WorldTransformComponent>(entity))
-            state.world->Add<engine::WorldTransformComponent>(entity);
-        transform->dirty = true;
-    }
-}
-
-static void ResolveSerializedSceneAssetBindings(State& state,
-                                                const std::vector<LPENTITY>& loadedEntities)
-{
-    if (!state.world || !state.assetPipeline)
-        return;
-
-    engine::addons::mesh_renderer::ResolveMeshAssetBindings(
-        *state.assetPipeline,
-        state.assetRegistry,
-        *state.world);
-
-    std::unordered_map<std::string, engine::assets::ImportedAssetBundle> importedBundleCache;
-    std::unordered_map<std::string, LPMATERIAL> importedRuntimeMaterialCache;
-
-    for (const LPENTITY entity : loadedEntities)
-    {
-        if (!state.world->IsAlive(entity))
-            continue;
-
-        if (const auto* mesh = state.world->Get<engine::MeshComponent>(entity))
-        {
-            if (!mesh->mesh.IsValid() && mesh->meshAssetPath.empty())
-            {
-                const auto* name = state.world->Get<engine::NameComponent>(entity);
-                engine::Debug::LogWarning(
-                    "krom.h: Entity '%s' hat MeshComponent ohne meshAssetPath; "
-                    "alte meshHandle-Werte koennen in der Runtime nicht neu geladen werden",
-                    name ? name->name.c_str() : "<unnamed>");
-            }
-        }
-
-        // Erst GLB-Import-Materialien in Runtime-Materialien uebersetzen.
-        // DefaultLit greift nur, wenn danach immer noch kein Material existiert.
-        ApplyImportedMeshMaterialsForEntity(
-            state, entity, importedBundleCache, importedRuntimeMaterialCache);
-        EnsureDefaultMaterialForEntity(state, entity);
-
-        auto* material = state.world->Get<engine::MaterialComponent>(entity);
-        if (!material)
-            continue;
-
-        if (!material->materialAssetPath.empty())
-        {
-            const LPMATERIAL assetMaterial = material->materialOverrideSource.empty()
-                ? LoadMaterial(material->materialAssetPath.c_str())
-                : state.assetPipeline->LoadMaterialSource(material->materialOverrideSource);
-            if (assetMaterial.IsValid())
-                material->material = RealizeMaterialForEntity(state, entity, assetMaterial);
-        }
-
-        for (engine::MaterialComponent::SlotOverride& slot : material->slotOverrides)
-        {
-            if (slot.materialAssetPath.empty())
-                continue;
-
-            const LPMATERIAL assetMaterial = slot.materialOverrideSource.empty()
-                ? LoadMaterial(slot.materialAssetPath.c_str())
-                : state.assetPipeline->LoadMaterialSource(slot.materialOverrideSource);
-            if (assetMaterial.IsValid())
-                slot.material = RealizeMaterialForEntity(state, entity, assetMaterial);
-        }
-    }
+    return internal::EntityContext{state.world.get(), state.transformSystem, state.boundsSystem};
 }
 
 static LPENTITY InstantiatePrefabForScript(State& state,
@@ -2233,256 +548,14 @@ static void WriteRuntimeStateSnapshot(State& state)
     }
 }
 
-static bool LoadComponentSerializedScene(State& state,
-                                         const KromSceneData& data,
-                                         SceneRecord& record)
-{
-    engine::serialization::SceneDeserializer deserializer(*state.world);
-    deserializer.RegisterDefaultHandlers();
-    engine::addons::camera::RegisterCameraDeserializationHandlers(deserializer);
-    engine::addons::lighting::RegisterLightingDeserializationHandlers(deserializer);
-    engine::addons::mesh_renderer::RegisterMeshRendererDeserializationHandlers(deserializer);
-    engine::addons::prefab::RegisterPrefabDeserializationHandlers(deserializer);
-    engine::script::RegisterScriptDeserializationHandlers(deserializer, &state.scriptAddonRegistry);
-    engine::physics::RegisterPhysicsDeserializationHandlers(deserializer);
-    engine::audio::RegisterAudioDeserializationHandlers(deserializer);
-    engine::particles::RegisterParticleDeserializationHandlers(deserializer);
-    engine::addons::probes::RegisterProbeDeserializationHandlers(deserializer);
-    engine::addons::postprocess::RegisterPostProcessDeserializationHandlers(deserializer);
-
-    engine::serialization::DeserializeResult result =
-        deserializer.DeserializeFromJson(data.sourceJson);
-    if (!result.success)
-    {
-        engine::Debug::LogError("krom.h: serialized scene '%s' konnte nicht geladen werden: %s",
-            data.name.c_str(), result.error.c_str());
-        return false;
-    }
-
-    std::vector<LPENTITY> loadedEntities;
-    loadedEntities.reserve(result.entityRemap.size());
-    for (const auto& [oldId, newId] : result.entityRemap)
-    {
-        (void)oldId;
-        if (newId.IsValid() && state.world->IsAlive(newId))
-            loadedEntities.push_back(newId);
-    }
-
-    RebuildChildrenComponentsForLoadedEntities(state, loadedEntities);
-    EnsureRuntimeTransformComponents(state, loadedEntities);
-    ResolveSerializedSceneAssetBindings(state, loadedEntities);
-    engine::script::ResolveScriptEntityReferences(*state.world, state.scriptAddonRegistry);
-
-    for (const LPENTITY entity : loadedEntities)
-    {
-        if (!state.world->IsAlive(entity))
-            continue;
-        if (!state.world->Has<engine::ParentComponent>(entity))
-            record.rootEntities.push_back(entity);
-        if (data.persistent)
-            MarkPersistentRecursive(state, entity);
-    }
-
-    engine::Debug::Log("krom.h: serialized scene '%s' geladen (%u entities, %u components)",
-        data.name.c_str(), result.entitiesRead, result.componentsRead);
-    return true;
-}
-
-// user-settings.json of an exported game: %LOCALAPPDATA%\KROM\Games\<window
-// title or EXE name>\ (Windows), $XDG_CONFIG_HOME/krom/games/<...>/ or
-// ~/.config/krom/games/<...>/ elsewhere. KROM_USER_SETTINGS_DIR replaces the
-// folder (tests). Empty if no folder can be found.
-static_assert(static_cast<uint8_t>(engine::RenderPostAA::Fxaa) ==
-              static_cast<uint8_t>(engine::renderer::addons::forward::PostAAMode::Fxaa) &&
-              static_cast<uint8_t>(engine::RenderPostAA::Smaa) ==
-              static_cast<uint8_t>(engine::renderer::addons::forward::PostAAMode::Smaa),
-              "RenderPostAA ids must match PostAAMode");
-
-static std::filesystem::path UserGameSettingsPath(const State& state)
-{
-    if (const char* dir = std::getenv("KROM_USER_SETTINGS_DIR"); dir && *dir)
-        return PathFromUtf8(dir) / "user-settings.json";
-    std::string game = engine::UserGameSettingsFolderName(state.projectSettings.windowTitle);
-#if defined(_WIN32)
-    if (game.empty())
-    {
-        wchar_t exeBuf[260]{};
-        if (::GetModuleFileNameW(nullptr, exeBuf, 260) > 0)
-            game = engine::UserGameSettingsFolderName(PathToUtf8(std::filesystem::path(exeBuf).stem()));
-    }
-    if (game.empty())
-        return {};
-    if (const wchar_t* appData = _wgetenv(L"LOCALAPPDATA"); appData && *appData)
-        return std::filesystem::path(appData) / "KROM" / "Games" / PathFromUtf8(game) / "user-settings.json";
-#else
-    if (game.empty())
-        return {};
-    if (const char* config = std::getenv("XDG_CONFIG_HOME"); config && *config)
-        return PathFromUtf8(config) / "krom" / "games" / PathFromUtf8(game) / "user-settings.json";
-    if (const char* home = std::getenv("HOME"); home && *home)
-        return PathFromUtf8(home) / ".config" / "krom" / "games" / PathFromUtf8(game) / "user-settings.json";
-#endif
-    return {};
-}
-
-static void LoadUserGameSettings(State& state)
-{
-    state.userQualityLevel.reset();
-    const std::filesystem::path path = UserGameSettingsPath(state);
-    std::ifstream file(path);
-    if (path.empty() || !file)
-        return;
-    const std::string json(std::istreambuf_iterator<char>(file), std::istreambuf_iterator<char>{});
-    std::string err;
-    const engine::serialization::JsonValue root = engine::serialization::JsonParser::Parse(json, err);
-    if (!err.empty() || !root.IsObject())
-    {
-        engine::Debug::LogWarning("krom.h: ignoring invalid user settings '%s'", PathToUtf8(path).c_str());
-        return;
-    }
-    state.userQualityLevel = engine::ReadUserGameSettings(root).qualityLevel;
-    if (state.userQualityLevel)
-        engine::Debug::Log("krom.h: quality level '%s' from %s",
-                           engine::RenderQualityLevelName(*state.userQualityLevel), PathToUtf8(path).c_str());
-}
-
-static void SaveUserGameSettings(const State& state)
-{
-    const std::filesystem::path path = UserGameSettingsPath(state);
-    engine::UserGameSettings settings;
-    settings.qualityLevel = state.userQualityLevel;
-    if (path.empty() || !engine::WriteTextFileAtomically(path, engine::WriteUserGameSettings(settings)))
-        engine::Debug::LogWarning("krom.h: could not save user settings '%s'", PathToUtf8(path).c_str());
-}
-
-// Project-wide render options (project settings, or the scene of a project
-// written before they moved there). Exposure stays with the scene.
-static void ApplyProjectRenderSettings(State& state, const engine::ProjectRenderSettings& projectRendering)
-{
-    // A player's quality level replaces the level options of the project.
-    engine::ProjectRenderSettings rendering = projectRendering;
-    state.baseGtaoIntensity = rendering.gtaoIntensity;
-    state.baseSsrIntensity = rendering.ssrIntensity;
-    state.baseContactShadowIntensity = rendering.contactShadowIntensity;
-    if (state.userQualityLevel && !state.editorLiveStateEnabled)
-        engine::ApplyRenderQualityLevel(rendering, *state.userQualityLevel);
-    if (state.tonemapSettings &&
-        !engine::renderer::addons::forward::ParseTonemapOperator(rendering.tonemapOperator.c_str(),
-                                                                 state.tonemapSettings->op))
-        engine::Debug::LogWarning("KromWrapper.cpp: unknown tonemap operator '%s'", rendering.tonemapOperator.c_str());
-    if (state.msaaSettings)
-        state.msaaSettings->sampleCount =
-            engine::renderer::addons::forward::NormalizeMsaaSamples(rendering.msaaSamples);
-    if (state.postAASettings)
-    {
-        state.postAASettings->mode = engine::renderer::addons::forward::PostAAMode::Off;
-        if (!engine::renderer::addons::forward::ParsePostAAMode(rendering.postAA.c_str(), state.postAASettings->mode))
-            engine::Debug::LogWarning("KromWrapper.cpp: unknown post-AA mode '%s'", rendering.postAA.c_str());
-    }
-    if (state.shadingSettings)
-        *state.shadingSettings = { rendering.brdfHeightCorrelated, rendering.brdfPerLightFresnel,
-                                   rendering.brdfMultiScatter, rendering.specularAntiAliasing,
-                                   rendering.brdfBurleyDiffuse };
-    if (state.ssrResources)
-    {
-        engine::renderer::addons::ssr::SsrSettings& ssr = state.ssrResources->settings;
-        ssr.enabled      = rendering.ssrEnabled;
-        ssr.intensity    = rendering.ssrIntensity;
-        ssr.maxRoughness = rendering.ssrMaxRoughness;
-        ssr.maxDistance  = rendering.ssrMaxDistance;
-        ssr.thickness    = rendering.ssrThickness;
-    }
-    if (state.gtaoResources)
-    {
-        engine::renderer::addons::gtao::GtaoSettings& gtao = state.gtaoResources->settings;
-        gtao.enabled   = rendering.gtaoEnabled;
-        gtao.radius    = rendering.gtaoRadius;
-        gtao.intensity = rendering.gtaoIntensity;
-        gtao.bias      = rendering.gtaoBias;
-    }
-    if (state.contactShadowResources)
-    {
-        engine::renderer::addons::contact_shadow::ContactShadowSettings& cs = state.contactShadowResources->settings;
-        cs.enabled   = rendering.contactShadowsEnabled;
-        cs.length    = rendering.contactShadowLength;
-        cs.thickness = rendering.contactShadowThickness;
-        cs.intensity = rendering.contactShadowIntensity;
-        cs.steps     = rendering.contactShadowSteps;
-    }
-    if (state.probeRuntime)
-    {
-        engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
-        probeSettings.specularOcclusion = rendering.specularOcclusion;
-        state.probeRuntime->SetSettings(probeSettings);
-    }
-}
-
 // IScriptContext::GetRenderSettings(): the same values as the Set*/Get* functions of krom.h.
 class WrapperRenderSettingsService final : public engine::script::IRenderSettingsService
 {
 public:
     explicit WrapperRenderSettingsService(State& state) noexcept : m_state(state) {}
 
-    engine::script::RenderSettings Get() const override
-    {
-        engine::script::RenderSettings out{};
-        if (m_state.tonemapSettings)
-        {
-            out.tonemap = static_cast<engine::script::TonemapMode>(m_state.tonemapSettings->op);
-            out.exposureEv = m_state.tonemapSettings->exposureEv;
-            out.autoExposure = m_state.tonemapSettings->exposureMode == engine::renderer::addons::forward::ExposureMode::Auto;
-        }
-        out.msaaSamples = m_state.msaaSettings ? m_state.msaaSettings->sampleCount : 1u;
-        const engine::renderer::addons::forward::ShadingSettings shading =
-            m_state.shadingSettings ? *m_state.shadingSettings : engine::renderer::addons::forward::ShadingSettings{};
-        out.heightCorrelatedVisibility = shading.heightCorrelatedVisibility;
-        out.perLightDiffuseFresnel = shading.perLightDiffuseFresnel;
-        out.multiScatterCompensation = shading.multiScatterCompensation;
-        out.specularAntiAliasing = shading.specularAntiAliasing;
-        out.burleyDiffuse = shading.burleyDiffuse;
-        out.specularOcclusion = m_state.probeRuntime && m_state.probeRuntime->GetSettings().specularOcclusion;
-        out.gtaoEnabled = m_state.gtaoResources && m_state.gtaoResources->settings.enabled;
-        out.ssrEnabled = m_state.ssrResources && m_state.ssrResources->settings.enabled;
-        out.contactShadowsEnabled = m_state.contactShadowResources && m_state.contactShadowResources->settings.enabled;
-        out.postAA = m_state.postAASettings ? static_cast<engine::script::PostAAMode>(m_state.postAASettings->mode)
-                                            : engine::script::PostAAMode::Off;
-        if (m_state.tonemapSettings)
-            out.grading = engine::script::ToScriptColorGrading(m_state.tonemapSettings->grading);
-        return out;
-    }
-
-    void Set(const engine::script::RenderSettings& in) override
-    {
-        using namespace engine::renderer::addons::forward;
-        if (m_state.tonemapSettings)
-        {
-            m_state.tonemapSettings->op = static_cast<TonemapOperator>(
-                std::min<uint8_t>(static_cast<uint8_t>(in.tonemap), 3u));
-            m_state.tonemapSettings->exposureEv = std::clamp(in.exposureEv, kMinExposureEv, kMaxExposureEv);
-            m_state.tonemapSettings->exposureMode = in.autoExposure ? ExposureMode::Auto : ExposureMode::Fixed;
-            m_state.tonemapSettings->grading = engine::script::FromScriptColorGrading(in.grading);
-        }
-        if (m_state.msaaSettings)
-            m_state.msaaSettings->sampleCount = NormalizeMsaaSamples(in.msaaSamples);
-        if (m_state.shadingSettings)
-            *m_state.shadingSettings = { in.heightCorrelatedVisibility, in.perLightDiffuseFresnel,
-                                         in.multiScatterCompensation, in.specularAntiAliasing,
-                                         in.burleyDiffuse };
-        if (m_state.probeRuntime)
-        {
-            engine::addons::probes::ProbeSettings probeSettings = m_state.probeRuntime->GetSettings();
-            probeSettings.specularOcclusion = in.specularOcclusion;
-            m_state.probeRuntime->SetSettings(probeSettings);
-        }
-        if (m_state.gtaoResources)
-            m_state.gtaoResources->settings.enabled = in.gtaoEnabled;
-        if (m_state.ssrResources)
-            m_state.ssrResources->settings.enabled = in.ssrEnabled;
-        if (m_state.contactShadowResources)
-            m_state.contactShadowResources->settings.enabled = in.contactShadowsEnabled;
-        if (m_state.postAASettings)
-            m_state.postAASettings->mode = static_cast<PostAAMode>(std::min<uint8_t>(static_cast<uint8_t>(in.postAA), 2u));
-    }
+    engine::script::RenderSettings Get() const override { return internal::GetScriptRenderSettings(m_state.render); }
+    void Set(const engine::script::RenderSettings& in) override { internal::SetScriptRenderSettings(m_state.render, in); }
 
     // Also remembered on this computer, like Krom::SetQualityLevel.
     void SetQualityLevel(engine::script::QualityLevel level) override { Krom::SetQualityLevel(level); }
@@ -2490,160 +563,6 @@ public:
 private:
     State& m_state;
 };
-
-static void ApplySceneEnvironment(State& state, const KromSceneData& data)
-{
-    if (!state.projectSettings.renderingStored)
-        ApplyProjectRenderSettings(state, data.legacyRendering);
-    if (state.tonemapSettings)
-    {
-        state.tonemapSettings->exposureEv = data.exposureEv;
-        state.tonemapSettings->exposureMode = data.exposureMode;
-        state.tonemapSettings->autoExposure = data.autoExposure;
-        state.tonemapSettings->grading = data.grading;
-    }
-    if (state.autoExposureStatus)
-        state.autoExposureStatus->RequestReset();   // the new scene starts at its own exposure
-    if (state.probeRuntime)
-    {
-        engine::addons::probes::ProbeSettings probeSettings = state.probeRuntime->GetSettings();
-        probeSettings.bakePasses = data.probeBakePasses;
-        state.probeRuntime->SetSettings(probeSettings);
-    }
-
-    // ── Ambient ───────────────────────────────────────────────────────────────
-    if (data.hasAmbientColor)    state.cameraOptions.ambientColor    = data.ambientColor;
-    if (data.hasAmbientIntensity) state.cameraOptions.ambientIntensity = data.ambientIntensity;
-
-    // ── IBL-Modus von der Game-Main-Kamera ableiten ───────────────────────────
-    // Der Editor-IBL-Toggle ist unabhängig von der Game-Kamera.
-    // Im Wrapper bestimmt ausschließlich backgroundMode der Main-Kamera ob IBL aktiv ist.
-    bool gameCameraWantsSkybox = false;
-    if (state.world)
-    {
-        state.world->ForEachAlive([&](engine::EntityID id)
-        {
-            const auto* cam = state.world->Get<engine::CameraComponent>(id);
-            if (cam && cam->isMainCamera)
-                gameCameraWantsSkybox = (cam->backgroundMode == engine::BackgroundMode::Skybox);
-        });
-    }
-
-    // ── Environment-Textur laden ──────────────────────────────────────────────
-    if (data.hasEnvironment && !data.environmentTexturePath.empty() && state.assetPipeline)
-    {
-        const LPTEXTURE sourceTexture = LoadTexture(data.environmentTexturePath.c_str());
-        if (sourceTexture.IsValid())
-        {
-            state.assetPipeline->UploadPendingGpuAssets();
-
-            engine::renderer::EnvironmentDesc envDesc{};
-            envDesc.mode          = engine::renderer::EnvironmentMode::Texture;
-            envDesc.sourceTexture = sourceTexture;
-            envDesc.intensity     = data.environmentIntensity;
-            envDesc.enableIBL     = data.environmentEnableIBL;
-            envDesc.removeSunFromLighting = data.environmentRemoveSunFromLighting;
-
-            engine::renderer::RenderSystem& rs = state.renderLoop.GetRenderSystem();
-            const engine::renderer::EnvironmentHandle next = rs.CreateEnvironment(envDesc);
-            if (next.IsValid())
-            {
-                const engine::renderer::EnvironmentHandle prev = state.activeEnvironment;
-                state.activeEnvironment = next;
-                rs.SetActiveEnvironment(next);
-                if (prev.IsValid()) rs.DestroyEnvironment(prev);
-
-                engine::Debug::Log("krom.h: environment '%s' intensity=%.2f ibl=%s (von Game-Kamera)",
-                    data.environmentTexturePath.c_str(), data.environmentIntensity,
-                    gameCameraWantsSkybox ? "true" : "false");
-            }
-            else
-            {
-                engine::Debug::LogWarning("krom.h: environment konnte nicht erstellt werden: %s",
-                    data.environmentTexturePath.c_str());
-            }
-        }
-        else
-        {
-            engine::Debug::LogWarning("krom.h: environment-Textur nicht gefunden: %s",
-                data.environmentTexturePath.c_str());
-        }
-    }
-
-    // ── Kamera-Hintergrund ────────────────────────────────────────────────────
-    // backgroundMode und clearColor kommen direkt aus der Entity-Deserialisierung —
-    // kein Override nötig.
-}
-
-// Gemeinsamer Instantiierungspfad fuer LoadScene/LoadSceneAdditive und ActivateScene.
-static bool InstantiateSceneData(State& state, const KromSceneData& data, SceneRecord& record)
-{
-    if (!LoadComponentSerializedScene(state, data, record))
-        return false;
-
-    state.transformSystem.Update(*state.world);
-    state.boundsSystem.Update(*state.world);
-    ApplySceneEnvironment(state, data);
-    if (!record.name.empty())
-        state.eventBus.Emit<engine::events::SceneLoadedEvent>(record.name);
-    return true;
-}
-
-static LPSCENE LoadSceneFromData(State& state, KromSceneData data, bool additive,
-                                 const char* filePath = nullptr)
-{
-    if (!data.valid || !state.world)
-        return NULL_SCENE;
-
-    if (!additive)
-    {
-        // Trigger, Events, Physikkoerper, Klaenge und Partikel der alten Szene verwerfen.
-        state.game.ResetForSceneChange();
-        // Alle nicht-persistenten Scenes entladen
-        std::vector<uint32_t> toUnload;
-        for (const auto& [id, scene] : state.scenes)
-            if (!scene.persistent)
-                toUnload.push_back(id);
-        for (const uint32_t id : toUnload)
-            UnloadSceneById(state, id);
-    }
-
-    const uint32_t sceneId = state.nextSceneId++;
-    SceneRecord& record = state.scenes[sceneId];
-    record.name       = data.name;
-    record.path       = (filePath && filePath[0] != '\0') ? filePath : data.name;
-    record.persistent = data.persistent;
-    record.active     = true;
-
-    if (!InstantiateSceneData(state, data, record))
-    {
-        state.scenes.erase(sceneId);
-        return NULL_SCENE;
-    }
-
-    engine::Debug::Log("krom.h: scene '%s' geladen (%zu entities, persistent=%s)",
-        data.name.c_str(), record.rootEntities.size(),
-        record.persistent ? "true" : "false");
-
-    return LPSCENE{sceneId};
-}
-
-static KromSceneData LoadKsceneFile(const std::filesystem::path& assetRoot,
-                                     const char* path)
-{
-    const std::filesystem::path resolved =
-        std::filesystem::weakly_canonical(assetRoot / PathFromUtf8(path));
-    std::ifstream file(resolved);
-    if (!file)
-    {
-        engine::Debug::LogError("krom.h: kscene file not found: %s",
-            PathToUtf8(resolved).c_str());
-        return KromSceneData{};
-    }
-    const std::string json(std::istreambuf_iterator<char>(file),
-                           std::istreambuf_iterator<char>{});
-    return ParseKscene(json);
-}
 
 static std::string NormalizeProjectScenePath(std::string scenePath,
                                              const std::string& assetRootName)
@@ -2708,10 +627,10 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
 
     state.projectRoot = std::filesystem::weakly_canonical(projectPath.parent_path());
     state.projectSettings = engine::ReadProjectSettings(root);
-    LoadUserGameSettings(state);   // needs the window title
+    internal::LoadUserGameSettings(state.render, state.projectSettings.windowTitle);   // needs the window title
     state.game.SetProjectSettings(state.projectSettings);
     if (state.projectSettings.renderingStored)
-        ApplyProjectRenderSettings(state, state.projectSettings.rendering);
+        internal::ApplyProjectRenderSettings(state.render, state.projectSettings.rendering, state.editorLiveStateEnabled);
     state.runtimeStatePath = state.projectRoot / "editor" / "runtime-state.json";
     state.runtimeStateWriteTimer = 0.0f;
     if (state.editorLiveStateEnabled)
@@ -2729,7 +648,7 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
     if (const auto* shaderCache = root.Get("shaderCache"); shaderCache && shaderCache->IsString())
         SetShaderCacheDir(state.projectRoot / PathFromUtf8(shaderCache->AsString()));
 
-    state.projectScenePaths.clear();
+    state.sceneManager.projectScenePaths.clear();
     std::unordered_set<std::string> excludedScenes;
     if (const auto* excluded = root.Get("buildExclude"); excluded && excluded->IsArray())
         for (const auto& item : excluded->arrayVal)
@@ -2747,7 +666,7 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
             {
                 hasSceneOrder = true;
                 if (!excludedScenes.count(normalized))
-                    state.projectScenePaths.push_back(std::move(normalized));
+                    state.sceneManager.projectScenePaths.push_back(std::move(normalized));
             }
         }
     }
@@ -2758,51 +677,18 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
         {
             std::string normalized = NormalizeProjectScenePath(editorScene->AsString(), assetRootName);
             if (!normalized.empty() && !excludedScenes.count(normalized))
-                state.projectScenePaths.push_back(std::move(normalized));
+                state.sceneManager.projectScenePaths.push_back(std::move(normalized));
         }
     }
 
     engine::Debug::Log("krom.h: project loaded '%s' assetRoot='%s' scenes=%zu",
         PathToUtf8(projectPath).c_str(),
         PathToUtf8(state.assetRoot).c_str(),
-        state.projectScenePaths.size());
+        state.sceneManager.projectScenePaths.size());
     return true;
 }
 
 // =============================================================================
-
-void ApplyMaterialRecursive(State& state, engine::ecs::World& world, LPENTITY entity, LPMATERIAL material)
-{
-    if (!world.IsAlive(entity))
-        return;
-
-    if (world.Has<engine::MeshComponent>(entity))
-    {
-        const LPMATERIAL runtimeMat = RealizeMaterialForEntity(state, entity, material);
-        if (!world.Has<engine::MaterialComponent>(entity))
-            world.Add<engine::MaterialComponent>(entity, engine::MaterialComponent{runtimeMat});
-        else
-            world.Get<engine::MaterialComponent>(entity)->material = runtimeMat;
-    }
-
-    if (const auto* children = world.Get<engine::ChildrenComponent>(entity))
-    {
-        for (const LPENTITY child : children->children)
-            ApplyMaterialRecursive(state, world, child, material);
-    }
-}
-
-bool BundleHasSkeletonsOrAnimations(const engine::assets::ImportedAssetBundle& bundle) noexcept
-{
-    if (!bundle.skeletons.empty() || !bundle.animations.empty())
-        return true;
-    for (const auto& mesh : bundle.meshes)
-    {
-        if (MeshHasSkinning(mesh))
-            return true;
-    }
-    return false;
-}
 
 void EnsureAnimationSystems(State& state)
 {
@@ -2819,6 +705,15 @@ void EnsureAnimationSystems(State& state)
             state.skinningSystem = std::make_unique<engine::addons::animation::SkinningSystem>(
                 *device, &state.assetRegistry);
     }
+}
+
+internal::AssetContext MakeAssetContext(State& state)
+{
+    return internal::AssetContext{
+        state.initialized, state.world.get(), state.assetPipeline.get(), state.assetRegistry,
+        state.transformSystem, state.boundsSystem, state.scriptAddonRegistry,
+        [] { EnsureAnimationSystems(Get()); },
+        MakeMaterialContext(state)};
 }
 
 void RegisterEngineComponents(State& state)
@@ -2859,11 +754,11 @@ bool RegisterEngineFeatures(State& state)
     forwardConfig.bloomThreshold = 1.0f;
     forwardConfig.bloomIntensity = kRuntimeBloomIntensity;
     forwardConfig.bloomBlurRadius = 1.0f;
-    forwardConfig.tonemapSettings = state.effectiveTonemapSettings;
-    forwardConfig.autoExposureStatus = state.autoExposureStatus;
-    forwardConfig.msaaSettings = state.msaaSettings;
-    forwardConfig.postAASettings = state.postAASettings;
-    forwardConfig.shadingSettings = state.shadingSettings;
+    forwardConfig.tonemapSettings = state.render.effectiveTonemapSettings;
+    forwardConfig.autoExposureStatus = state.render.autoExposureStatus;
+    forwardConfig.msaaSettings = state.render.msaaSettings;
+    forwardConfig.postAASettings = state.render.postAASettings;
+    forwardConfig.shadingSettings = state.render.shadingSettings;
     forwardConfig.mode = state.forwardPlusActive
         ? renderer::addons::forward::ForwardRendererMode::ForwardPlus
         : renderer::addons::forward::ForwardRendererMode::Forward;
@@ -2871,6 +766,7 @@ bool RegisterEngineFeatures(State& state)
     addons::shadow::ShadowFeatureConfig shadowConfig{};
     shadowConfig.maxShadowLights = state.config.maxShadowLights;
     shadowConfig.maxShadowViews = state.config.maxShadowViews;
+    shadowConfig.quality = state.render.shadowQuality;
 
     renderer::RenderSystem& renderSystem = state.renderLoop.GetRenderSystem();
     if (!renderSystem.RegisterFeature(addons::mesh_renderer::CreateMeshRendererFeature()) ||
@@ -2884,7 +780,7 @@ bool RegisterEngineFeatures(State& state)
 
     if (state.config.enableGtao && ToBackend(state.config.backend) != BackendType::OpenGL)
     {
-        if (!renderSystem.RegisterFeature(renderer::addons::gtao::CreateGtaoFeature(&state.gtaoResources)))
+        if (!renderSystem.RegisterFeature(renderer::addons::gtao::CreateGtaoFeature(&state.render.gtaoResources)))
         {
             Debug::LogError("krom.h: failed to register GTAO feature");
             return false;
@@ -2893,7 +789,7 @@ bool RegisterEngineFeatures(State& state)
 
     if (state.config.enableContactShadows && ToBackend(state.config.backend) != BackendType::OpenGL &&
         !renderSystem.RegisterFeature(renderer::addons::contact_shadow::CreateContactShadowFeature(
-            &state.contactShadowResources)))
+            &state.render.contactShadowResources)))
     {
         Debug::LogError("krom.h: failed to register contact shadow feature");
         return false;
@@ -2901,26 +797,26 @@ bool RegisterEngineFeatures(State& state)
 
     // SSR after GTAO: it adds to the scene composite GTAO creates.
     if (ToBackend(state.config.backend) != BackendType::OpenGL &&
-        !renderSystem.RegisterFeature(renderer::addons::ssr::CreateSsrFeature(&state.ssrResources)))
+        !renderSystem.RegisterFeature(renderer::addons::ssr::CreateSsrFeature(&state.render.ssrResources)))
     {
         Debug::LogError("krom.h: failed to register SSR feature");
         return false;
     }
 
-    if (!renderSystem.RegisterFeature(engine::addons::probes::CreateProbeFeature(&state.probeRuntime)))
+    if (!renderSystem.RegisterFeature(engine::addons::probes::CreateProbeFeature(&state.render.probeRuntime)))
     {
         Debug::LogError("krom.h: failed to register probe feature");
         return false;
     }
-    if (state.probeRuntime && !state.assetRoot.empty())
-        state.probeRuntime->SetAssetRoot(PathToUtf8(state.assetRoot));
+    if (state.render.probeRuntime && !state.assetRoot.empty())
+        state.render.probeRuntime->SetAssetRoot(PathToUtf8(state.assetRoot));
     // GTAO and the probes exist only now; LoadProject may have run before.
     if (state.projectSettings.renderingStored)
-        ApplyProjectRenderSettings(state, state.projectSettings.rendering);
+        internal::ApplyProjectRenderSettings(state.render, state.projectSettings.rendering, state.editorLiveStateEnabled);
     Debug::Log("krom.h: render quality '%s' (MSAA %u, post-AA %u, GTAO %d, SSR %d, contact shadows %d)%s",
                engine::RenderQualityLevelName(GetQualityLevel()), GetMsaa(), static_cast<unsigned>(GetPostAA()),
                GetGtaoEnabled() ? 1 : 0, GetSsrEnabled() ? 1 : 0, GetContactShadowsEnabled() ? 1 : 0,
-               state.userQualityLevel && !state.editorLiveStateEnabled ? ", player's level" : "");
+               state.render.userQualityLevel && !state.editorLiveStateEnabled ? ", player's level" : "");
 
     state.featuresRegistered = true;
     return true;
@@ -2987,11 +883,7 @@ bool InitializeRenderLoop(State& state)
     // validation (Vulkan layers, DX11 debug device); KROM_MSAA=<n> sets the start MSAA.
     if (const char* debugLayer = std::getenv("KROM_DEBUG_LAYER"); debugLayer && debugLayer[0] == '1')
         state.config.enableDebugLayer = true;
-    if (const char* msaa = std::getenv("KROM_MSAA"); msaa && state.msaaSettings)
-        state.msaaSettings->sampleCount = engine::renderer::addons::forward::NormalizeMsaaSamples(
-            static_cast<uint32_t>(std::strtoul(msaa, nullptr, 10)));
-    if (const char* postAA = std::getenv("KROM_POST_AA"); postAA && state.postAASettings)
-        (void)engine::renderer::addons::forward::ParsePostAAMode(postAA, state.postAASettings->mode);
+    internal::ApplyRenderEnvironmentOverrides(state.render);
 
     engine::renderer::IDevice::DeviceDesc deviceDesc{};
     deviceDesc.enableDebugLayer = state.config.enableDebugLayer;
@@ -3052,9 +944,9 @@ bool InitializeTonemapMaterial(State& state)
     }
 
     const engine::ShaderHandle tonemapVs =
-        LoadEngineShader(state, tonemapVsPath, engine::assets::ShaderStage::Vertex);
+        internal::LoadEngineShader(MakeMaterialContext(state), tonemapVsPath, engine::assets::ShaderStage::Vertex);
     const engine::ShaderHandle tonemapPs =
-        LoadEngineShader(state, tonemapPsPath, engine::assets::ShaderStage::Fragment);
+        internal::LoadEngineShader(MakeMaterialContext(state), tonemapPsPath, engine::assets::ShaderStage::Fragment);
     if (!tonemapVs.IsValid() || !tonemapPs.IsValid())
     {
         engine::Debug::LogError("krom.h: failed to load tonemap shaders from asset root '%s'",
@@ -3203,8 +1095,8 @@ void SetAssetRoot(const std::filesystem::path& path)
     State& state = Get();
     state.assetRoot = path;
     state.game.SetAssetRoot(path);
-    if (state.probeRuntime)
-        state.probeRuntime->SetAssetRoot(PathToUtf8(path));
+    if (state.render.probeRuntime)
+        state.render.probeRuntime->SetAssetRoot(PathToUtf8(path));
     if (state.assetPipeline)
         state.assetPipeline->SetAssetRoot(path);
 
@@ -3239,12 +1131,12 @@ void ApplyProjectGraphicsSettings(GraphicsConfig& config)
 void SetEditorLiveStateEnabled(bool enabled)
 {
     State& state = Get();
-    const bool userLevelChanges = state.userQualityLevel && state.editorLiveStateEnabled != enabled;
+    const bool userLevelChanges = state.render.userQualityLevel && state.editorLiveStateEnabled != enabled;
     state.editorLiveStateEnabled = enabled;
     state.runtimeStateWriteTimer = 0.0f;
     // Runs started from the editor show the project's options, not a player's level.
     if (userLevelChanges && state.projectSettings.renderingStored)
-        ApplyProjectRenderSettings(state, state.projectSettings.rendering);
+        internal::ApplyProjectRenderSettings(state.render, state.projectSettings.rendering, state.editorLiveStateEnabled);
 
     if (!enabled || state.projectRoot.empty())
         return;
@@ -3407,38 +1299,32 @@ bool AppRunning()
     return state.running && !state.renderLoop.ShouldExit();
 }
 
+// =============================================================================
+// Entities (KromEntityApi.cpp)
+// =============================================================================
+
 LPENTITY CreateEntity(const char* name)
 {
-    State& state = Get();
-    if (!state.world)
-        return NULL_LPENTITY;
-
-    const LPENTITY entity = state.world->CreateEntity();
-    state.world->Add<engine::TransformComponent>(entity);
-    state.world->Add<engine::WorldTransformComponent>(entity);
-    state.world->Add<engine::ActiveComponent>(entity);
-    if (name && name[0] != '\0')
-        state.world->Add<engine::NameComponent>(entity, engine::NameComponent{name});
-    return entity;
+    return internal::CreateEntity(Get().world.get(), name);
 }
 
 bool IsAlive(LPENTITY entity)
 {
-    State& state = Get();
-    return state.world && state.world->IsAlive(entity);
+    return internal::IsAlive(Get().world.get(), entity);
 }
 
+// Stays here: it also clears scene-manager and surface state of the entity.
 bool DestroyEntity(LPENTITY entity)
 {
     State& state = Get();
     if (!state.world || !state.world->IsAlive(entity))
         return false;
 
-    state.persistentEntityIds.erase(entity.value);
+    state.sceneManager.persistentEntityIds.erase(entity.value);
     std::erase_if(state.surfaces, [&](const auto& item) {
         return item.second.entity == entity;
     });
-    DestroyEntityRecursive(*state.world, entity);
+    internal::DestroyEntityRecursive(*state.world, entity);
     state.transformSystem.Update(*state.world);
     state.boundsSystem.Update(*state.world);
     return true;
@@ -3446,282 +1332,87 @@ bool DestroyEntity(LPENTITY entity)
 
 bool SetName(LPENTITY entity, const char* name)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    const std::string value = name ? name : "";
-    if (auto* nameComponent = state.world->Get<engine::NameComponent>(entity))
-        nameComponent->name = value;
-    else
-        state.world->Add<engine::NameComponent>(entity, engine::NameComponent{value});
-    return true;
+    return internal::SetName(Get().world.get(), entity, name);
 }
 
 const char* GetName(LPENTITY entity)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return "";
-    if (const auto* nameComponent = state.world->Get<engine::NameComponent>(entity))
-        return nameComponent->name.c_str();
-    return "";
+    return internal::GetName(Get().world.get(), entity);
 }
 
 bool SetLayer(LPENTITY entity, uint32_t layerMask)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity)) return false;
-    if (auto* mesh = state.world->Get<engine::MeshComponent>(entity))
-    { mesh->layerMask = layerMask; return true; }
-    return false;
+    return internal::SetLayer(Get().world.get(), entity, layerMask);
 }
 
 uint32_t GetLayer(LPENTITY entity)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity)) return engine::renderer::LAYER_DEFAULT;
-    if (const auto* mesh = state.world->Get<engine::MeshComponent>(entity))
-        return mesh->layerMask;
-    return engine::renderer::LAYER_DEFAULT;
+    return internal::GetLayer(Get().world.get(), entity);
 }
 
 bool SetCameraLayers(LPENTITY camera, uint32_t cullingMask)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(camera)) return false;
-    if (auto* cam = state.world->Get<engine::CameraComponent>(camera))
-    { cam->cullingMask = cullingMask; return true; }
-    return false;
+    return internal::SetCameraLayers(Get().world.get(), camera, cullingMask);
 }
 
 uint32_t GetCameraLayers(LPENTITY camera)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(camera)) return engine::renderer::LAYER_ALL;
-    if (const auto* cam = state.world->Get<engine::CameraComponent>(camera))
-        return cam->cullingMask;
-    return engine::renderer::LAYER_ALL;
+    return internal::GetCameraLayers(Get().world.get(), camera);
 }
 
 bool SetTag(LPENTITY entity, const char* tag)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity)) return false;
-    const std::string value = tag ? tag : "";
-    if (!state.world->Has<engine::TagComponent>(entity))
-        state.world->Add<engine::TagComponent>(entity, engine::TagComponent{value});
-    else if (auto* tc = state.world->Get<engine::TagComponent>(entity))
-        tc->tag = value;
-    return true;
+    return internal::SetTag(Get().world.get(), entity, tag);
 }
 
 const char* GetTag(LPENTITY entity)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity)) return "";
-    if (const auto* tc = state.world->Get<engine::TagComponent>(entity))
-        return tc->tag.c_str();
-    return "";
+    return internal::GetTag(Get().world.get(), entity);
 }
 
 LPENTITY FindEntityByTag(const char* tag)
 {
-    State& state = Get();
-    if (!state.world || !tag) return NULL_LPENTITY;
-    LPENTITY found = NULL_LPENTITY;
-    state.world->View<engine::TagComponent>([&](LPENTITY id, const engine::TagComponent& tc)
-    {
-        if (!found.IsValid() && tc.tag == tag)
-            found = id;
-    });
-    return found;
+    return internal::FindEntityByTag(Get().world.get(), tag);
 }
 
 LPENTITY FindChild(LPENTITY rootEntity, const char* name)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(rootEntity) || !name)
-        return NULL_LPENTITY;
-
-    LPENTITY found = NULL_LPENTITY;
-    std::function<void(LPENTITY)> search = [&](LPENTITY entity)
-    {
-        if (found.IsValid() || !state.world->IsAlive(entity))
-            return;
-
-        if (const auto* nameComponent = state.world->Get<engine::NameComponent>(entity))
-        {
-            if (nameComponent->name == name)
-            {
-                found = entity;
-                return;
-            }
-        }
-
-        if (const auto* children = state.world->Get<engine::ChildrenComponent>(entity))
-        {
-            for (const LPENTITY child : children->children)
-                search(child);
-        }
-    };
-    search(rootEntity);
-    return found;
+    return internal::FindChild(Get().world.get(), rootEntity, name);
 }
 
 int CountChildren(LPENTITY entity)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return 0;
-    if (const auto* children = state.world->Get<engine::ChildrenComponent>(entity))
-        return static_cast<int>(children->children.size());
-    return 0;
+    return internal::CountChildren(Get().world.get(), entity);
 }
 
 LPENTITY GetChild(LPENTITY entity, int index)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity) || index < 0)
-        return NULL_LPENTITY;
-    const auto* children = state.world->Get<engine::ChildrenComponent>(entity);
-    if (!children)
-        return NULL_LPENTITY;
-    const size_t childIndex = static_cast<size_t>(index);
-    if (childIndex >= children->children.size())
-        return NULL_LPENTITY;
-    return children->children[childIndex];
+    return internal::GetChild(Get().world.get(), entity, index);
 }
 
 bool SetVisible(LPENTITY entity, bool visible, bool recursive)
 {
-    // Nur Rendering an/aus — Entity laeuft weiter durch Systeme und Transform.
-    // Fuer vollstaendige Deaktivierung: SetActive() verwenden.
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    std::function<void(LPENTITY)> apply = [&](LPENTITY current)
-    {
-        if (!state.world->IsAlive(current))
-            return;
-
-        state.world->SetComponent(current, engine::VisibilityComponent{visible});
-        if (auto* mesh = state.world->Get<engine::MeshComponent>(current))
-            mesh->visible = visible;
-
-        if (!recursive)
-            return;
-        if (const auto* children = state.world->Get<engine::ChildrenComponent>(current))
-        {
-            // Adding state to a descendant can migrate an ancestor's archetype slot.
-            const auto descendants = children->children;
-            for (const LPENTITY child : descendants)
-                apply(child);
-        }
-    };
-    apply(entity);
-    return true;
+    return internal::SetVisible(Get().world.get(), entity, visible, recursive);
 }
 
 bool SetActive(LPENTITY entity, bool active, bool recursive)
 {
-    // Vollstaendige Deaktivierung — Entity wird aus Rendering UND Systemen entfernt.
-    // Fuer reines Verstecken: SetVisible() verwenden.
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    std::function<void(LPENTITY)> apply = [&](LPENTITY current)
-    {
-        if (!state.world->IsAlive(current))
-            return;
-
-        if (auto* a = state.world->Get<engine::ActiveComponent>(current))
-            a->active = active;
-        else
-            state.world->Add<engine::ActiveComponent>(current, engine::ActiveComponent{active});
-
-        if (!recursive)
-            return;
-        if (const auto* children = state.world->Get<engine::ChildrenComponent>(current))
-        {
-            // Adding state to a descendant can migrate an ancestor's archetype slot.
-            const auto descendants = children->children;
-            for (const LPENTITY child : descendants)
-                apply(child);
-        }
-    };
-    apply(entity);
-    return true;
+    return internal::SetActive(Get().world.get(), entity, active, recursive);
 }
 
 bool SetParent(LPENTITY child, LPENTITY parent, bool keepWorldTransform)
 {
-    State& state = Get();
-    if (!state.world ||
-        !state.world->IsAlive(child) ||
-        !state.world->IsAlive(parent) ||
-        child == parent ||
-        IsDescendantOf(*state.world, parent, child))
-    {
-        return false;
-    }
-
-    const CapturedTransform worldTransform = keepWorldTransform
-        ? CaptureWorldTransform(state, child)
-        : CapturedTransform{};
-
-    DetachEntityFromParent(*state.world, child);
-    state.world->Add<engine::ParentComponent>(child, parent);
-    if (!state.world->Has<engine::ChildrenComponent>(parent))
-        state.world->Add<engine::ChildrenComponent>(parent);
-    state.world->Get<engine::ChildrenComponent>(parent)->Add(child);
-
-    if (keepWorldTransform)
-        ApplyLocalFromWorld(state, child, worldTransform);
-    else if (auto* transform = state.world->Get<engine::TransformComponent>(child))
-        transform->dirty = true;
-
-    state.transformSystem.Update(*state.world);
-    state.boundsSystem.Update(*state.world);
-    return true;
+    return internal::SetParent(MakeEntityContext(Get()), child, parent, keepWorldTransform);
 }
 
 bool Detach(LPENTITY child, bool keepWorldTransform)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(child))
-        return false;
-
-    const CapturedTransform worldTransform = keepWorldTransform
-        ? CaptureWorldTransform(state, child)
-        : CapturedTransform{};
-
-    DetachEntityFromParent(*state.world, child);
-    if (keepWorldTransform)
-        ApplyLocalFromWorld(state, child, worldTransform);
-    else if (auto* transform = state.world->Get<engine::TransformComponent>(child))
-        transform->dirty = true;
-
-    state.transformSystem.Update(*state.world);
-    state.boundsSystem.Update(*state.world);
-    return true;
+    return internal::Detach(MakeEntityContext(Get()), child, keepWorldTransform);
 }
 
 bool SetPosition(LPENTITY entity, const engine::math::Vec3& position)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    if (auto* transform = state.world->Get<engine::TransformComponent>(entity))
-    {
-        transform->localPosition = position;
-        transform->dirty = true;
-        return true;
-    }
-    return false;
+    return internal::SetPosition(Get().world.get(), entity, position);
 }
 
 bool SetPosition(LPENTITY entity, float x, float y, float z)
@@ -3731,60 +1422,17 @@ bool SetPosition(LPENTITY entity, float x, float y, float z)
 
 bool SetRotationEulerDeg(LPENTITY entity, float pitch, float yaw, float roll)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    if (auto* transform = state.world->Get<engine::TransformComponent>(entity))
-    {
-        transform->SetEulerDeg(pitch, yaw, roll);
-        return true;
-    }
-    return false;
+    return internal::SetRotationEulerDeg(Get().world.get(), entity, pitch, yaw, roll);
 }
 
 engine::math::Vec3 GetRotationEulerDeg(LPENTITY entity)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return {};
-
-    // WorldTransform bevorzugen (nach TransformSystem.Update() immer aktuell).
-    // Quaternion → Euler (Reihenfolge YXZ = Yaw→Pitch→Roll = typisch für Kameras).
-    const engine::math::Quat* q = nullptr;
-    if (const auto* wt = state.world->Get<engine::WorldTransformComponent>(entity))
-        q = &wt->rotation;
-    else if (const auto* tr = state.world->Get<engine::TransformComponent>(entity))
-        q = &tr->localRotation;
-    if (!q)
-        return {};
-
-    const float sinP = 2.0f * (q->w * q->x - q->z * q->y);
-    const float pitch = std::abs(sinP) >= 0.9999f
-        ? std::copysign(90.0f, sinP)
-        : engine::math::RAD_TO_DEG * std::asin(std::clamp(sinP, -1.0f, 1.0f));
-    const float yaw = engine::math::RAD_TO_DEG *
-        std::atan2(2.0f * (q->w * q->y + q->x * q->z),
-                   1.0f - 2.0f * (q->y * q->y + q->x * q->x));
-    const float roll = engine::math::RAD_TO_DEG *
-        std::atan2(2.0f * (q->w * q->z + q->x * q->y),
-                   1.0f - 2.0f * (q->x * q->x + q->z * q->z));
-    return {pitch, yaw, roll};
+    return internal::GetRotationEulerDeg(Get().world.get(), entity);
 }
 
 bool SetScale(LPENTITY entity, const engine::math::Vec3& scale)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    if (auto* transform = state.world->Get<engine::TransformComponent>(entity))
-    {
-        transform->localScale = scale;
-        transform->dirty = true;
-        return true;
-    }
-    return false;
+    return internal::SetScale(Get().world.get(), entity, scale);
 }
 
 bool SetScale(LPENTITY entity, float x, float y, float z)
@@ -3799,32 +1447,12 @@ bool SetScale(LPENTITY entity, float uniformScale)
 
 bool MoveEntity(LPENTITY entity, float x, float y, float z)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    auto* transform = state.world->Get<engine::TransformComponent>(entity);
-    if (!transform)
-        return false;
-
-    const engine::math::Vec3 localOffset = transform->localRotation.Rotate({x, y, z});
-    transform->localPosition += localOffset;
-    transform->dirty = true;
-    return true;
+    return internal::MoveEntity(Get().world.get(), entity, x, y, z);
 }
 
 bool TurnEntity(LPENTITY entity, float pitch, float yaw, float roll)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    auto* transform = state.world->Get<engine::TransformComponent>(entity);
-    if (!transform)
-        return false;
-
-    transform->RotateLocalEulerDeg(pitch, yaw, roll);
-    return true;
+    return internal::TurnEntity(Get().world.get(), entity, pitch, yaw, roll);
 }
 
 bool GetWorldBounds(LPENTITY entity,
@@ -3832,65 +1460,17 @@ bool GetWorldBounds(LPENTITY entity,
                     engine::math::Vec3& outExtents,
                     float& outBoundingSphere)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    engine::math::Vec3 boundsMin{};
-    engine::math::Vec3 boundsMax{};
-    bool hasBounds = false;
-    if (!CollectWorldBoundsRecursive(*state.world, entity, boundsMin, boundsMax, hasBounds))
-        return false;
-
-    outCenter = (boundsMin + boundsMax) * 0.5f;
-    outExtents = (boundsMax - boundsMin) * 0.5f;
-    outBoundingSphere = outExtents.Length();
-    return true;
+    return internal::GetWorldBounds(Get().world.get(), entity, outCenter, outExtents, outBoundingSphere);
 }
 
 bool LookAt(LPENTITY entity, const engine::math::Vec3& target, const engine::math::Vec3& up)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    auto* transform = state.world->Get<engine::TransformComponent>(entity);
-    if (!transform)
-        return false;
-
-    const engine::math::Vec3 position = ResolveEntityPosition(state, entity);
-    const engine::math::Vec3 forward = (target - position).Normalized();
-    if (forward.LengthSq() <= engine::math::EPSILON)
-        return false;
-
-    engine::math::Vec3 right = engine::math::Vec3::Cross(forward, up).Normalized();
-    if (right.LengthSq() <= engine::math::EPSILON)
-        right = engine::math::Vec3::Cross(forward, engine::math::Vec3::Right()).Normalized();
-    if (right.LengthSq() <= engine::math::EPSILON)
-        return false;
-
-    const engine::math::Vec3 correctedUp = engine::math::Vec3::Cross(right, forward).Normalized();
-    const engine::math::Vec3 back = -forward;
-
-    engine::math::Mat4 rotation = engine::math::Mat4::Identity();
-    rotation.m[0][0] = right.x;
-    rotation.m[0][1] = right.y;
-    rotation.m[0][2] = right.z;
-    rotation.m[1][0] = correctedUp.x;
-    rotation.m[1][1] = correctedUp.y;
-    rotation.m[1][2] = correctedUp.z;
-    rotation.m[2][0] = back.x;
-    rotation.m[2][1] = back.y;
-    rotation.m[2][2] = back.z;
-
-    transform->localRotation = QuatFromRotationMatrix(rotation).Normalized();
-    transform->dirty = true;
-    return true;
+    return internal::LookAt(Get().world.get(), entity, target, up);
 }
 
 bool LookAt(LPENTITY entity, LPENTITY targetEntity, const engine::math::Vec3& up)
 {
-    return LookAt(entity, ResolveEntityPosition(Get(), targetEntity), up);
+    return internal::LookAt(Get().world.get(), entity, targetEntity, up);
 }
 
 LPENTITY CreateCamera(const char* name,
@@ -3898,22 +1478,7 @@ LPENTITY CreateCamera(const char* name,
                       float fovYDeg,
                       bool isMainCamera)
 {
-    State& state = Get();
-    const LPENTITY entity = CreateEntity(name);
-    if (!entity.IsValid())
-        return NULL_LPENTITY;
-
-    SetPosition(entity, position);
-    SetRotationEulerDeg(entity, -10.0f, 0.0f, 0.0f);
-
-    engine::CameraComponent camera{};
-    camera.projection = engine::ProjectionType::Perspective;
-    camera.fovYDeg = fovYDeg;
-    camera.nearPlane = 0.05f;
-    camera.farPlane = 1000.0f;
-    camera.isMainCamera = isMainCamera;
-    state.world->Add<engine::CameraComponent>(entity, camera);
-    return entity;
+    return internal::CreateCamera(Get().world.get(), name, position, fovYDeg, isMainCamera);
 }
 
 LPENTITY CreateDirectionalLight(const char* name,
@@ -3922,26 +1487,7 @@ LPENTITY CreateDirectionalLight(const char* name,
                                 const engine::math::Vec3& color,
                                 float intensity)
 {
-    State& state = Get();
-    const LPENTITY entity = CreateEntity(name);
-    if (!entity.IsValid())
-        return NULL_LPENTITY;
-
-    SetPosition(entity, position);
-    SetRotationEulerDeg(entity, eulerDeg.x, eulerDeg.y, eulerDeg.z);
-
-    engine::LightComponent light{};
-    light.type = engine::LightType::Directional;
-    light.color = color;
-    light.intensity = intensity;
-    light.castShadows = true;
-    light.shadowSettings.enabled = true;
-    light.shadowSettings.resolution = 2048u;
-    light.shadowSettings.bias = 0.0015f;
-    light.shadowSettings.normalBias = 0.001f;
-    light.shadowSettings.maxDistance = 100.0f;
-    state.world->Add<engine::LightComponent>(entity, light);
-    return entity;
+    return internal::CreateDirectionalLight(Get().world.get(), name, position, eulerDeg, color, intensity);
 }
 
 LPENTITY CreatePointLight(const char* name,
@@ -3950,26 +1496,7 @@ LPENTITY CreatePointLight(const char* name,
                           float intensity,
                           float range)
 {
-    State& state = Get();
-    const LPENTITY entity = CreateEntity(name);
-    if (!entity.IsValid())
-        return NULL_LPENTITY;
-
-    SetPosition(entity, position);
-
-    engine::LightComponent light{};
-    light.type = engine::LightType::Point;
-    light.color = color;
-    light.intensity = intensity;
-    light.range = range;
-    light.castShadows = true;
-    light.shadowSettings.enabled = true;
-    light.shadowSettings.resolution = 1024u;
-    light.shadowSettings.bias = 0.0015f;
-    light.shadowSettings.normalBias = 0.001f;
-    light.shadowSettings.maxDistance = range;
-    state.world->Add<engine::LightComponent>(entity, light);
-    return entity;
+    return internal::CreatePointLight(Get().world.get(), name, position, color, intensity, range);
 }
 
 LPENTITY CreateSpotLight(const char* name,
@@ -3981,236 +1508,33 @@ LPENTITY CreateSpotLight(const char* name,
                          float innerDeg,
                          float outerDeg)
 {
-    State& state = Get();
-    const LPENTITY entity = CreateEntity(name);
-    if (!entity.IsValid())
-        return NULL_LPENTITY;
-
-    SetPosition(entity, position);
-    SetRotationEulerDeg(entity, eulerDeg.x, eulerDeg.y, eulerDeg.z);
-
-    engine::LightComponent light{};
-    light.type = engine::LightType::Spot;
-    light.color = color;
-    light.intensity = intensity;
-    light.range = range;
-    light.spotInnerDeg = innerDeg;
-    light.spotOuterDeg = outerDeg;
-    light.castShadows = true;
-    light.shadowSettings.enabled = true;
-    light.shadowSettings.resolution = 1024u;
-    light.shadowSettings.bias = 0.0015f;
-    light.shadowSettings.normalBias = 0.001f;
-    light.shadowSettings.maxDistance = range;
-    state.world->Add<engine::LightComponent>(entity, light);
-    return entity;
+    return internal::CreateSpotLight(Get().world.get(), name, position, eulerDeg, color, intensity, range, innerDeg, outerDeg);
 }
+
+// =============================================================================
+// Assets: model import, loading, materials, assignment, procedural meshes
+// (KromAssetApi.cpp)
+// =============================================================================
 
 LPENTITY CreateEntityFromAsset(const char* path, const char* name)
 {
-    State& state = Get();
-    if (!state.world || !state.assetPipeline || !path || path[0] == '\0')
-        return NULL_LPENTITY;
-
-    // Format-agnostisch: AssetPipeline wählt den passenden registrierten Importer.
-    // Ob GLB, FBX, OBJ oder ein anderes Format — der Wrapper muss es nicht wissen.
-    engine::assets::ImportedAssetBundle bundle = state.assetPipeline->ImportBundle(path);
-
-    if (bundle.Ok())
-    {
-        const std::filesystem::path logicalPath = PathFromUtf8(path);
-
-        const engine::math::Vec3 modelCenter = ComputeImportedModelCenter(bundle);
-        const bool needsAnimationSystems = BundleHasSkeletonsOrAnimations(bundle);
-        if (needsAnimationSystems)
-            EnsureAnimationSystems(state);
-
-        engine::assets::MeshAsset* sharedFallbackMesh =
-            !bundle.meshes.empty() ? &bundle.meshes[0] : nullptr;
-        const engine::assets::MaterialAsset* sharedFallbackAsset =
-            !bundle.materials.empty() ? &bundle.materials[0] : nullptr;
-        const std::string sharedFallbackName =
-            ((name && name[0] != '\0') ? std::string(name) : PathToUtf8(logicalPath.stem())) + "_SharedRuntimeMaterial";
-        const engine::MaterialHandle sharedFallbackMaterial =
-            sharedFallbackMesh
-                ? CreateRuntimeLitMaterialFromAssets(
-                    state, *sharedFallbackMesh, sharedFallbackAsset, sharedFallbackName.c_str())
-                : engine::MaterialHandle::Invalid();
-
-        engine::addons::prefab::PrefabBuildOptions buildOptions;
-        buildOptions.name = (name && name[0] != '\0') ? name : PathToUtf8(logicalPath.stem());
-        buildOptions.createSyntheticRoot = true;
-        buildOptions.playFirstAnimation = true;
-        buildOptions.loopAnimations = true;
-
-        engine::addons::prefab::PrefabAsset prefab =
-            engine::addons::prefab::BuildPrefabFromImportedBundle(
-                std::move(bundle), state.assetRegistry, buildOptions);
-
-        for (engine::addons::prefab::PrefabEntityRecord& record : prefab.records)
-        {
-            if (record.parentIndex == static_cast<int32_t>(prefab.rootIndex))
-                record.localPosition -= modelCenter;
-
-            if (record.mesh.IsValid())
-            {
-                auto* meshAsset = state.assetRegistry.meshes.Get(record.mesh);
-                const auto* materialAsset = record.material.IsValid()
-                    ? state.assetRegistry.materials.Get(record.material)
-                    : nullptr;
-                if (meshAsset)
-                {
-                    const std::string runtimeName = !record.name.empty()
-                        ? record.name + "_RuntimeMaterial"
-                        : buildOptions.name + "_RuntimeMaterial";
-                    const engine::MaterialHandle runtimeMaterial =
-                        CreateRuntimeLitMaterialFromAssets(state, *meshAsset, materialAsset, runtimeName.c_str());
-                    record.material = runtimeMaterial.IsValid() ? runtimeMaterial : sharedFallbackMaterial;
-                    if (!record.material.IsValid())
-                        engine::Debug::LogError("krom.h: kein Material für Node '%s' in '%s'",
-                            record.name.c_str(), path);
-                }
-            }
-        }
-
-        engine::addons::prefab::PrefabInstantiateOptions options{};
-        options.scriptRegistry = &state.scriptAddonRegistry;
-        const engine::addons::prefab::PrefabInstance instance =
-            engine::addons::prefab::InstantiatePrefab(*state.world, prefab, options);
-        if (!instance.IsValid())
-        {
-            engine::Debug::LogError("krom.h: Instantiierung fehlgeschlagen: '%s'", path);
-            return NULL_LPENTITY;
-        }
-        for (const LPENTITY instantiatedEntity : instance.entities)
-        {
-            if (instantiatedEntity.IsValid() && state.world->Has<engine::MeshComponent>(instantiatedEntity))
-                engine::mesh_renderer::UpdateLocalBoundsForEntity(*state.world, instantiatedEntity, state.assetRegistry);
-        }
-        state.transformSystem.Update(*state.world);
-        state.boundsSystem.Update(*state.world);
-        return instance.root;
-    }
-
-    // Fallback: kein Importer registriert → einfaches Single-Mesh-Entity
-    engine::Debug::Log("krom.h: kein Bundle-Importer für '%s', lade als einfaches Mesh", path);
-    const LPENTITY entity = CreateEntity(name ? name : path);
-    if (!entity.IsValid())
-        return NULL_LPENTITY;
-    return SetMeshFromAsset(entity, path) ? entity : NULL_LPENTITY;
+    return internal::CreateEntityFromAsset(MakeAssetContext(Get()), path, name);
 }
 
 bool PrintAssetTree(const char* path)
 {
-    State& state = Get();
-    if (!state.assetPipeline || !path || path[0] == '\0')
-    {
-        engine::Debug::LogError("krom.h: PrintAssetTree requires Graphics3D/Graphics and a valid path");
-        return false;
-    }
-
-    const engine::assets::ImportedAssetBundle bundle = state.assetPipeline->ImportBundle(path);
-    if (!bundle.Ok())
-    {
-        engine::Debug::LogError("krom.h: PrintAssetTree import failed for '%s': %s",
-            path, bundle.error.c_str());
-        return false;
-    }
-
-    engine::Debug::Log("Asset tree: %s", path);
-    engine::Debug::Log("  nodes=%zu meshes=%zu materials=%zu skeletons=%zu animations=%zu",
-        bundle.nodes.size(),
-        bundle.meshes.size(),
-        bundle.materials.size(),
-        bundle.skeletons.size(),
-        bundle.animations.size());
-
-    std::vector<std::vector<size_t>> children(bundle.nodes.size());
-    std::vector<size_t> roots;
-    for (size_t i = 0; i < bundle.nodes.size(); ++i)
-    {
-        const int32_t parent = bundle.nodes[i].parentIndex;
-        if (parent >= 0 && static_cast<size_t>(parent) < bundle.nodes.size())
-            children[static_cast<size_t>(parent)].push_back(i);
-        else
-            roots.push_back(i);
-    }
-
-    const auto printMesh = [&](int32_t meshIndex, const std::string& indent)
-    {
-        if (meshIndex < 0 || static_cast<size_t>(meshIndex) >= bundle.meshes.size())
-            return;
-
-        const engine::assets::MeshAsset& mesh = bundle.meshes[static_cast<size_t>(meshIndex)];
-        engine::Debug::Log("%s  mesh[%d] submeshes=%zu materials=%zu",
-            indent.c_str(), meshIndex, mesh.submeshes.size(), mesh.materialHandles.size());
-        for (size_t si = 0; si < mesh.submeshes.size(); ++si)
-        {
-            const engine::assets::SubMeshData& submesh = mesh.submeshes[si];
-            engine::Debug::Log("%s    submesh[%zu] vertices=%zu indices=%zu materialIndex=%u",
-                indent.c_str(),
-                si,
-                submesh.positions.size() / 3u,
-                submesh.indices.size(),
-                submesh.materialIndex);
-        }
-    };
-
-    std::function<void(size_t, std::string)> printNode =
-        [&](size_t nodeIndex, std::string indent)
-    {
-        const engine::assets::ImportedSceneNode& node = bundle.nodes[nodeIndex];
-        const char* nodeName = node.name.empty() ? "<unnamed>" : node.name.c_str();
-        engine::Debug::Log("%snode[%zu] '%s' parent=%d mesh=%d skin=%d",
-            indent.c_str(),
-            nodeIndex,
-            nodeName,
-            node.parentIndex,
-            node.meshIndex,
-            node.skinIndex);
-        printMesh(node.meshIndex, indent);
-        for (const size_t child : children[nodeIndex])
-            printNode(child, indent + "  ");
-    };
-
-    if (bundle.nodes.empty())
-    {
-        for (size_t meshIndex = 0; meshIndex < bundle.meshes.size(); ++meshIndex)
-            printMesh(static_cast<int32_t>(meshIndex), "  ");
-    }
-    else
-    {
-        for (const size_t root : roots)
-            printNode(root, "  ");
-    }
-
-    for (size_t i = 0; i < bundle.materials.size(); ++i)
-    {
-        const engine::assets::MaterialAsset& material = bundle.materials[i];
-        engine::Debug::Log("  material[%zu] name='%s' template='%s' baseColor='%s' normal='%s' orm='%s'",
-            i,
-            material.debugName.empty() ? "<unnamed>" : material.debugName.c_str(),
-            material.templateName.c_str(),
-            material.baseColorTexture.path.c_str(),
-            material.normalTexture.path.c_str(),
-            material.metallicRoughnessTexture.path.c_str());
-    }
-
-    return true;
+    return internal::PrintAssetTree(Get().assetPipeline.get(), path);
 }
 
 LPMESH LoadMesh(const char* path)
 {
-    return (Get().assetPipeline && path) ? Get().assetPipeline->LoadMesh(path) : NULL_MESH;
+    return internal::LoadMesh(Get().assetPipeline.get(), path);
 }
 
 LPTEXTURE LoadTexture(const char* path)
 {
     State& state = Get();
-    const LPTEXTURE texture = (state.assetPipeline && path) ? state.assetPipeline->LoadTexture(path) : NULL_TEXTURE;
-    if (texture.IsValid() && path && path[0] != '\0')
-        state.texturePaths[texture.value] = path;
-    return texture;
+    return internal::LoadTexture(state.assetPipeline.get(), state.texturePaths, path);
 }
 
 LPMATERIAL CreateTextureMaterial(const char* albedoTexturePath,
@@ -4219,17 +1543,8 @@ LPMATERIAL CreateTextureMaterial(const char* albedoTexturePath,
                                  float roughness,
                                  float metallic)
 {
-    State& state = Get();
-    if (!state.initialized)
-        return NULL_MATERIAL;
-
-    if (materialModel != MaterialModel::Lit)
-    {
-        engine::Debug::LogWarning(
-            "krom.h: CreateTextureMaterial currently supports Lit for EntityTexture; use .mat/PBR workflow for advanced materials");
-    }
-
-    return BuildCodeMaterial(state, albedoTexturePath, baseColorFactor, roughness, metallic);
+    return internal::CreateTextureMaterial(MakeAssetContext(Get()),
+        albedoTexturePath, materialModel, baseColorFactor, roughness, metallic);
 }
 
 LPMATERIAL CreateTextureMaterial(LPTEXTURE texture,
@@ -4238,172 +1553,68 @@ LPMATERIAL CreateTextureMaterial(LPTEXTURE texture,
                                  float roughness,
                                  float metallic)
 {
-    State& state = Get();
-    const auto it = state.texturePaths.find(texture.value);
-    if (it == state.texturePaths.end())
-    {
-        engine::Debug::LogError("krom.h: texture handle has no known path; load it through Krom::LoadTexture/LoadTexture first");
-        return NULL_MATERIAL;
-    }
-    return CreateTextureMaterial(it->second.c_str(), materialModel, baseColorFactor, roughness, metallic);
+    return internal::CreateTextureMaterial(MakeAssetContext(Get()),
+        texture, materialModel, baseColorFactor, roughness, metallic);
 }
 
 LPMATERIAL LoadMaterial(const char* path)
 {
-    return (Get().assetPipeline && path) ? Get().assetPipeline->LoadMaterial(path) : NULL_MATERIAL;
+    return internal::LoadMaterial(Get().assetPipeline.get(), path);
 }
 
 bool SetMesh(LPENTITY entity, LPMESH mesh)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity) || !mesh.IsValid())
-        return false;
-
-    if (!state.world->Has<engine::MeshComponent>(entity))
-        state.world->Add<engine::MeshComponent>(entity, engine::MeshComponent{mesh});
-    else
-        state.world->Get<engine::MeshComponent>(entity)->mesh = mesh;
-
-    if (!state.world->Has<engine::BoundsComponent>(entity))
-        state.world->Add<engine::BoundsComponent>(entity);
-    engine::mesh_renderer::UpdateLocalBoundsForEntity(*state.world, entity, state.assetRegistry);
-
-    // Objekt ohne Material → Default-Lit (matt, weiß) zuweisen, damit es
-    // sichtbar gerendert wird statt im Renderer übersprungen zu werden.
-    EnsureDefaultMaterialForEntity(state, entity);
-    return true;
+    return internal::SetMesh(MakeAssetContext(Get()), entity, mesh);
 }
 
 bool SetMaterial(LPENTITY entity, LPMATERIAL material)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity) || !material.IsValid())
-        return false;
-
-    const LPMATERIAL runtimeMat = RealizeMaterialForEntity(state, entity, material);
-    if (!state.world->Has<engine::MaterialComponent>(entity))
-        state.world->Add<engine::MaterialComponent>(entity, engine::MaterialComponent{runtimeMat});
-    else
-        state.world->Get<engine::MaterialComponent>(entity)->material = runtimeMat;
-    return true;
+    return internal::SetMaterial(MakeAssetContext(Get()), entity, material);
 }
 
 bool SetMaterialRecursive(LPENTITY rootEntity, LPMATERIAL material)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(rootEntity) || !material.IsValid())
-        return false;
-
-    ApplyMaterialRecursive(state, *state.world, rootEntity, material);
-    return true;
+    return internal::SetMaterialRecursive(MakeAssetContext(Get()), rootEntity, material);
 }
 
 bool SetTexture(LPENTITY entity, const char* albedoTexturePath, int materialModel, bool recursive)
 {
-    if (!albedoTexturePath || albedoTexturePath[0] == '\0')
-        return false;
-
-    const LPMATERIAL material = CreateTextureMaterial(albedoTexturePath, materialModel);
-    if (!material.IsValid())
-        return false;
-
-    return recursive ? SetMaterialRecursive(entity, material) : SetMaterial(entity, material);
+    return internal::SetTexture(MakeAssetContext(Get()), entity, albedoTexturePath, materialModel, recursive);
 }
 
 bool SetTexture(LPENTITY entity, LPTEXTURE texture, int materialModel, bool recursive)
 {
-    const LPMATERIAL material = CreateTextureMaterial(texture, materialModel);
-    if (!material.IsValid())
-        return false;
-
-    return recursive ? SetMaterialRecursive(entity, material) : SetMaterial(entity, material);
+    return internal::SetTexture(MakeAssetContext(Get()), entity, texture, materialModel, recursive);
 }
 
 bool SetPBR(LPENTITY entity, const PBR& materialDesc, bool recursive)
 {
-    State& state = Get();
-    if (!state.initialized || !state.world || !state.world->IsAlive(entity))
-        return false;
-
-    const LPMATERIAL material = BuildPbrCodeMaterial(state, materialDesc);
-    if (!material.IsValid())
-        return false;
-
-    return recursive ? SetMaterialRecursive(entity, material) : SetMaterial(entity, material);
+    return internal::SetPBR(MakeAssetContext(Get()), entity, materialDesc, recursive);
 }
 
 bool SetMeshFromAsset(LPENTITY entity, const char* path)
 {
-    const LPMESH mesh = LoadMesh(path);
-    return mesh.IsValid() && SetMesh(entity, mesh);
+    return internal::SetMeshFromAsset(MakeAssetContext(Get()), entity, path);
 }
 
 bool SetMaterialFromAsset(LPENTITY entity, const char* path)
 {
-    State& state = Get();
-    const LPMATERIAL material = LoadMaterial(path);
-    if (!material.IsValid())
-        return false;
-
-    const bool ok = SetMaterial(entity, material);
-    if (ok && state.world->Has<engine::MaterialComponent>(entity))
-        state.world->Get<engine::MaterialComponent>(entity)->materialAssetPath = path ? path : "";
-    return ok;
+    return internal::SetMaterialFromAsset(MakeAssetContext(Get()), entity, path);
 }
 
 LPMESH CreateMeshAsset(const MeshData& meshData)
 {
-    State& state = Get();
-    if (!state.initialized || !meshData.vertices || meshData.vertexCount == 0u)
-        return NULL_MESH;
-
-    engine::assets::SubMeshData submesh;
-    submesh.positions.reserve(static_cast<size_t>(meshData.vertexCount) * 3u);
-    submesh.normals.reserve(static_cast<size_t>(meshData.vertexCount) * 3u);
-    submesh.uvs.reserve(static_cast<size_t>(meshData.vertexCount) * 2u);
-    submesh.colors.reserve(static_cast<size_t>(meshData.vertexCount) * 4u);
-
-    for (uint32_t i = 0u; i < meshData.vertexCount; ++i)
-        AddVertex(submesh, meshData.vertices[i]);
-
-    if (meshData.indices && meshData.indexCount > 0u)
-        submesh.indices.assign(meshData.indices, meshData.indices + meshData.indexCount);
-    else
-    {
-        submesh.indices.reserve(meshData.vertexCount);
-        for (uint32_t i = 0u; i < meshData.vertexCount; ++i)
-            submesh.indices.push_back(i);
-    }
-
-    if (meshData.generateNormals)
-        GenerateMissingNormals(submesh);
-    return RegisterProceduralMesh(state, std::move(submesh), meshData.name, meshData.generateTangents);
+    return internal::CreateMeshAsset(MakeAssetContext(Get()), meshData);
 }
 
 LPENTITY CreateMeshEntity(const MeshData& meshData)
 {
-    State& state = Get();
-    const LPMESH mesh = CreateMeshAsset(meshData);
-    return CreateProceduralEntity(state, mesh, meshData.name);
+    return internal::CreateMeshEntity(MakeAssetContext(Get()), meshData);
 }
 
 LPENTITY CreateMesh(const char* name)
 {
-    State& state = Get();
-    if (!state.initialized || !state.world)
-        return NULL_LPENTITY;
-
-    auto meshAsset = std::make_unique<engine::assets::MeshAsset>();
-    meshAsset->debugName = (name && name[0] != '\0') ? name : "Mesh";
-    meshAsset->path = meshAsset->debugName;
-    meshAsset->state = engine::assets::AssetState::Loaded;
-    meshAsset->gpuStatus.dirty = true;
-
-    const LPMESH mesh = state.assetRegistry.meshes.Add(std::move(meshAsset));
-    LPENTITY entity = CreateEntity((name && name[0] != '\0') ? name : "Mesh");
-    if (!entity.IsValid() || !SetMesh(entity, mesh))
-        return NULL_LPENTITY;
-    return entity;
+    return internal::CreateMesh(MakeAssetContext(Get()), name);
 }
 
 LPSURFACE CreateSurface(LPENTITY meshEntity)
@@ -4463,10 +1674,7 @@ LPMATERIAL CreateLitMaterial(const char* albedoTexturePath,
                               float roughness,
                               float metallic)
 {
-    State& state = Get();
-    if (!state.initialized)
-        return NULL_MATERIAL;
-    return BuildCodeMaterial(state, albedoTexturePath, baseColorFactor, roughness, metallic);
+    return internal::CreateLitMaterial(MakeAssetContext(Get()), albedoTexturePath, baseColorFactor, roughness, metallic);
 }
 
 engine::renderer::EnvironmentHandle CreateEnvironmentFromHDR(const char* path,
@@ -4492,18 +1700,13 @@ engine::renderer::EnvironmentHandle CreateEnvironmentFromHDR(const char* path,
 
 void SetTonemapping(engine::renderer::addons::forward::TonemapOperator op, float exposureEv)
 {
-    State& state = Get();
-    if (!state.tonemapSettings)
-        return;
-    state.tonemapSettings->op = op;
-    state.tonemapSettings->exposureEv = std::clamp(exposureEv, engine::renderer::addons::forward::kMinExposureEv,
-                                                   engine::renderer::addons::forward::kMaxExposureEv);
+    internal::SetTonemapping(Get().render, op, exposureEv);
 }
 
 bool BakeReflectionProbe(LPENTITY entity, const char* sceneName)
 {
     State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity) || !state.probeRuntime)
+    if (!state.world || !state.world->IsAlive(entity) || !state.render.probeRuntime)
     {
         engine::Debug::LogError("krom.h: BakeReflectionProbe needs a live entity and the probe feature");
         return false;
@@ -4534,13 +1737,13 @@ bool BakeReflectionProbe(LPENTITY entity, const char* sceneName)
     request.relativePath = probe->bakedDataPath;
     request.inputHash = engine::addons::probes::ComputeProbeInputHash(*state.world, entity);
     // Pass 1: global IBL only; pass 2 (if set): lit by the probes of pass 1.
-    const uint32_t passes = state.probeRuntime->GetSettings().bakePasses >= 2u ? 2u : 1u;
+    const uint32_t passes = state.render.probeRuntime->GetSettings().bakePasses >= 2u ? 2u : 1u;
     for (uint32_t pass = 1u; pass <= passes; ++pass)
     {
         request.lightWithProbes = pass == 2u;
         std::string error;
         if (!engine::addons::probes::BakeProbeBlocking(renderSystem, *state.world, state.materialSystem,
-                                                        state.timing, view, *state.probeRuntime, request,
+                                                        state.timing, view, *state.render.probeRuntime, request,
                                                         &state.jobSystem, &error))
         {
             engine::Debug::LogError("krom.h: BakeReflectionProbe failed: %s", error.c_str());
@@ -4569,170 +1772,58 @@ float GetPostProcessWeight(LPENTITY entity)
     return volume ? volume->weight : 0.0f;
 }
 
-void SetReflectionProbesEnabled(bool enabled)
+void SetReflectionProbesEnabled(bool enabled) { internal::SetReflectionProbesEnabled(Get().render, enabled); }
+void SetProbeDebugView(uint32_t view) { internal::SetProbeDebugView(Get().render, view); }
+void SetSpecularOcclusion(bool enabled) { internal::SetSpecularOcclusion(Get().render, enabled); }
+bool GetSpecularOcclusion() { return internal::GetSpecularOcclusion(Get().render); }
+
+void SetGtaoEnabled(bool enabled) { internal::SetGtaoEnabled(Get().render, enabled); }
+bool GetGtaoEnabled() { return internal::GetGtaoEnabled(Get().render); }
+void SetSsrEnabled(bool enabled) { internal::SetSsrEnabled(Get().render, enabled); }
+bool GetSsrEnabled() { return internal::GetSsrEnabled(Get().render); }
+void SetContactShadowsEnabled(bool enabled) { internal::SetContactShadowsEnabled(Get().render, enabled); }
+bool GetContactShadowsEnabled() { return internal::GetContactShadowsEnabled(Get().render); }
+
+void SetShadowQuality(uint32_t sunResolution, uint32_t localResolution, uint8_t filter)
 {
-    State& state = Get();
-    if (state.probeRuntime)
-        state.probeRuntime->SetEnabled(enabled);
+    internal::SetShadowQuality(Get().render, sunResolution, localResolution, filter);
 }
 
-void SetProbeDebugView(uint32_t view)
+void GetShadowQuality(uint32_t& sunResolution, uint32_t& localResolution, uint8_t& filter)
 {
-    State& state = Get();
-    if (!state.probeRuntime)
-        return;
-    engine::addons::probes::ProbeSettings settings = state.probeRuntime->GetSettings();
-    settings.debugView = static_cast<engine::addons::probes::ProbeDebugView>(std::min(view, 3u));
-    state.probeRuntime->SetSettings(settings);
+    internal::GetShadowQuality(Get().render, sunResolution, localResolution, filter);
 }
 
-void SetGtaoEnabled(bool enabled)
-{
-    State& state = Get();
-    if (state.gtaoResources)
-        state.gtaoResources->settings.enabled = enabled;
-}
-
-bool GetGtaoEnabled()
-{
-    const State& state = Get();
-    return state.gtaoResources && state.gtaoResources->settings.enabled;
-}
-
-void SetSsrEnabled(bool enabled)
-{
-    State& state = Get();
-    if (state.ssrResources)
-        state.ssrResources->settings.enabled = enabled;
-}
-
-bool GetSsrEnabled()
-{
-    const State& state = Get();
-    return state.ssrResources && state.ssrResources->settings.enabled;
-}
-
-void SetSpecularOcclusion(bool enabled)
-{
-    State& state = Get();
-    if (!state.probeRuntime)
-        return;
-    engine::addons::probes::ProbeSettings settings = state.probeRuntime->GetSettings();
-    settings.specularOcclusion = enabled;
-    state.probeRuntime->SetSettings(settings);
-}
-
-bool GetSpecularOcclusion()
-{
-    const State& state = Get();
-    return state.probeRuntime && state.probeRuntime->GetSettings().specularOcclusion;
-}
+void SetPostAA(engine::RenderPostAA mode) { internal::SetPostAA(Get().render, mode); }
+engine::RenderPostAA GetPostAA() { return internal::GetPostAA(Get().render); }
+void SetMsaa(uint32_t sampleCount) { internal::SetMsaa(Get().render, sampleCount); }
+uint32_t GetMsaa() { return internal::GetMsaa(Get().render); }
 
 void SetQualityLevel(engine::RenderQualityLevel level)
 {
-    if (level == engine::RenderQualityLevel::Custom)
-        return;
     State& state = Get();
-    engine::RenderQualityOptions options = engine::RenderQualityPreset(level);
-    SetMsaa(options.msaaSamples);
-    SetPostAA(options.postAA);
-    SetGtaoEnabled(options.gtaoEnabled);
-    SetSsrEnabled(options.ssrEnabled);
-    SetContactShadowsEnabled(options.contactShadowsEnabled);
-    if (state.editorLiveStateEnabled)
-        return;   // started from the editor: nothing to remember
-    if (state.userQualityLevel != level)
-    {
-        state.userQualityLevel = level;
-        SaveUserGameSettings(state);
-    }
+    internal::SetQualityLevel(state.render, level, state.editorLiveStateEnabled, state.projectSettings.windowTitle);
 }
 
-engine::RenderQualityLevel GetQualityLevel()
-{
-    engine::RenderQualityOptions options{};
-    options.msaaSamples = GetMsaa();
-    options.postAA = GetPostAA();
-    options.gtaoEnabled = GetGtaoEnabled();
-    options.ssrEnabled = GetSsrEnabled();
-    options.contactShadowsEnabled = GetContactShadowsEnabled();
-    return engine::DetectRenderQualityLevel(options);
-}
-
-void SetPostAA(engine::RenderPostAA mode)
-{
-    State& state = Get();
-    if (state.postAASettings)
-        state.postAASettings->mode = static_cast<engine::renderer::addons::forward::PostAAMode>(
-            std::min<uint8_t>(static_cast<uint8_t>(mode), 2u));
-}
-
-engine::RenderPostAA GetPostAA()
-{
-    const State& state = Get();
-    return state.postAASettings ? static_cast<engine::RenderPostAA>(state.postAASettings->mode)
-                                : engine::RenderPostAA::Off;
-}
-
-void SetContactShadowsEnabled(bool enabled)
-{
-    State& state = Get();
-    if (state.contactShadowResources)
-        state.contactShadowResources->settings.enabled = enabled;
-}
-
-bool GetContactShadowsEnabled()
-{
-    const State& state = Get();
-    return state.contactShadowResources && state.contactShadowResources->settings.enabled;
-}
-
-void SetMsaa(uint32_t sampleCount)
-{
-    State& state = Get();
-    if (state.msaaSettings)
-        state.msaaSettings->sampleCount = engine::renderer::addons::forward::NormalizeMsaaSamples(sampleCount);
-}
-
-uint32_t GetMsaa()
-{
-    const State& state = Get();
-    return state.msaaSettings ? state.msaaSettings->sampleCount : 1u;
-}
+engine::RenderQualityLevel GetQualityLevel() { return internal::GetQualityLevel(Get().render); }
 
 void SetShading(const engine::renderer::addons::forward::ShadingSettings& settings)
 {
-    State& state = Get();
-    if (state.shadingSettings)
-        *state.shadingSettings = settings;
+    internal::SetShading(Get().render, settings);
 }
 
-engine::renderer::addons::forward::ShadingSettings GetShading()
-{
-    const State& state = Get();
-    return state.shadingSettings ? *state.shadingSettings : engine::renderer::addons::forward::ShadingSettings{};
-}
+engine::renderer::addons::forward::ShadingSettings GetShading() { return internal::GetShading(Get().render); }
 
-engine::renderer::addons::forward::TonemapSettings GetTonemapping()
-{
-    const State& state = Get();
-    return state.tonemapSettings ? *state.tonemapSettings : engine::renderer::addons::forward::TonemapSettings{};
-}
+engine::renderer::addons::forward::TonemapSettings GetTonemapping() { return internal::GetTonemapping(Get().render); }
 
 void SetColorGrading(const engine::renderer::addons::forward::ColorGradingSettings& grading)
 {
-    State& state = Get();
-    if (!state.tonemapSettings)
-        return;
-    state.tonemapSettings->grading = grading;
-    state.tonemapSettings->grading.Clamp();
+    internal::SetColorGrading(Get().render, grading);
 }
 
 engine::renderer::addons::forward::ColorGradingSettings GetColorGrading()
 {
-    const State& state = Get();
-    return state.tonemapSettings ? state.tonemapSettings->grading
-                                 : engine::renderer::addons::forward::ColorGradingSettings{};
+    return internal::GetColorGrading(Get().render);
 }
 
 void SetActiveEnvironment(engine::renderer::EnvironmentHandle environment)
@@ -4895,7 +1986,7 @@ int SpawnShaderWarmupAssets()
             const LPMATERIAL material = LoadMaterial(path.c_str());
             if (!material.IsValid())
                 continue;
-            const LPENTITY entity = CreateProceduralEntity(state, cube, "__WarmupMaterial");
+            const LPENTITY entity = internal::CreateProceduralEntity(MakeAssetContext(state), cube, "__WarmupMaterial");
             if (!entity.IsValid())
                 continue;
             (void)SetMaterial(entity, material);
@@ -5027,7 +2118,7 @@ int Run()
                 return InstantiatePrefabForScript(state, prefabAssetPath, position, rotation, scale);
             };
         const std::function<void(LPENTITY, LPENTITY)> prefabInstantiated =
-            [&state](LPENTITY owner, LPENTITY root) { RegisterScriptSpawn(state, owner, root); };
+            [&state](LPENTITY owner, LPENTITY root) { internal::RegisterScriptSpawn(MakeSceneContext(state), owner, root); };
         engine::gameplay::GameSimulationHooks hooks{};
         hooks.instantiatePrefab  = &instantiatePrefab;
         hooks.prefabInstantiated = &prefabInstantiated;
@@ -5037,8 +2128,8 @@ int Run()
         hooks.renderSettings = &renderSettings;
         hooks.destroyEntity = [&state](LPENTITY id)
         {
-            state.persistentEntityIds.erase(id.value);
-            DestroyEntityRecursive(*state.world, id);
+            state.sceneManager.persistentEntityIds.erase(id.value);
+            internal::DestroyEntityRecursive(*state.world, id);
         };
         hooks.loadScene = [](const engine::script::SceneLoadRequest& request)
         {
@@ -5111,24 +2202,7 @@ int Run()
         view.enableDepthPrepass = true;
 
         // Post-process volumes at the camera over the scene and project values.
-        {
-            engine::addons::postprocess::PostProcessValues ppBase;
-            ppBase.tonemap = *state.tonemapSettings;
-            ppBase.bloomIntensity = kRuntimeBloomIntensity;
-            ppBase.gtaoIntensity = state.baseGtaoIntensity;
-            ppBase.ssrIntensity = state.baseSsrIntensity;
-            ppBase.contactShadowIntensity = state.baseContactShadowIntensity;
-            const engine::addons::postprocess::PostProcessValues pp =
-                engine::addons::postprocess::BlendPostProcessVolumes(*state.world, view.cameraPosition, ppBase);
-            *state.effectiveTonemapSettings = pp.tonemap;
-            state.effectiveTonemapSettings->bloomIntensity = pp.bloomIntensity;
-            if (state.gtaoResources)
-                state.gtaoResources->settings.intensity = pp.gtaoIntensity;
-            if (state.ssrResources)
-                state.ssrResources->settings.intensity = pp.ssrIntensity;
-            if (state.contactShadowResources)
-                state.contactShadowResources->settings.intensity = pp.contactShadowIntensity;
-        }
+        internal::ApplyPostProcessVolumes(state.render, *state.world, view.cameraPosition);
 
         // Text-Overlay im UI-Pass; Atlas/Pipeline vorher ausserhalb des Passes anlegen.
         engine::renderer::FramePipelineCallbacks frameCallbacks;
@@ -5232,15 +2306,15 @@ void Shutdown()
     state.featuresRegistered = false;
     state.tickCallback = {};
     state.initCallback = {};
-    state.scenes.clear();
-    state.persistentEntityIds.clear();
+    state.sceneManager.scenes.clear();
+    state.sceneManager.persistentEntityIds.clear();
     state.texturePaths.clear();
     state.runtimeMaterialCache.clear();
     state.surfaces.clear();
     state.nextSurfaceId = 1u;
-    state.nextSceneId = 1u;
+    state.sceneManager.nextSceneId = 1u;
     state.projectRoot.clear();
-    state.projectScenePaths.clear();
+    state.sceneManager.projectScenePaths.clear();
     if (state.activeEnvironment.IsValid())
     {
         state.renderLoop.GetRenderSystem().DestroyEnvironment(state.activeEnvironment);
@@ -5268,7 +2342,7 @@ void Shutdown()
 }
 
 // =============================================================================
-// Scene-Management
+// Scene-Management (KromSceneManager.cpp)
 // =============================================================================
 
 LPSCENE LoadScene(const char* path)
@@ -5276,28 +2350,17 @@ LPSCENE LoadScene(const char* path)
     State& state = Get();
     if (!EnsureInitialized() || !path)
         return NULL_SCENE;
-    return LoadSceneFromData(state, LoadKsceneFile(state.assetRoot, path), false, path);
+    return internal::LoadScene(MakeSceneContext(state), path);
 }
 
 LPSCENE LoadScene(int sceneIndex)
 {
-    State& state = Get();
-    if (sceneIndex <= 0)
-        return NULL_SCENE;
-
-    const size_t index = static_cast<size_t>(sceneIndex - 1);
-    if (index >= state.projectScenePaths.size())
-    {
-        engine::Debug::LogError("krom.h: LoadScene(%d) out of range; project has %zu scenes",
-            sceneIndex, state.projectScenePaths.size());
-        return NULL_SCENE;
-    }
-    return LoadScene(state.projectScenePaths[index].c_str());
+    return internal::LoadScene(Get().sceneManager, sceneIndex);
 }
 
 int GetSceneCount()
 {
-    return static_cast<int>(Get().projectScenePaths.size());
+    return internal::GetSceneCount(Get().sceneManager);
 }
 
 LPSCENE LoadSceneAdditive(const char* path)
@@ -5305,23 +2368,12 @@ LPSCENE LoadSceneAdditive(const char* path)
     State& state = Get();
     if (!EnsureInitialized() || !path)
         return NULL_SCENE;
-    return LoadSceneFromData(state, LoadKsceneFile(state.assetRoot, path), true, path);
+    return internal::LoadSceneAdditive(MakeSceneContext(state), path);
 }
 
 LPSCENE LoadSceneAdditive(int sceneIndex)
 {
-    State& state = Get();
-    if (sceneIndex <= 0)
-        return NULL_SCENE;
-
-    const size_t index = static_cast<size_t>(sceneIndex - 1);
-    if (index >= state.projectScenePaths.size())
-    {
-        engine::Debug::LogError("krom.h: LoadSceneAdditive(%d) out of range; project has %zu scenes",
-            sceneIndex, state.projectScenePaths.size());
-        return NULL_SCENE;
-    }
-    return LoadSceneAdditive(state.projectScenePaths[index].c_str());
+    return internal::LoadSceneAdditive(Get().sceneManager, sceneIndex);
 }
 
 LPSCENE LoadSceneAsync(const char* path)
@@ -5329,205 +2381,52 @@ LPSCENE LoadSceneAsync(const char* path)
     State& state = Get();
     if (!EnsureInitialized() || !path)
         return NULL_SCENE;
-
-    const uint32_t sceneId = state.nextSceneId++;
-    SceneRecord& record = state.scenes[sceneId];
-    record.name    = "";
-    record.path    = path;
-    record.staging = true;
-    record.staged  = false;
-    record.active  = false;
-
-    // Absoluten Pfad vor dem Thread-Start berechnen (thread-safe)
-    const std::filesystem::path resolved =
-        std::filesystem::weakly_canonical(state.assetRoot / PathFromUtf8(path));
-
-    // Hintergrund-Thread: nur Datei-I/O + JSON-Parsing — kein ECS-Zugriff
-    const std::string resolvedStr = PathToUtf8(resolved);
-    record.asyncFuture = std::async(std::launch::async, [resolved, resolvedStr]() -> KromSceneData
-    {
-        std::ifstream file(resolved);
-        if (!file)
-        {
-            engine::Debug::LogError("krom.h: LoadSceneAsync: Datei nicht gefunden: %s",
-                resolvedStr.c_str());
-            return KromSceneData{};
-        }
-        const std::string json(std::istreambuf_iterator<char>(file),
-                               std::istreambuf_iterator<char>{});
-        return ParseKscene(json);
-    }).share();
-
-    engine::Debug::Log("krom.h: LoadSceneAsync gestartet: %s", path);
-    return LPSCENE{sceneId};
+    return internal::LoadSceneAsync(MakeSceneContext(state), path);
 }
 
 bool IsSceneReady(LPSCENE scene)
 {
-    State& state = Get();
-    auto it = state.scenes.find(scene.id);
-    if (it == state.scenes.end())
-        return false;
-    SceneRecord& record = it->second;
-    if (record.staged || record.active)
-        return true;
-    if (!record.staging)
-        return false;
-
-    if (record.asyncFuture.valid() &&
-        record.asyncFuture.wait_for(std::chrono::seconds(0)) == std::future_status::ready)
-    {
-        record.stagedData = record.asyncFuture.get();
-        record.staging    = false;
-        record.staged     = true;
-        return true;
-    }
-    return false;
+    return internal::IsSceneReady(Get().sceneManager, scene);
 }
 
 bool ActivateScene(LPSCENE scene)
 {
-    State& state = Get();
-    auto it = state.scenes.find(scene.id);
-    if (it == state.scenes.end())
-        return false;
-    SceneRecord& record = it->second;
-
-    if (record.active)
-        return true;  // bereits aktiv
-
-    // Falls async noch läuft: blockierend warten
-    if (record.staging && record.asyncFuture.valid())
-    {
-        record.stagedData = record.asyncFuture.get();
-        record.staging    = false;
-        record.staged     = true;
-    }
-
-    if (!record.staged)
-        return false;
-
-    // Entities jetzt auf dem Main-Thread erstellen
-    const KromSceneData& data = record.stagedData;
-    if (!data.valid)
-    {
-        state.scenes.erase(it);
-        return false;
-    }
-
-    record.name       = data.name;
-    record.persistent = data.persistent;
-    record.active     = true;
-    record.staged     = false;
-
-    if (!InstantiateSceneData(state, data, record))
-    {
-        state.scenes.erase(it);
-        return false;
-    }
-
-    engine::Debug::Log("krom.h: scene '%s' aktiviert (%zu entities)",
-        data.name.c_str(), record.rootEntities.size());
-    return true;
+    return internal::ActivateScene(MakeSceneContext(Get()), scene);
 }
 
 void UnloadScene(LPSCENE scene)
 {
-    State& state = Get();
-    UnloadSceneById(state, scene.id);
+    internal::UnloadScene(MakeSceneContext(Get()), scene);
 }
 
 void UnloadAll()
 {
-    State& state = Get();
-    std::vector<uint32_t> toUnload;
-    for (const auto& [id, scene] : state.scenes)
-    {
-        if (!scene.persistent)
-            toUnload.push_back(id);
-    }
-    for (const uint32_t id : toUnload)
-        UnloadSceneById(state, id);
+    internal::UnloadAll(MakeSceneContext(Get()));
 }
 
 void SetPersistent(LPENTITY entity)
 {
-    if (entity.IsValid())
-        Get().persistentEntityIds.insert(entity.value);
+    internal::SetPersistent(Get().sceneManager, entity);
 }
 
 void SetScenePersistent(LPSCENE scene)
 {
-    State& state = Get();
-    auto it = state.scenes.find(scene.id);
-    if (it == state.scenes.end())
-        return;
-    SceneRecord& record = it->second;
-    record.persistent = true;
-    for (const LPENTITY entity : record.rootEntities)
-        MarkPersistentRecursive(state, entity);
+    internal::SetScenePersistent(MakeSceneContext(Get()), scene);
 }
 
 LPENTITY FindEntity(const char* name)
 {
-    State& state = Get();
-    if (!state.world || !name)
-        return NULL_LPENTITY;
-
-    LPENTITY found = NULL_LPENTITY;
-    state.world->ForEachAlive([&](engine::EntityID id)
-    {
-        if (found.IsValid()) return;
-        if (const auto* nc = state.world->Get<engine::NameComponent>(id))
-            if (nc->name == name)
-                found = id;
-    });
-    return found;
+    return internal::FindEntity(Get().world.get(), name);
 }
 
 LPENTITY GetMainCamera()
 {
-    State& state = Get();
-    if (!state.world)
-        return NULL_LPENTITY;
-
-    LPENTITY mainCamera = NULL_LPENTITY;
-    LPENTITY fallbackCamera = NULL_LPENTITY;
-    state.world->View<engine::CameraComponent>(
-        [&](LPENTITY entity, const engine::CameraComponent& camera)
-        {
-            if (!fallbackCamera.IsValid())
-                fallbackCamera = entity;
-            if (camera.isMainCamera && !mainCamera.IsValid())
-                mainCamera = entity;
-        });
-
-    return mainCamera.IsValid() ? mainCamera : fallbackCamera;
+    return internal::GetMainCamera(Get().world.get());
 }
 
 LPENTITY FindEntityInScene(LPSCENE scene, const char* name)
 {
-    State& state = Get();
-    if (!state.world || !name)
-        return NULL_LPENTITY;
-
-    auto it = state.scenes.find(scene.id);
-    if (it == state.scenes.end())
-        return NULL_LPENTITY;
-
-    LPENTITY found = NULL_LPENTITY;
-    std::function<void(LPENTITY)> search = [&](LPENTITY e)
-    {
-        if (found.IsValid() || !state.world->IsAlive(e)) return;
-        if (const auto* nc = state.world->Get<engine::NameComponent>(e))
-            if (nc->name == name) { found = e; return; }
-        if (const auto* ch = state.world->Get<engine::ChildrenComponent>(e))
-            for (const LPENTITY child : ch->children)
-                search(child);
-    };
-    for (const LPENTITY root : it->second.rootEntities)
-        search(root);
-    return found;
+    return internal::FindEntityInScene(MakeSceneContext(Get()), scene, name);
 }
 
 } // namespace Krom

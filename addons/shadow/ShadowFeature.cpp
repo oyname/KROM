@@ -51,7 +51,10 @@ struct alignas(16) GpuShadowLightData
 {
     float meta[4];
     float extra[4];
+    float params[4];   // x = ShadowFilter, y = lightSize (per light; Forward+)
 };
+static_assert(sizeof(GpuShadowLightData) == 48u, "GpuShadowLightData must match shaders/pbr_forward_plus.ps.hlsl");
+static_assert(static_cast<uint32_t>(engine::kShadowFilterMax) < 16u, "filterModes packs 4 bits per light");
 
 struct alignas(16) GpuShadowViewData
 {
@@ -73,6 +76,13 @@ struct alignas(16) GpuShadowViewData
     // One slope unit covers rasterization error. Three units pushed wall
     // surfaces several texels away and exposed joints in distant cascades.
     return { .constantFactor = 0.0f, .slopeFactor = 1.0f };
+}
+
+// Tile edge of a request in the atlas: the size ShadowAtlasLayout gave it.
+[[nodiscard]] uint32_t ShadowTileSize(const engine::addons::shadow::ShadowRequest& request) noexcept
+{
+    return std::max(1u, request.effectiveResolution != 0u ? request.effectiveResolution
+                                                          : request.settings.resolution);
 }
 
 [[nodiscard]] float AdjustShadowReceiverBias(const engine::renderer::IDevice* device,
@@ -136,6 +146,8 @@ public:
         const ShadowView* selectedView = shadow ? shadow->GetCurrentRenderPathPrimaryView() : nullptr;
         std::vector<GpuShadowLightData> gpuLights;
         std::vector<GpuShadowViewData> gpuViews;
+        // Filter and light size per shadow light: each light keeps its own filter.
+        ShadowFilterFrameParams filterParams{};
 
         fc.shadowLightCount = 0u;
         fc.shadowViewCount = 0u;
@@ -166,17 +178,8 @@ public:
                     std::min<size_t>(shadow->requests[requestIndex].views.size(),
                                      static_cast<size_t>(UINT32_MAX - shadowViewCount)));
             }
-            const uint32_t atlasViewCount = std::max(
-                std::max(1u, shadowViewCount),
-                shadow->atlasViewCountHint);
-            const uint32_t gridDim = std::max(1u, static_cast<uint32_t>(
-                std::ceil(std::sqrt(static_cast<float>(atlasViewCount)))));
             const uint32_t activeShadowResolution = context.GetActiveShadowResolution();
-            // Match the integer-sized viewport tiles, including capped atlas
-            // sizes that are not divisible by gridDim (e.g. 4096 / 3).
-            const uint32_t tileSize = std::max(1u, activeShadowResolution / gridDim);
-            const float tileScale = static_cast<float>(tileSize) /
-                                    static_cast<float>(std::max(1u, activeShadowResolution));
+            const float invAtlasSize = 1.0f / static_cast<float>(std::max(1u, activeShadowResolution));
             const float atlasTexelSize = shadowViewCount > 0u && activeShadowResolution > 0u
                 ? (1.0f / static_cast<float>(activeShadowResolution))
                 : 0.0f;
@@ -214,26 +217,33 @@ public:
                            atlasRequest.settings.maxDistance,
                            atlasRequest.settings.cascadeLambda,
                            lightExtra);
+                const uint32_t filterMode = std::min(static_cast<uint32_t>(atlasRequest.settings.filter),
+                                                     static_cast<uint32_t>(kShadowFilterMax));
                 if (i < renderer::kMaxShadowLightsPerFrame)
                 {
                     std::memcpy(fc.shadowLightMeta[i], lightMeta, sizeof(fc.shadowLightMeta[i]));
                     std::memcpy(fc.shadowLightExtra[i], lightExtra, sizeof(fc.shadowLightExtra[i]));
+                    filterParams.lightSizes[i] = atlasRequest.settings.lightSize;
+                    filterParams.filterModes |= filterMode << (4u * i);
                 }
                 GpuShadowLightData gpuLight{};
                 std::memcpy(gpuLight.meta, lightMeta, sizeof(gpuLight.meta));
                 std::memcpy(gpuLight.extra, lightExtra, sizeof(gpuLight.extra));
+                FillFloat4(static_cast<float>(filterMode), atlasRequest.settings.lightSize, 0.0f, 0.0f,
+                           gpuLight.params);
                 gpuLights.push_back(gpuLight);
 
                 for (uint32_t viewIndex = 0u; viewIndex < requestViewCount; ++viewIndex, ++atlasViewIndex)
                 {
-                    const uint32_t col = atlasViewIndex % gridDim;
-                    const uint32_t row = atlasViewIndex / gridDim;
+                    const ShadowView& atlasView = atlasRequest.views[viewIndex];
+                    const float tileScale = static_cast<float>(ShadowTileSize(atlasRequest)) * invAtlasSize;
                     const math::Mat4 adjustedShadowVP =
                         context.shadowClipSpaceAdjustment * atlasRequest.views[viewIndex].viewProj;
                     float viewRect[4]{};
                     float viewProj[16]{};
-                    FillFloat4(static_cast<float>(col) * tileScale,
-                               static_cast<float>(row) * tileScale,
+                    // Tile placed by ShadowAtlasLayout (texels -> atlas UV).
+                    FillFloat4(static_cast<float>(atlasView.atlasX) * invAtlasSize,
+                               static_cast<float>(atlasView.atlasY) * invAtlasSize,
                                tileScale,
                                tileScale,
                                viewRect);
@@ -257,6 +267,7 @@ public:
 
         if (!request || !selectedView)
         {
+            renderer::WriteFrameParameterBlock(fc, kShadowFilterFrameParameterBlock, filterParams);
             fc.shadowCascadeCount = 0u;
             fc.shadowFilterMode   = 0u;
             fc.shadowBias         = 0.f;
@@ -267,8 +278,8 @@ public:
         }
 
         fc.shadowCascadeCount = 1u;
+        // Global filter of the first light: OpenGL and legacy lit still use it.
         fc.shadowFilterMode   = static_cast<uint32_t>(request->settings.filter);
-        ShadowFilterFrameParams filterParams{};
         filterParams.lightSize = request->settings.lightSize;
         renderer::WriteFrameParameterBlock(fc, kShadowFilterFrameParameterBlock, filterParams);
         fc.shadowBias         = AdjustShadowReceiverBias(context.device, request->settings.bias);
@@ -427,14 +438,6 @@ public:
                                          static_cast<size_t>(UINT32_MAX - shadowViewCount)));
                 }
 
-                const uint32_t atlasRes = std::max(1u, runtime->scene.renderQueue->activeShadowResolution);
-                const uint32_t atlasViewCount = std::max(
-                    std::max(1u, shadowViewCount),
-                    shadowData->atlasViewCountHint);
-                const uint32_t gridDim  = std::max(1u, static_cast<uint32_t>(
-                    std::ceil(std::sqrt(static_cast<float>(atlasViewCount)))));
-                const uint32_t tileSize = std::max(1u, atlasRes / gridDim);
-
                 const renderer::BufferBinding previousBinding = runtime->resources.perFrameBinding;
                 const auto arena =
                     runtime->resources.gpuRuntime
@@ -488,15 +491,15 @@ public:
                                                              sizeof(renderer::FrameConstants));
                         }
 
-                        const uint32_t col = atlasViewIndex % gridDim;
-                        const uint32_t row = atlasViewIndex / gridDim;
-                        execCtx.cmd->SetViewport(static_cast<float>(col * tileSize),
-                                                 static_cast<float>(row * tileSize),
+                        // Tile placed by ShadowAtlasLayout.
+                        const uint32_t tileSize = ShadowTileSize(request);
+                        execCtx.cmd->SetViewport(static_cast<float>(view.atlasX),
+                                                 static_cast<float>(view.atlasY),
                                                  static_cast<float>(tileSize),
                                                  static_cast<float>(tileSize),
                                                  0.f, 1.f);
-                        execCtx.cmd->SetScissor(static_cast<int32_t>(col * tileSize),
-                                                static_cast<int32_t>(row * tileSize),
+                        execCtx.cmd->SetScissor(static_cast<int32_t>(view.atlasX),
+                                                static_cast<int32_t>(view.atlasY),
                                                 tileSize, tileSize);
                         if (!drawObjects)
                             continue;
@@ -533,7 +536,8 @@ public:
               ShadowExtractionConfig{
                   .maxShadowLights = config.maxShadowLights,
                   .maxShadowViews = config.maxShadowViews,
-                  .maxShadowAtlasResolution = config.maxShadowAtlasResolution
+                  .maxShadowAtlasResolution = config.maxShadowAtlasResolution,
+                  .quality = config.quality
               }))
         , m_frameContributor(std::make_shared<ShadowFrameConstantsContributor>())
         , m_passContributor(std::make_shared<ShadowPassContributor>())

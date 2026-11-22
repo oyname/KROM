@@ -17,6 +17,7 @@ struct GpuShadowLightData
 {
     float4 meta;
     float4 extra;
+    float4 params;   // x = ShadowFilter, y = lightSize (addons/shadow/ShadowFeature.cpp)
 };
 
 struct GpuShadowViewData
@@ -157,6 +158,7 @@ static const uint DBG_VIEW_GTAO         = 1u << 20;
 static const uint DBG_DISABLE_GTAO      = 1u << 21;
 static const uint DBG_VIEW_CONTACT_SHADOW    = 1u << 22;
 static const uint DBG_DISABLE_CONTACT_SHADOW = 1u << 23;
+static const uint DBG_VIEW_SHADOW_CASCADE    = 1u << 24;
 static const uint FORWARD_PLUS_TILE_SIZE = 16u;
 
 float3 SafeNormalize(float3 v)
@@ -363,8 +365,28 @@ float CalcSpotAttenuation(float3 L, float3 spotDir, float cosInner, float cosOut
     return saturate((cosAngle - cosOuter) / max(cosInner - cosOuter, 1e-4f));
 }
 
-uint ChooseCascadeIndexFromViewDepth(float3 positionWS, uint viewCount, float maxShadowDistance, float cascadeLambdaValue)
+// Width of the band at the far end of each cascade, as a fraction of the cascade's
+// depth range, in which the next cascade is mixed in (both filtered). Must match
+// kCascadeBlendBand in addons/shadow/ShadowExtraction.cpp, which extends every
+// cascade by this band towards the camera so the next cascade covers it.
+static const float kKromCascadeBlendBand = 0.2f;
+
+// blendToNext: 0 outside the band, rising to 1 at the far split of the cascade.
+// Fraction of the shadow distance over which directional shadows fade out.
+static const float kKromShadowFadeBand = 0.1f;
+
+// 0 inside the shadow distance, rising to 1 at its end (camera view depth).
+float KromShadowDistanceFade(float3 positionWS, float maxShadowDistance)
 {
+    const float viewDepth = -mul(viewMatrix, float4(positionWS, 1.0f)).z;
+    const float shadowEnd = max(min(farPlane, maxShadowDistance), 1e-3f);
+    return saturate((viewDepth - shadowEnd * (1.0f - kKromShadowFadeBand)) / (shadowEnd * kKromShadowFadeBand));
+}
+
+uint ChooseCascadeIndexFromViewDepth(float3 positionWS, uint viewCount, float maxShadowDistance,
+                                     float cascadeLambdaValue, out float blendToNext)
+{
+    blendToNext = 0.0f;
     const uint cascadeCount = min(viewCount, 4u);
     if (cascadeCount <= 1u)
         return 0u;
@@ -375,6 +397,7 @@ uint ChooseCascadeIndexFromViewDepth(float3 positionWS, uint viewCount, float ma
     const float lambda = saturate(cascadeLambdaValue);
     const float countF = (float)cascadeCount;
 
+    float prevSplit = camNear;
     [loop]
     for (uint splitIndex = 1u; splitIndex < cascadeCount; ++splitIndex)
     {
@@ -383,7 +406,12 @@ uint ChooseCascadeIndexFromViewDepth(float3 positionWS, uint viewCount, float ma
         const float splitUniform = camNear + (camFar - camNear) * fi;
         const float splitDepth = lerp(splitUniform, splitLog, lambda);
         if (viewDepth <= splitDepth)
+        {
+            const float toSplit = (splitDepth - viewDepth) / max(splitDepth - prevSplit, 1e-4f);
+            blendToNext = saturate(1.0f - toSplit / kKromCascadeBlendBand);
             return splitIndex - 1u;
+        }
+        prevSplit = splitDepth;
     }
     return cascadeCount - 1u;
 }
@@ -422,10 +450,30 @@ float CompareShadowManualBilinear(float2 uv, float cmpDepth, float4 atlasRect)
     return lerp(cx0, cx1, fracTexel.y);
 }
 
-float4 ComputeShadowReceiverCS(float3 positionWS, float3 normalWS, float4x4 shadowVP, float normalBiasValue)
+// Normal offset (world units) of normalBiasTexels shadow-map texels of this
+// view at the receiver. The bias is set in texels like in Unity/Unreal, so one
+// value fits every cascade: coarse cascades get a larger offset, fine ones a
+// smaller one (a fixed world offset was too large near and too small far away).
+float KromShadowNormalOffset(float3 positionWS, float4x4 shadowVP, float4 atlasRect, float normalBiasTexels)
 {
-    float3 offsetPositionWS = positionWS + normalWS * normalBiasValue;
-    return mul(shadowVP, float4(offsetPositionWS, 1.0f));
+    const float4 clip = mul(shadowVP, float4(positionWS, 1.0f));
+    const float3 xRow = float3(shadowVP[0][0], shadowVP[0][1], shadowVP[0][2]);
+    const float texelsPerWorld = 0.5f * length(xRow) * atlasRect.z /
+                                 (max(shadowTexelSize, 1e-8f) * max(abs(clip.w), 1e-6f));
+    return normalBiasTexels / max(texelsPerWorld, 1e-6f);
+}
+
+// Direction to the light being shaded; set before the shadow lookups.
+static float3 gKromShadowToLight = float3(0.0f, 1.0f, 0.0f);
+
+float4 ComputeShadowReceiverCS(float3 positionWS, float3 normalWS, float4x4 shadowVP, float normalBiasTexels,
+                               float4 atlasRect)
+{
+    // As in Unity: less offset where the surface faces the light (1 - NdotL);
+    // a floor under a low sun keeps most of it, a wall facing the sun none.
+    const float facing = 1.0f - saturate(dot(normalWS, gKromShadowToLight));
+    const float offset = KromShadowNormalOffset(positionWS, shadowVP, atlasRect, normalBiasTexels) * facing;
+    return mul(shadowVP, float4(positionWS + normalWS * offset, 1.0f));
 }
 
 uint ChoosePointShadowFace(float3 lightToPoint)
@@ -441,6 +489,34 @@ uint ChoosePointShadowFace(float3 lightToPoint)
 #include "pbr_shadow_poisson.hlsl"
 
 #include "shadow_receiver.hlsl"
+
+// Receiver-plane depth gradient (depth change per atlas UV) for one shadow view.
+// Computed analytically from the screen derivatives of the world position
+// (gKromShadowDpdx/Dpdy, taken once at the top of main) instead of ddx/ddy of
+// the shadow coordinates: neighbouring pixels may use different cascades, and
+// derivatives across that seam (or inside the per-pixel sampling loop) are wrong.
+static float2 gKromShadowGradient = float2(0.0f, 0.0f);
+static float3 gKromShadowDpdx = float3(0.0f, 0.0f, 0.0f);
+static float3 gKromShadowDpdy = float3(0.0f, 0.0f, 0.0f);
+
+float2 KromShadowGradientFor(float4 positionLightCS, float4x4 shadowVP, float4 atlasRect)
+{
+    const float w = abs(positionLightCS.w) > 1e-6f ? positionLightCS.w : 1e-6f;
+    const float3 ndc = positionLightCS.xyz / w;
+    const float4 cx = mul(shadowVP, float4(gKromShadowDpdx, 0.0f));
+    const float4 cy = mul(shadowVP, float4(gKromShadowDpdy, 0.0f));
+    const float3 ndcDx = (cx.xyz - ndc * cx.w) / w;
+    const float3 ndcDy = (cy.xyz - ndc * cy.w) / w;
+    const float2 dx = float2(0.5f * ndcDx.x * atlasRect.z, -0.5f * ndcDx.y * atlasRect.w);
+    const float2 dy = float2(0.5f * ndcDy.x * atlasRect.z, -0.5f * ndcDy.y * atlasRect.w);
+    const float2 dz = float2(ndcDx.z, ndcDy.z);
+    const float det = dx.x * dy.y - dx.y * dy.x;
+    const float scale = max(length(dx) * length(dy), 1e-20f);
+    if (abs(det) <= 1e-5f * scale)
+        return float2(0.0f, 0.0f);
+    return float2(dy.y * dz.x - dx.y * dz.y,
+                  dx.x * dz.y - dy.x * dz.x) / det;
+}
 
 float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthValue, float4 atlasRect, float4x4 shadowVP)
 {
@@ -461,50 +537,27 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
         {
             float2 atlasUv = atlasRect.xy + localUv * atlasRect.zw;
 
-            float2 dDepth_dUV = KromShadowDepthGradient(depth, atlasUv);
+            // Set by the caller (gKromShadowGradient), see KromShadowGradientFor.
+            float2 dDepth_dUV = gKromShadowGradient;
             // Nur ein winziger Epsilon-Floor gegen reines Z-Fighting — der konstante
             // Bias wird vom Slider gesteuert. Acne faengt der slope-scaled Term
             // (dDepth_dUV) adaptiv ab; ein grosser Floor wuerde Peter-Panning erzwingen.
             float baseBias = KromShadowReceiverBias(biasValue, shadowVP);
             float visibility = 0.0f;
 
-            if (shadowFilterMode == 1u)
-            {
-                [unroll]
-                for (int y = 0; y <= 1; ++y)
-                {
-                    [unroll]
-                    for (int x = 0; x <= 1; ++x)
-                    {
-                        float2 offset = float2((float)x - 0.5f, (float)y - 0.5f) * shadowTexelSize;
-                        float depthRef = depth + dot(dDepth_dUV, offset) - baseBias;
-                        visibility += CompareShadowManualBilinear(atlasUv + offset, depthRef, atlasRect);
-                    }
-                }
-                visibility *= 0.25f;
-            }
-            else if (shadowFilterMode == 3u)
+            if (gKromShadowFilter == 3u)
             {
                 visibility = SampleShadowPoisson(atlasUv, depth, dDepth_dUV, baseBias, atlasRect);
             }
-            else if (shadowFilterMode == 4u)
+            else if (gKromShadowFilter == 4u)
             {
                 visibility = SampleShadowPcss(atlasUv, depth, dDepth_dUV, baseBias, atlasRect);
             }
-            else if (shadowFilterMode >= 2u)
+            else if (gKromShadowFilter >= 1u)
             {
-                [unroll]
-                for (int y = -1; y <= 1; ++y)
-                {
-                    [unroll]
-                    for (int x = -1; x <= 1; ++x)
-                    {
-                        float2 offset = float2((float)x, (float)y) * shadowTexelSize;
-                        float depthRef = depth + dot(dDepth_dUV, offset) - baseBias;
-                        visibility += CompareShadowManualBilinear(atlasUv + offset, depthRef, atlasRect);
-                    }
-                }
-                visibility *= (1.0f / 9.0f);
+                // Tent3x3 = 1, Tent5x5 = 2, Tent7x7 = 5 (ShadowFilter).
+                const uint tentQuality = gKromShadowFilter == 5u ? 3u : min(gKromShadowFilter, 2u);
+                visibility = SampleShadowTent(atlasUv, depth, dDepth_dUV, baseBias, atlasRect, tentQuality);
             }
             else
             {
@@ -582,6 +635,10 @@ float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
 #endif
 {
     gKromShadowPixelPos = IN.positionCS.xy;
+#if !defined(KROM_SHADOWS_NONE)
+    gKromShadowDpdx = ddx(IN.positionWS);
+    gKromShadowDpdy = ddy(IN.positionWS);
+#endif
     float2 uv = KromPbrUV(IN.texCoord, IN.scaledLocalPosition, boxTileSize);
 #ifdef KROM_MATERIAL_GRAPH
     EvaluateMaterialGraph(boxTileSize > 0.0f ? uv : IN.meshUV, IN.positionWS);
@@ -780,6 +837,11 @@ LocalProbeIBL localProbes;
     float3 totalDirectSpecular = float3(0.0f, 0.0f, 0.0f);
     float firstNoL = 0.0f;
     float firstShadowVisibility = 1.0f;
+    // DBG_VIEW_SHADOW_CASCADE: first directional shadow that was sampled.
+    uint   dbgShadowCascade = 0xFFFFFFFFu;
+    float4 dbgShadowPosLCS = float4(0.0f, 0.0f, 0.0f, 1.0f);
+    float4 dbgShadowRect = float4(0.0f, 0.0f, 0.0f, 0.0f);
+    float  dbgShadowVisibility = 1.0f;
 
     uint tileCountX = max(1u, (uint(screenSize.x) + FORWARD_PLUS_TILE_SIZE - 1u) / FORWARD_PLUS_TILE_SIZE);
     uint2 tileCoord = ComputeTileCoord(IN.positionCS.xy);
@@ -815,6 +877,7 @@ LocalProbeIBL localProbes;
                 atten *= CalcSpotAttenuation(L, SafeNormalize(light.directionWS.xyz), light.params.x, light.params.y);
         }
 
+        gKromShadowToLight = L;
         if (!(debugFlags & DBG_DISABLE_SHADOWS) && shadowBufferLightCount > 0u && type < 2.5f)
         {
             // Each branch below only picks the shadow view; the filter runs once
@@ -825,6 +888,11 @@ LocalProbeIBL localProbes;
             float4 shadowPosLCS = float4(0.0f, 0.0f, 0.0f, 1.0f);
             float shadowBiasSel = 0.0f;
             float shadowStrengthSel = 0.0f;
+            uint shadowCascadeSel = 0xFFFFFFFFu;
+            // Cascade transition: the next cascade, mixed in with this weight.
+            uint shadowViewIndexBlend = 0u;
+            float4 shadowPosLCSBlend = float4(0.0f, 0.0f, 0.0f, 1.0f);
+            float shadowBlendWeight = 0.0f;
             [loop]
             for (uint shadowIndex = 0u; shadowIndex < shadowBufferLightCount; ++shadowIndex)
             {
@@ -838,14 +906,14 @@ LocalProbeIBL localProbes;
                 const uint viewCount = (uint)(shadowExtra.y + 0.5f);
                 if (viewCount >= 6u)
                 {
-                    const float3 receiverWS = IN.positionWS + geomN * shadowMeta.z;
-                    const uint faceIndex = ChoosePointShadowFace(receiverWS - light.positionWS.xyz);
+                    const uint faceIndex = ChoosePointShadowFace(IN.positionWS - light.positionWS.xyz);
                     const uint viewIndex = firstViewIndex + faceIndex;
                     if (viewIndex < shadowBufferViewCount)
                     {
                         shadowSelected = true;
                         shadowViewIndexSel = viewIndex;
-                        shadowPosLCS = mul(shadowViews[viewIndex].viewProj, float4(receiverWS, 1.0f));
+                        shadowPosLCS = ComputeShadowReceiverCS(IN.positionWS, geomN, shadowViews[viewIndex].viewProj,
+                                                               shadowMeta.z, shadowViews[viewIndex].rect);
                     }
                 }
                 else if (type < 0.5f && viewCount > 1u)
@@ -854,8 +922,9 @@ LocalProbeIBL localProbes;
                     // and wider neighbours, and filter only the first one that contains
                     // the receiver. The filter runs once after the selection loop so fxc
                     // does not inline the whole shadow filter per attempt.
-                    const uint cascadeIndex = ChooseCascadeIndexFromViewDepth(
-                        IN.positionWS, viewCount, shadowExtra.z, shadowExtra.w);
+                    float cascadeBlend = 0.0f;
+                    uint cascadeIndex = ChooseCascadeIndexFromViewDepth(
+                        IN.positionWS, viewCount, shadowExtra.z, shadowExtra.w, cascadeBlend);
                     uint selectedViewIndex = 0xFFFFFFFFu;
                     float4 selectedPosLCS = float4(0.0f, 0.0f, 0.0f, 1.0f);
                     [unroll]
@@ -880,7 +949,8 @@ LocalProbeIBL localProbes;
                             const float4 posLCS = ComputeShadowReceiverCS(
                                 IN.positionWS, geomN,
                                 shadowView.viewProj,
-                                shadowMeta.z);
+                                shadowMeta.z,
+                                shadowView.rect);
                             const float3 ndcPos = posLCS.xyz / posLCS.w;
                             if (abs(ndcPos.x) < 1.0f && abs(ndcPos.y) < 1.0f &&
                                 ndcPos.z >= 0.0f && ndcPos.z < 1.0f)
@@ -896,6 +966,24 @@ LocalProbeIBL localProbes;
                     {
                         shadowSelected = true;
                         shadowViewIndexSel = selectedViewIndex;
+                        shadowCascadeSel = selectedViewIndex - firstViewIndex;
+                        // In the last part of a cascade the next one is mixed in
+                        // (both filtered), so sharpness changes smoothly.
+                        const uint blendView = selectedViewIndex + 1u;
+                        if (cascadeBlend > 0.0f && shadowCascadeSel == cascadeIndex &&
+                            cascadeIndex + 1u < viewCount && blendView < shadowBufferViewCount)
+                        {
+                            const float4 blendPos = ComputeShadowReceiverCS(IN.positionWS, geomN,
+                                shadowViews[blendView].viewProj, shadowMeta.z, shadowViews[blendView].rect);
+                            const float3 blendNdc = blendPos.xyz / blendPos.w;
+                            if (abs(blendNdc.x) < 1.0f && abs(blendNdc.y) < 1.0f &&
+                                blendNdc.z > 0.0f && blendNdc.z < 1.0f)
+                            {
+                                shadowViewIndexBlend = blendView;
+                                shadowPosLCSBlend = blendPos;
+                                shadowBlendWeight = cascadeBlend;
+                            }
+                        }
                         shadowPosLCS = selectedPosLCS;
                     }
                 }
@@ -904,19 +992,49 @@ LocalProbeIBL localProbes;
                     // Spot or single-cascade directional
                     shadowSelected = true;
                     shadowViewIndexSel = firstViewIndex;
+                    if (type < 0.5f)
+                        shadowCascadeSel = 0u;
                     shadowPosLCS = ComputeShadowReceiverCS(IN.positionWS, geomN,
-                                                           shadowViews[firstViewIndex].viewProj, shadowMeta.z);
+                                                           shadowViews[firstViewIndex].viewProj, shadowMeta.z,
+                                                           shadowViews[firstViewIndex].rect);
                 }
                 shadowBiasSel = shadowMeta.y;
-                shadowStrengthSel = shadowMeta.w;
+                // Directional shadows fade out over the last part of the shadow
+                // distance instead of ending in a hard line.
+                shadowStrengthSel = shadowMeta.w *
+                    (type < 0.5f ? 1.0f - KromShadowDistanceFade(IN.positionWS, shadowExtra.z) : 1.0f);
+                KromSelectShadowFilter(shadowLight.params);
                 break;
             }
 
             if (shadowSelected)
             {
+                // One filter call site (fxc inlines it once); two passes only in
+                // the cascade transition band.
                 const GpuShadowViewData shadowView = shadowViews[shadowViewIndexSel];
-                KromPreparePcss(shadowView.viewProj, shadowView.rect, IN.positionWS, L);
-                shadowVisibility = SampleShadowAtlas(shadowPosLCS, shadowBiasSel, shadowStrengthSel, shadowView.rect, shadowView.viewProj);
+                const uint shadowSampleCount = shadowBlendWeight > 0.0f ? 2u : 1u;
+                const float2 shadowGradientSel = KromShadowGradientFor(shadowPosLCS, shadowView.viewProj, shadowView.rect);
+                const float2 shadowGradientBlend = KromShadowGradientFor(shadowPosLCSBlend, shadowViews[shadowViewIndexBlend].viewProj, shadowViews[shadowViewIndexBlend].rect);
+                float blendedVisibility = 0.0f;
+                [loop]
+                for (uint shadowSample = 0u; shadowSample < shadowSampleCount; ++shadowSample)
+                {
+                    const GpuShadowViewData sampleView = shadowViews[shadowSample == 0u ? shadowViewIndexSel : shadowViewIndexBlend];
+                    const float4 samplePos = shadowSample == 0u ? shadowPosLCS : shadowPosLCSBlend;
+                    const float sampleWeight = shadowSample == 0u ? 1.0f - shadowBlendWeight : shadowBlendWeight;
+                    gKromShadowGradient = shadowSample == 0u ? shadowGradientSel : shadowGradientBlend;
+                    KromPreparePcss(sampleView.viewProj, sampleView.rect, IN.positionWS, L);
+                    blendedVisibility += sampleWeight *
+                        SampleShadowAtlas(samplePos, shadowBiasSel, shadowStrengthSel, sampleView.rect, sampleView.viewProj);
+                }
+                shadowVisibility = blendedVisibility;
+                if (dbgShadowCascade == 0xFFFFFFFFu && shadowCascadeSel != 0xFFFFFFFFu)
+                {
+                    dbgShadowCascade = shadowCascadeSel;
+                    dbgShadowPosLCS = shadowPosLCS;
+                    dbgShadowRect = shadowView.rect;
+                    dbgShadowVisibility = shadowVisibility;
+                }
             }
         }
         // Contact shadows multiply onto the shadow map of the main light only.
@@ -980,6 +1098,10 @@ LocalProbeIBL localProbes;
     if (debugFlags & DBG_VIEW_FRESNEL_F0)  return float4(F0, 1.0f);
     if (debugFlags & DBG_VIEW_GTAO)        return float4(gtaoFactor.xxx, 1.0f);
     if (debugFlags & DBG_VIEW_CONTACT_SHADOW) return float4(contactShadowFactor.xxx, 1.0f);
+#if !defined(KROM_SHADOWS_NONE)
+    if (debugFlags & DBG_VIEW_SHADOW_CASCADE)
+        return float4(KromShadowCascadeDebugColor(dbgShadowCascade, dbgShadowPosLCS, dbgShadowRect, dbgShadowVisibility), 1.0f);
+#endif
     if (probeDebugView == 1u) return float4(LocalProbeDebugColor(localProbes.firstProbe), 1.0f);
     if (probeDebugView == 2u) return float4((1.0f - localProbes.remaining).xxx, 1.0f);
     if (probeDebugView == 3u) return float4(specularOcclusion.xxx, 1.0f);

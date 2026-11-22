@@ -40,6 +40,8 @@ enum DebugFlags : uint32_t
     DBG_DISABLE_GTAO       = 1u << 21,
     DBG_VIEW_CONTACT_SHADOW    = 1u << 22,
     DBG_DISABLE_CONTACT_SHADOW = 1u << 23,
+    // Directional shadow: cascade colour + shadow-map texel checkerboard (PBR shaders).
+    DBG_VIEW_SHADOW_CASCADE    = 1u << 24,
 };
 
 struct alignas(16) FrameConstants

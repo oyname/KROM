@@ -1906,6 +1906,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
         addons::shadow::ShadowFeatureConfig shadowConfig{};
         shadowConfig.maxShadowLights = config.maxShadowLights;
         shadowConfig.maxShadowViews = config.maxShadowViews;
+        shadowConfig.quality = m_shadowQuality;
 
         if (!renderSystem.RegisterFeature(addons::mesh_renderer::CreateMeshRendererFeature()) ||
             !renderSystem.RegisterFeature(addons::lighting::CreateLightingFeature()) ||
@@ -3331,7 +3332,8 @@ int KromEditorApp::Run(IAppScene& scene)
                 if (input->KeyHit(platform::Key::F6))  setDebugView(renderer::DBG_VIEW_AO);
                 if (input->KeyHit(platform::Key::F7))  setDebugView(renderer::DBG_VIEW_ROUGHNESS);
                 if (input->KeyHit(platform::Key::F8))  setDebugView(renderer::DBG_VIEW_METALLIC);
-                if (input->KeyHit(platform::Key::F9))  setDebugView(renderer::DBG_VIEW_SHADOW);
+                // Shift+F9: shadow cascades and shadow-map texels.
+                if (input->KeyHit(platform::Key::F9))  setDebugView(shiftDown ? renderer::DBG_VIEW_SHADOW_CASCADE : renderer::DBG_VIEW_SHADOW);
                 if (input->KeyHit(platform::Key::F10)) setDebugView(renderer::DBG_VIEW_NOL);
                 // F12 is not usable: Windows reserves it as the debugger break key.
                 if (input->KeyHit(platform::Key::F11))
@@ -6327,6 +6329,13 @@ void KromEditorApp::ApplyProjectRenderSettings()
     m_editorState.gtaoSettings.radius = rendering.gtaoRadius;
     m_editorState.gtaoSettings.intensity = rendering.gtaoIntensity;
     m_editorState.gtaoSettings.bias = rendering.gtaoBias;
+    // Shadow-map resolution and filter come from the quality level, not the lights.
+    if (m_shadowQuality)
+    {
+        m_shadowQuality->directionalResolution = rendering.shadowSunResolution;
+        m_shadowQuality->localResolution = rendering.shadowLocalResolution;
+        m_shadowQuality->filter = static_cast<ShadowFilter>(std::min<uint8_t>(rendering.shadowFilter, kMaxShadowQualityFilter));
+    }
     // The contact shadow add-on takes the project values directly (scripts: EditorRenderSettingsService).
     if (m_contactShadowResources)
     {
@@ -6347,9 +6356,11 @@ class EditorRenderSettingsService final : public engine::script::IRenderSettings
 {
 public:
     using ContactShadowResources = std::shared_ptr<renderer::addons::contact_shadow::ContactShadowGpuResources>;
+    using ShadowQuality = std::shared_ptr<addons::shadow::ShadowQualitySettings>;
     EditorRenderSettingsService(renderer::addons::editor::EditorState& state,
-                                const ContactShadowResources& contactShadows) noexcept
-        : m_state(state), m_contactShadows(contactShadows) {}
+                                const ContactShadowResources& contactShadows,
+                                const ShadowQuality& shadowQuality) noexcept
+        : m_state(state), m_contactShadows(contactShadows), m_shadowQuality(shadowQuality) {}
 
     engine::script::RenderSettings Get() const override
     {
@@ -6368,6 +6379,12 @@ public:
         out.ssrEnabled = m_state.ssrEnabled;
         out.contactShadowsEnabled = m_contactShadows && m_contactShadows->settings.enabled;
         out.postAA = static_cast<engine::script::PostAAMode>(m_state.postAA);
+        if (m_shadowQuality)
+        {
+            out.sunShadowResolution = m_shadowQuality->directionalResolution;
+            out.localShadowResolution = m_shadowQuality->localResolution;
+            out.shadowFilter = static_cast<uint8_t>(m_shadowQuality->filter);
+        }
         out.grading = engine::script::ToScriptColorGrading(m_state.tonemap.grading);
         return out;
     }
@@ -6388,6 +6405,12 @@ public:
             m_contactShadows->settings.enabled = in.contactShadowsEnabled;
         m_state.postAA = static_cast<PostAAMode>(std::min<uint8_t>(static_cast<uint8_t>(in.postAA), 2u));
         m_state.tonemap.grading = engine::script::FromScriptColorGrading(in.grading);
+        if (m_shadowQuality)
+        {
+            m_shadowQuality->directionalResolution = ClampShadowQualityResolution(in.sunShadowResolution);
+            m_shadowQuality->localResolution = ClampShadowQualityResolution(in.localShadowResolution);
+            m_shadowQuality->filter = static_cast<ShadowFilter>(std::min<uint8_t>(in.shadowFilter, kMaxShadowQualityFilter));
+        }
     }
     // SetQualityLevel: the default (live values only); the editor never stores
     // a player's level, StopEditorPlay restores the project settings.
@@ -6395,6 +6418,7 @@ public:
 private:
     renderer::addons::editor::EditorState& m_state;
     const ContactShadowResources& m_contactShadows;
+    const ShadowQuality& m_shadowQuality;
 };
 
 } // namespace
@@ -6403,7 +6427,8 @@ engine::gameplay::GameSimulationHooks KromEditorApp::MakeEditorPlayHooks()
 {
     engine::gameplay::GameSimulationHooks hooks{};
     if (!m_playRenderSettings)
-        m_playRenderSettings = std::make_unique<EditorRenderSettingsService>(m_editorState, m_contactShadowResources);
+        m_playRenderSettings = std::make_unique<EditorRenderSettingsService>(m_editorState, m_contactShadowResources,
+                                                                             m_shadowQuality);
     hooks.renderSettings = m_playRenderSettings.get();
     hooks.instantiatePrefab = &m_playInstantiatePrefab;
     hooks.materials = &m_materialSystem;

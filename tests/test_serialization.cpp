@@ -443,6 +443,9 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     settings.rendering.contactShadowIntensity = 0.5f;
     settings.rendering.contactShadowSteps = 20u;
     settings.rendering.specularAntiAliasing = false;
+    settings.rendering.shadowSunResolution = 4096u;
+    settings.rendering.shadowLocalResolution = 512u;
+    settings.rendering.shadowFilter = 5u;
     JsonWriter out;
     out.BeginObject();
     WriteProjectSettings(out, settings);
@@ -461,6 +464,23 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK_EQ(ctx, oldProject.rendering.contactShadowSteps, 12u);
     CHECK(ctx, oldProject.rendering.specularAntiAliasing);   // missing key: specular AA stays on
     CHECK(ctx, oldProject.rendering.brdfBurleyDiffuse);      // missing key: Burley on
+    // No shadow keys and options that match no level: shadow defaults.
+    CHECK_EQ(ctx, oldProject.rendering.shadowSunResolution, 2048u);
+    CHECK_EQ(ctx, oldProject.rendering.shadowLocalResolution, 1024u);
+    CHECK_EQ(ctx, oldProject.rendering.shadowFilter, uint8_t{2});
+    // No shadow keys, options of Low: the project stays Low (shadows of Low).
+    const auto lowProject = ReadProjectSettings(JsonParser::Parse(
+        R"({"settings":{"rendering":{"msaaSamples":1,"postAA":"fxaa","gtaoEnabled":false,"ssrEnabled":false,"contactShadowsEnabled":false}}})",
+        error));
+    CHECK_EQ(ctx, GetRenderQualityLevel(lowProject.rendering), RenderQualityLevel::Low);
+    CHECK_EQ(ctx, lowProject.rendering.shadowSunResolution, 1024u);
+    CHECK_EQ(ctx, lowProject.rendering.shadowFilter, uint8_t{1});
+    // Out-of-range values are clamped / rounded to a power of two.
+    const auto oddProject = ReadProjectSettings(JsonParser::Parse(
+        R"({"settings":{"rendering":{"shadowSunResolution":3000,"shadowLocalResolution":9000,"shadowFilter":9}}})", error));
+    CHECK_EQ(ctx, oddProject.rendering.shadowSunResolution, 2048u);
+    CHECK_EQ(ctx, oddProject.rendering.shadowLocalResolution, 4096u);
+    CHECK_EQ(ctx, oddProject.rendering.shadowFilter, uint8_t{5});
     const auto result = ReadProjectSettings(JsonParser::Parse(out.GetString(), error));
     CHECK(ctx, error.empty());
     CHECK_EQ(ctx, result.windowTitle, settings.windowTitle);
@@ -473,6 +493,9 @@ static void TestProjectSettingsRoundTrip(test::TestContext& ctx)
     CHECK_EQ(ctx, result.exportBuild, settings.exportBuild);
     CHECK_EQ(ctx, result.gravity.y, settings.gravity.y);
     CHECK_EQ(ctx, result.collisionMask[31], settings.collisionMask[31]);
+    CHECK_EQ(ctx, result.rendering.shadowSunResolution, 4096u);
+    CHECK_EQ(ctx, result.rendering.shadowLocalResolution, 512u);
+    CHECK_EQ(ctx, result.rendering.shadowFilter, uint8_t{5});
     CHECK(ctx, result.renderingStored);
     CHECK_EQ(ctx, result.rendering.tonemapOperator, settings.rendering.tonemapOperator);
     CHECK_EQ(ctx, result.rendering.msaaSamples, 4u);
@@ -539,6 +562,19 @@ static void TestRenderQualityLevels(test::TestContext& ctx)
     CHECK_EQ(ctx, high.msaaSamples, 2u);
     CHECK_EQ(ctx, high.postAA, RenderPostAA::Smaa);
     CHECK(ctx, high.gtaoEnabled && high.ssrEnabled && high.contactShadowsEnabled);
+    // Shadow quality (2026-11-21): resolution sun / point-spot and filter.
+    CHECK_EQ(ctx, low.sunShadowResolution, 1024u);
+    CHECK_EQ(ctx, low.localShadowResolution, 512u);
+    CHECK_EQ(ctx, low.shadowFilter, uint8_t{1});
+    CHECK_EQ(ctx, medium.sunShadowResolution, 2048u);
+    CHECK_EQ(ctx, medium.localShadowResolution, 1024u);
+    CHECK_EQ(ctx, medium.shadowFilter, uint8_t{2});
+    CHECK_EQ(ctx, high.sunShadowResolution, 2048u);
+    CHECK_EQ(ctx, high.localShadowResolution, 2048u);
+    CHECK_EQ(ctx, high.shadowFilter, uint8_t{2});
+    CHECK_EQ(ctx, ClampShadowQualityResolution(100u), 256u);
+    CHECK_EQ(ctx, ClampShadowQualityResolution(3000u), 2048u);
+    CHECK_EQ(ctx, ClampShadowQualityResolution(100000u), 4096u);
 
     // Project settings: defaults (no post-AA) are Custom; a level sets only its
     // five options; one changed option makes it Custom; Custom changes nothing.

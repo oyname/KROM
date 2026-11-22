@@ -45,7 +45,6 @@ struct ShadowFrameData
     std::vector<uint32_t> shadowedLightIndices;
     CurrentRenderPathShadowPlan currentRenderPath;
     GpuFrameResources gpu;
-    uint32_t atlasViewCountHint = 0u;
     uint32_t culledReceiverCount = 0u;
     uint32_t culledBudgetCount = 0u;
 
@@ -60,7 +59,6 @@ struct ShadowFrameData
         gpu.viewCount = 0u;
         gpu.lightCapacity = 0u;
         gpu.viewCapacity = 0u;
-        atlasViewCountHint = 0u;
         culledReceiverCount = 0u;
         culledBudgetCount = 0u;
     }

@@ -84,6 +84,10 @@ struct ShadowView
 
     ShadowViewport viewport{};
     ShadowScissorRect scissor{};
+
+    // Top-left texel of this view's tile in the shadow atlas (ShadowAtlasLayout).
+    uint32_t atlasX = 0u;
+    uint32_t atlasY = 0u;
 };
 
 using ShadowLightID = uint32_t;

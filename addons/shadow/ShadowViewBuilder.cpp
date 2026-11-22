@@ -171,12 +171,14 @@ void ShadowViewBuilder::BuildDirectional(const LightComponent& light,
         for (const math::Vec3& c : corners)
             radius = std::max(radius, (c - sphereCenter).Length());
 
-        // Reserve a texel for center snapping and the PCF footprint. Quantizing
-        // the radius prevents floating point noise from resizing a stable slice.
+        // Reserve texels for center snapping and the filter footprint (the 7x7 tent
+        // reaches 3.5 texels out). Quantizing the radius prevents floating point
+        // noise from resizing a stable slice.
         const uint32_t resolution = ViewResolution(outRequest);
         radius = std::ceil(radius * 16.f) / 16.f;
-        if (resolution > 4u)
-            radius *= static_cast<float>(resolution) / static_cast<float>(resolution - 4u);
+        constexpr uint32_t kBorderTexels = 10u;   // both sides together
+        if (resolution > 4u * kBorderTexels)
+            radius *= static_cast<float>(resolution) / static_cast<float>(resolution - kBorderTexels);
         const float texelSize = (2.0f * radius) / static_cast<float>(resolution);
 
         // Zentrum entlang der Licht-XY-Achsen auf Texel-Grid einrasten.

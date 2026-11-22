@@ -240,7 +240,8 @@ bool Detach(LPENTITY child, bool keepWorldTransform = true);
 bool SetPosition(LPENTITY entity, const engine::math::Vec3& position);
 bool SetPosition(LPENTITY entity, float x, float y, float z);
 bool SetRotationEulerDeg(LPENTITY entity, float pitch, float yaw, float roll);
-// Gibt (pitch, yaw, roll) in Grad aus der WorldTransform-Quaternion zurück.
+// Returns (pitch, yaw, roll) in degrees of the current world rotation (parent
+// chain included), also right after SetRotationEulerDeg/TurnEntity in the same step.
 // Konvention: ZYX-Euler (Reihenfolge: Roll → Pitch → Yaw).
 engine::math::Vec3 GetRotationEulerDeg(LPENTITY entity);
 bool SetScale(LPENTITY entity, const engine::math::Vec3& scale);
@@ -252,6 +253,8 @@ bool GetWorldBounds(LPENTITY entity,
                     engine::math::Vec3& outCenter,
                     engine::math::Vec3& outExtents,
                     float& outBoundingSphere);
+// Turns the entity so that its world -Z points at target (world space, current
+// positions, parent rotation accounted for); up is a world direction.
 bool LookAt(LPENTITY entity, const engine::math::Vec3& target, const engine::math::Vec3& up = engine::math::Vec3::Up());
 bool LookAt(LPENTITY entity, LPENTITY targetEntity, const engine::math::Vec3& up = engine::math::Vec3::Up());
 
@@ -377,13 +380,21 @@ void SetSsrEnabled(bool enabled);
 // No effect under OpenGL; GetContactShadowsEnabled then returns false.
 void SetContactShadowsEnabled(bool enabled);
 [[nodiscard]] bool GetContactShadowsEnabled();
+// Shadow-map quality for all lights (as in Unreal/Unity, not per light): tile
+// edge in texels of each sun cascade and of each point/spot view (256..4096,
+// rounded down to a power of two) and the filter (0 none, 1 PCF 3x3, 2 PCF 5x5,
+// 3 Poisson, 4 PCSS, 5 PCF 7x7). The project settings shadowSunResolution,
+// shadowLocalResolution and shadowFilter give the start values; the quality
+// levels set them too.
+void SetShadowQuality(uint32_t sunResolution, uint32_t localResolution, uint8_t filter);
+void GetShadowQuality(uint32_t& sunResolution, uint32_t& localResolution, uint8_t& filter);
 // Post-process anti-aliasing after tonemapping (off, FXAA, SMAA), in addition
 // to MSAA; the project setting postAA gives the start value. No effect under OpenGL.
 void SetPostAA(engine::RenderPostAA mode);
 [[nodiscard]] engine::RenderPostAA GetPostAA();
 
-// Quality level for a player's options menu: sets MSAA, post-AA, GTAO, SSR and
-// contact shadows of Low / Medium / High at once (engine::RenderQualityPreset);
+// Quality level for a player's options menu: sets MSAA, post-AA, GTAO, SSR,
+// contact shadows and shadow quality of Low / Medium / High at once (engine::RenderQualityPreset);
 // Custom changes nothing. The level is remembered on this computer
 // (user-settings.json below %LOCALAPPDATA%\KROM\Games\<window title>) and
 // replaces the project's options at the next start. Runs started from the

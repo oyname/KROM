@@ -913,6 +913,49 @@ void TestContextTranslateLocalFollowsRotation(test::TestContext& ctx)
     CHECK(ctx, !Near(sc.Forward(), math::Vec3::Forward()));
 }
 
+// GetWorldPosition is current right after a setter in the same frame (before the
+// TransformSystem update) and includes the parent's rotation and scale.
+void TestContextWorldPositionAfterSetter(test::TestContext& ctx)
+{
+    ecs::ComponentMetaRegistry reg;
+    RegisterCoreComponents(reg);
+    ecs::World world(reg);
+    const EntityID parent = world.CreateEntity();
+    world.Add<engine::TransformComponent>(parent);
+    world.Add<engine::WorldTransformComponent>(parent);
+    const EntityID child = world.CreateEntity();
+    world.Add<engine::TransformComponent>(child);
+    world.Add<engine::WorldTransformComponent>(child);
+    world.Add<engine::ParentComponent>(child, engine::ParentComponent{parent});
+    TransformSystem transforms;
+    transforms.Update(world);
+
+    ScriptServices services{};
+    services.world = &world;
+    ScriptFrameContext sc{0.016f, child, services};
+
+    sc.SetPosition({1.f, 0.f, 0.f}, parent);
+    sc.SetRotationEulerDeg(0.f, 90.f, 0.f, parent);
+    sc.SetScale({2.f, 2.f, 2.f}, parent);
+    sc.SetPosition({1.f, 0.f, 0.f});
+    // Parent at (1,0,0), yaw 90 turns +X into -Z, scale 2: child at (1, 0, -2).
+    CHECK(ctx, Near(sc.GetWorldPosition(parent), {1.f, 0.f, 0.f}));
+    CHECK(ctx, Near(sc.GetWorldPosition(), {1.f, 0.f, -2.f}));
+    CHECK(ctx, Near(sc.GetPosition(), {1.f, 0.f, 0.f}));   // GetPosition stays local
+    sc.Translate({0.f, 3.f, 0.f});
+    CHECK(ctx, Near(sc.GetWorldPosition(), {1.f, 6.f, -2.f}));
+
+    // The regular update afterwards produces the same world position.
+    transforms.Update(world);
+    CHECK(ctx, Near(world.Get<engine::WorldTransformComponent>(child)->position, {1.f, 6.f, -2.f}));
+    CHECK(ctx, Near(sc.GetWorldPosition(), {1.f, 6.f, -2.f}));
+
+    // Without a world transform the local position is returned, as before.
+    const EntityID loose = world.CreateEntity();
+    world.Add<engine::TransformComponent>(loose).localPosition = {4.f, 5.f, 6.f};
+    CHECK(ctx, Near(sc.GetWorldPosition(loose), {4.f, 5.f, 6.f}));
+}
+
 void TestContextComponentAccess(test::TestContext& ctx)
 {
     auto reg = MakeGameplayRegistry();
@@ -1637,6 +1680,7 @@ int RunScriptTests()
         .Add("Roundtrip: no registry nameOnly",  TestRoundtripNoRegistryNameOnly)
         .Add("Context: transform marks dirty",   TestContextTransformMarksDirty)
         .Add("Context: local translate",         TestContextTranslateLocalFollowsRotation)
+        .Add("Context: world position after setter", TestContextWorldPositionAfterSetter)
         .Add("Context: component access",        TestContextComponentAccess)
         .Add("Context: destroy is deferred",     TestContextDestroyIsDeferred)
         .Add("Context: input",                   TestContextInput)

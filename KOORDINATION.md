@@ -17,9 +17,519 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## krom.h wrapper: mesh, material, texture and model-import functions moved to `KromAssetApi` (Claude Opus 5.5, 2026-11-22)
+
+- User request: next step of the `src/app/KromWrapper.cpp` split, on branch `refactor/krom-mesh-material-api`
+  (from `fix/krom-world-transform-read`), not committed.
+- New `src/app/KromAssetApi.hpp/.cpp` (`Krom::internal`), bodies of: `CreateEntityFromAsset`, `PrintAssetTree`,
+  `LoadMesh`, `LoadTexture`, `LoadMaterial`, both `CreateTextureMaterial`, `CreateLitMaterial`, `SetMesh`,
+  `SetMaterial`, `SetMaterialRecursive`, both `SetTexture`, `SetPBR`, `SetMeshFromAsset`, `SetMaterialFromAsset`,
+  `CreateMeshAsset`, `CreateMeshEntity`, `CreateMesh`; the helpers `ComputeImportedModelCenter`,
+  `BundleHasSkeletonsOrAnimations`, `ApplyMaterialRecursive`, `AddVertex(SubMeshData&, const MeshVertex&)`,
+  `RegisterProceduralMesh` (all `static`, their only users moved) and `CreateProceduralEntity` (public, also used
+  by `SpawnShaderWarmupAssets`). Moved by script from `git show HEAD` (renames only: `State& state = Get();`
+  dropped, `State& state` -> `const AssetContext& ctx`, `state.x` -> `ctx.x`, `MakeMaterialContext(state)` ->
+  `ctx.materials`, `state.texturePaths` -> `ctx.materials.texturePaths`, `EnsureAnimationSystems(state)` ->
+  `ctx.ensureAnimationSystems()`, calls between moved functions get `ctx` / `ctx.world` / `ctx.assetPipeline`,
+  e.g. `CreateEntity(name)` -> `CreateEntity(ctx.world, name)`; the two calls in `SetTexture` that rely on the
+  krom.h default arguments go to `Krom::CreateTextureMaterial(...)`). The line diff against HEAD
+  (`out/claude-assetapi-bodydiff.log`) shows only signature lines and these renames.
+- Cut: the module owns no fields. `AssetContext {initialized, world, assetPipeline, assetRegistry,
+  transformSystem, boundsSystem, scriptAddonRegistry, ensureAnimationSystems, materials}` (the last one a
+  `RuntimeMaterialContext` by value, as in `SceneContext`), built per call by `MakeAssetContext(state)`.
+  `LoadMesh`, `LoadMaterial` and `PrintAssetTree` take only the `AssetPipeline*`, `LoadTexture` the pipeline and
+  the `TexturePathMap&`. The `state.initialized` / world checks moved with the bodies (`ctx.initialized`), so
+  every forward is a one-liner and the order of checks and side effects is unchanged; building the context has
+  no side effects (references, `.get()`, `GetRenderSystem()`).
+- `EnsureAnimationSystems` stays in the wrapper: it creates `State::animationSystem` / `skinningSystem`, which
+  `Run()` and `Shutdown()` also use, and its clip loader lambda captures the static `State`. The context carries
+  it as a plain function pointer (`[] { EnsureAnimationSystems(Get()); }`), called at the same place as before.
+  Moving it would have meant putting both `unique_ptr`s and the render system into the context or changing what
+  the stored lambda captures.
+- `texturePaths` stays in `State`: besides `LoadTexture` / `CreateTextureMaterial(LPTEXTURE)` it is written by
+  the runtime materials (through `RuntimeMaterialContext::texturePaths`) and cleared by `Shutdown()`; owning it
+  here would only move the map into a struct of the module without any gain, and the lower-level runtime
+  materials would then write into a field of the higher-level asset module.
+- Stayed in the wrapper: `CreateEnvironmentFromHDR` and `SetActiveEnvironment` (render-environment functions:
+  they need the render system and `activeEnvironment`, which the scene manager shares; the only asset part is a
+  call of `Krom::LoadTexture`, which now forwards to the module; they fit a later render/probe step);
+  `EnsureAnimationSystems` (above); `ComputeImportedModelRadius` (still no user at all; moved as `static` it
+  produced C4505 "unreferenced function removed", so it was left where it was, unchanged - not deleted);
+  the surface forwards; `SpawnShaderWarmupAssets` / `CreateWarmupCubeMesh` (call `internal::CreateProceduralEntity`
+  and krom.h functions); `InstantiatePrefabForScript`. Nothing was left behind because of entanglement.
+- `KromWrapper.cpp` 2856 -> 2432 lines; module 592 .cpp + 85 .hpp. krom.h is unchanged.
+  `src/app/KromAssetApi.cpp` added to both wrapper libraries in `CMakeLists.txt`.
+- New opt-in test `krom_asset_api_tests` (`tests/test_runtime_asset_api.cpp`, DX11, hidden window, 129 checks):
+  all asset functions before `Graphics()` (null / false; `CreateTextureMaterial(LPTEXTURE)` logs "no known
+  path", `PrintAssetTree` logs an error); `LoadMesh` (on a copy of `wuerfel.glb` in `out/krom-asset-api-test`,
+  because loading a model writes a `.kmesh` next to it), `LoadTexture`, `LoadMaterial` with valid / missing /
+  null paths and repeated loads; `CreateTextureMaterial` (path, handle, Unlit warning path, null and missing
+  texture, unknown handle), `CreateLitMaterial`; `CreateMeshAsset` with / without indices, index pointer with
+  count 0, generation flags off, null name, empty input; `SetMesh` (mesh, local bounds, default material, kept
+  material on a second `SetMesh`, null mesh / null / destroyed entity); `SetMeshFromAsset` /
+  `SetMaterialFromAsset` (asset path stored, runtime material, missing files, null); `SetMaterialRecursive`,
+  `SetTexture` non-recursive / recursive (handle overload) and `SetPBR` recursive over root (no mesh) -> mesh
+  child -> mesh grandchild + empty child; `CreateMeshEntity`, `CreateMesh`. Model import (no runtime test
+  before): `PrintAssetTree` of `Models/car.glb` (static, one node 'Circle.005') and `Models/CesiumMan.glb`
+  (skinned, 22 nodes, one skeleton, one clip) plus missing / null / empty; `CreateEntityFromAsset` of both:
+  synthetic root named after the file or the name argument, children and names, every mesh entity with
+  material and bounds, model centred on its root, `SkinComponent` with skeleton on 'Cesium_Man', clip playing
+  and looping on root and skinned mesh, none on the static model; `car.glb` imported twice (same mesh handles,
+  new runtime materials); missing file and null / empty path; then 7 frames with camera + light, the
+  imported hierarchies destroyed in frame 4, the clip time advanced, all imported entities gone.
+- Current behaviour the test documents (reported, not changed): `LoadMesh` and `LoadMaterial` of a missing
+  file return a valid handle (failed asset in the registry), `LoadTexture` returns null; `SetMeshFromAsset` of
+  a missing file returns true and leaves the failed mesh and no material; `CreateEntityFromAsset` of a missing
+  file falls back to a single entity with the failed mesh and no material (named after the path without a
+  name) and logs "kein Bundle-Importer", although the glTF importer exists and only the file is missing;
+  `SetMaterialFromAsset` of a missing `.mat` returns true and assigns a material; `SetMaterial` on an entity
+  without a mesh stores the unrealized registry handle (the handle-space mix in the material component);
+  `CreateMesh` (empty mesh) gets no default material; `CreateTextureMaterial(nullptr)` and with a missing
+  texture file return materials, a non-Lit model only warns; `CreateTextureMaterial(LPTEXTURE)` and the import
+  make new materials per call (not cached); a second import of the same file replaces the mesh assets by path,
+  so both instances share them; loading a model writes `<name>.kmesh` next to the source file (inside the
+  project when the path is relative). From the code, not checkable through krom.h: `RegisterProceduralMesh`
+  always fills zero normals, so `MeshData::generateNormals = false` does not keep zero normals.
+- Checked: before/after - the new test was written, built and run against the pre-step wrapper
+  (129 PASS) and after the move (129 PASS). PASS/FAIL lines identical for all seven runtime tests and
+  `krom_tests`, krom.h / warning / error log lines identical; the only differing line is the `INFO` clip time
+  after three frames (frame timing) (`out/claude-assetapi-test-<test>-before.log` / `-after.log`). After the move
+  (`out/claude-assetapi-build.log`, only the known C4834 from `MaterialRuntimeBridge.hpp`):
+  `krom_asset_api_tests` 129 PASS, `krom_entity_api_tests` 156, `krom_scene_api_tests` 53,
+  `krom_scene_lifetime_tests` 11, `krom_runtime_material_tests` 21, `krom_render_settings_tests` 25,
+  `krom_surface_tests` 26 (all 0 FAIL), `krom_tests` 510 passed / 0 failed (does not link the wrapper).
+  Full Debug build (`cmake --build out/build/x64-Debug`, `out/claude-assetapi-build-full.log`, exit 0, no
+  errors, no warnings in the log; DX11/Vulkan/OpenGL runtimes, examples and DemoProject relinked), then the test
+  targets rebuilt (up to date, `out/claude-assetapi-build-final.log`) and all eight test programs run again with
+  the same counts and identical PASS lines (again only the clip-time `INFO` line differs;
+  `out/claude-assetapi-test-<test>-final.log`).
+- Not checked: Release; runs under Vulkan/OpenGL (only linked by the full build); the GLFW wrapper
+  `engine_krom_wrapper_glfw` (not configured in `out/build/x64-Debug`, so `KromAssetApi.cpp` was never compiled
+  into it); the editor and Play (do not use these wrapper functions); importers other than glTF; models with
+  several meshes per node or several root nodes, models without nodes (the `_Mesh_<n>` path of the prefab
+  build); the no-importer fallback with an existing file (needs a build without `KROM_WRAPPER_HAS_GLTF`).
+- Please review: `MakeAssetContext` (field order; `initialized` copied by value, `world` / `assetPipeline`
+  taken per call like before); the function pointer for `EnsureAnimationSystems`; the two `Krom::CreateTextureMaterial`
+  calls in `SetTexture` (default arguments of krom.h) versus `internal::` calls everywhere else; that
+  `CreateEntityFromAsset` now builds one `RuntimeMaterialContext` per call instead of one per record (same
+  values); `ComputeImportedModelRadius` left behind.
+- Still open in the split: project/user files (`LoadProject`, `ReadProjectFile`), render/probe/environment
+  functions (`BakeReflectionProbe`, `CreateEnvironmentFromHDR`, `SetActiveEnvironment`, warm-up), `Run()`,
+  `DestroyEntity`, component/system/script functions.
+
+---
+
+## krom.h: world transform read right after a setter was stale; LookAt ignored the parent rotation (Claude Opus 5.5, 2026-11-22)
+
+- User request: behaviour fix on branch `fix/krom-world-transform-read` (from `refactor/krom-entity-api`),
+  not committed. Changes behaviour on purpose; krom.h signatures, setters and `TransformSystem::Update`
+  are unchanged.
+- Bug: the setters write `TransformComponent` and set `dirty`; `WorldTransformComponent` is only
+  recomputed by `TransformSystem::Update` (per frame after the user tick, and in `SetParent` / `Detach` /
+  `DestroyEntity`). (1) `GetRotationEulerDeg` returned the old rotation right after
+  `SetRotationEulerDeg` / `TurnEntity`. (2) `LookAt(entity, point)` used the entity's old position after
+  `SetPosition` / `MoveEntity` in the same tick (follow camera lagged one frame). (3) `LookAt(entity,
+  target)` saw a target moved in the same tick at its old position. (4) `LookAt` wrote the WORLD look
+  rotation into `localRotation`, so a child of a rotated parent looked in the wrong direction
+  (reproduced in the test below).
+- Fix: new `static WorldTransformComponent TransformSystem::ComputeCurrentWorldTransform(const
+  ecs::World&, EntityID)`: collects the chain entity -> root (inline buffer of 32, vector beyond,
+  bounded at 1024) and composes root -> entity with the existing private `ComputeWorldTransform`, so the
+  math (incl. `inheritParentScale`, matrix/inverse) exists once. Parent rules as `RebuildSortedList`
+  plus Update's "parent has a `WorldTransformComponent`" (alive, has TC and WTC, not itself). Reads only.
+  No TC / dead -> identity; a parent cycle (which Update never processes) -> the stored WTC (or the local
+  transform as root). No dirty shortcut: always recomputes (chain is short; equivalence with Update's
+  version logic was not worth arguing).
+- Users: `KromEntityApi.cpp` `ResolveCurrentWorld` (new, used by `ResolveEntityPosition` -> both
+  `LookAt`, and by `GetRotationEulerDeg`). Fallbacks kept: WTC only -> stored value, TC only -> local
+  value, neither -> zero. `LookAt` converts the desired world rotation to parent space:
+  `local = conj(parentWorld) * desiredWorld` (world = parentWorld * local, as in `ComputeWorldTransform`).
+  `parentWorld` is derived from the entity's own current world transform (`world * conj(local)`) so the
+  helper's parent rules are not repeated; only done when the entity has a `ParentComponent` and a WTC,
+  otherwise the rotation is written as before.
+- Script API (`IScriptContext`, compiled into each script module through `engine_script`):
+  `GetPosition` / `GetRotation` / `GetScale` / `Forward` / `Right` / `Up` read the LOCAL
+  `TransformComponent` (documented as local) - current, no staleness, not changed. There is no `LookAt`.
+  `GetWorldPosition` read the stored WTC (header comment said "one frame old") - same staleness; fixed
+  with the helper (body only, non-virtual, no signature/layout/vtable change; old script DLLs keep the old
+  behaviour until rebuilt). Header comment updated. Not a getter, noted only: `ScriptTriggerSystem` runs
+  after the scripts and before the transform update, so triggers see last frame's world transforms.
+- Other readers: `CaptureWorldTransform` / `ApplyLocalFromWorld` (`SetParent`/`Detach`) and the wrapper's
+  `BakeReflectionProbe` and the prefab warm-up call `Update()` first - fine. `GetWorldBounds` reads
+  `BoundsComponent::centerWorld/extentsWorld` from `BoundsSystem` (per frame and in `SetParent`/`Detach`):
+  stale right after a setter as well, but the helper does not solve it (needs the bounds recomputed from
+  mesh local bounds). Recommendation: separate step - either document "as of the last frame" in krom.h or
+  have `GetWorldBounds` run `transformSystem.Update` + `boundsSystem.Update` first (needs the
+  `EntityContext`). Not changed.
+- Tests: `krom_tests` new "ComputeCurrentWorldTransform matches Update" (3 levels, rotations, non-uniform
+  scale, one `inheritParentScale = false`; dirty chain, no component changed, equal to Update afterwards,
+  also after a change of the middle level) and "... broken data" (no TC, dead, null, self parent, parent
+  without TC, dead parent, cycle, 40-level chain) in `tests/test_ecs.cpp`; "Context: world position after
+  setter" in `tests/test_script.cpp`. `tests/test_runtime_entity_api.cpp`: the check that documented the
+  stale `GetRotationEulerDeg` now expects the new rotation; new checks for `TurnEntity`, child under a
+  rotated parent, `LookAt` after `SetPosition` / `MoveEntity`, `LookAt(entity)` to a target moved in the
+  same frame, `LookAt` of a child of a rotated and of a rotated + non-uniformly scaled parent (world
+  forward at the target, no roll), and frame-update consistency. 139 -> 156 checks.
+- Before the fix (`out/claude-worldtransform-test-entity-api-before.log`, `...-unit-before.log`): 13 new
+  entity-API checks FAILED (all getter/LookAt checks above), 3 checks of the script test failed; all 138
+  old PASS lines passed. After the fix: `krom_entity_api_tests` 156 PASS / 0 FAIL, `krom_scene_api_tests`
+  53, `krom_scene_lifetime_tests` 11, `krom_runtime_material_tests` 21, `krom_render_settings_tests` 25,
+  `krom_surface_tests` 26, `krom_tests` 510 passed / 0 failed (507 + 3 new); logs
+  `out/claude-worldtransform-test-*-after.log`, build `out/claude-worldtransform-build.log`. Full Debug
+  build (`cmake --build out/build/x64-Debug`, all editors and runtimes incl. Vulkan/OpenGL targets) exit 0,
+  no errors (`out/claude-worldtransform-build-full.log`); afterwards test targets rebuilt and all seven
+  programs run again with the same counts (`out/claude-worldtransform-test-*-final.log`).
+- Not checked: Release, Vulkan/OpenGL runs, the GLFW wrapper, the editor and Play at runtime, rebuilt
+  project script modules.
+- Reviewer: the derived parent rotation in `LookAt`; the helper's parent rules vs. Update in broken data
+  (Update uses a parent's stored WTC even when the parent has no TC or is the entity itself; the helper
+  treats those as roots); the cycle fallback; that `GetWorldPosition` change reaches scripts only after
+  they are rebuilt.
+
+## krom.h wrapper: entity functions moved to `KromEntityApi` (Claude Opus 5.5, 2026-11-21)
+
+- User request: next step of the `src/app/KromWrapper.cpp` split, on branch `refactor/krom-entity-api`
+  (from `refactor/krom-runtime-materials`), not committed.
+- New `src/app/KromEntityApi.hpp/.cpp` (`Krom::internal`), bodies of: `CreateEntity`, `IsAlive`,
+  `SetName`, `GetName`, `FindEntity`, `GetMainCamera`, `SetLayer`, `GetLayer`, `SetCameraLayers`,
+  `GetCameraLayers`, `SetTag`, `GetTag`, `FindEntityByTag`, `FindChild`, `CountChildren`, `GetChild`,
+  `SetVisible`, `SetActive`, `SetParent`, `Detach`, `SetPosition(Vec3)`, `SetRotationEulerDeg`,
+  `GetRotationEulerDeg`, `SetScale(Vec3)`, `MoveEntity`, `TurnEntity`, `GetWorldBounds`, both `LookAt`,
+  `CreateCamera`, `CreateDirectionalLight`, `CreatePointLight`, `CreateSpotLight`; the helpers
+  `QuatFromRotationMatrix`, `ResolveEntityPosition`, `CollectWorldBoundsRecursive`, `CapturedTransform`,
+  `CaptureWorldTransform`, `IsDescendantOf`, `ApplyLocalFromWorld` (all `static` now, their only users
+  moved); and `DestroyEntityRecursive` / `DetachEntityFromParent` moved unchanged from
+  `KromSceneManager.cpp` (the scene manager now includes `KromEntityApi.hpp`, so it depends on the
+  entity module and not the other way round). Moved by script (`State& state = Get();` dropped,
+  `state.world` -> `world` / `ctx.world`, `state.transformSystem`/`boundsSystem` -> `ctx.`, calls between
+  moved functions get the `world` argument, e.g. `CreateEntity(name)` -> `CreateEntity(world, name)` in
+  the camera/light creators); a line check against `git show HEAD` (`out/claude-entityapi-bodydiff.log`)
+  shows only signature lines and these renames.
+- Cut: the module owns no fields. Almost every function takes only `engine::ecs::World*` (may be null
+  before `Graphics()`); the wrapper forwards pass `Get().world.get()`. Only `SetParent` / `Detach` (and
+  their transform helpers) need more and take `EntityContext {world, transformSystem, boundsSystem}`,
+  built per call by `MakeEntityContext(state)`. The krom.h entity functions had no `EnsureInitialized()`
+  at the top, so the forwards are plain one-liners. Public in the header: the krom.h bodies plus the two
+  hierarchy helpers (users: scene manager, `DestroyEntity`, script destroy hook in `Run()`).
+- `DestroyEntity` stays in the wrapper unchanged: three of its steps touch scene-manager
+  (`persistentEntityIds`) and surface state (`surfaces`); moving it would either put those into the
+  context for one function or split the body and repeat the alive check. Its entity part already is
+  `internal::DestroyEntityRecursive`, which now lives in the entity module.
+- Stayed in the wrapper: `DestroyEntity` (above); the thin overloads `SetPosition(x,y,z)`,
+  `SetScale(x,y,z)`, `SetScale(uniform)` (they only call the krom.h `Vec3` overloads);
+  `ComputeImportedModelCenter` (user `CreateEntityFromAsset`, a later step); `ComputeImportedModelRadius`
+  (no user at all - unused already before this step, left as is). Nothing was left behind because of
+  entanglement.
+- `KromWrapper.cpp` 3439 -> 2856 lines; `KromSceneManager.cpp` 762 -> 738; module 806 .cpp + 102 .hpp.
+  krom.h is unchanged. `src/app/KromEntityApi.cpp` added to both wrapper libraries in `CMakeLists.txt`.
+- New opt-in test `krom_entity_api_tests` (`tests/test_runtime_entity_api.cpp`, DX11, hidden window,
+  139 checks): null-world behaviour before `Graphics()`, create/`IsAlive`/destroy (parent with children,
+  setters/getters rejecting a destroyed entity), names and `FindEntity`, `SetParent` with/without
+  `keepWorldTransform` (world position and scale under a rotated, scaled parent), cycle/self/null
+  rejection, re-parenting, `Detach`, `FindChild`/`CountChildren`/`GetChild` incl. out of range,
+  position/scale setters, `MoveEntity`, `TurnEntity`, Euler round trip for five angles, `LookAt` to a
+  point and to an entity (forward = local -Z), `GetWorldBounds` of a mesh hierarchy, `SetVisible` /
+  `SetActive` recursive and not, layers, camera layers, tags, `CreateCamera` + `GetMainCamera`, the three
+  light creators (component values), 5 rendered frames with a `DestroyEntity` during `Run()`.
+  Documented current behaviour worth knowing: `GetRotationEulerDeg` and `LookAt` read the world
+  transform, which is stale right after a setter until a transform update (`SetParent`/`Detach`/
+  `DestroyEntity` or a frame); `FindChild` also matches the root itself; `SetVisible` adds a
+  `VisibilityComponent`, `SetActive` adds a missing `ActiveComponent`; `SetLayer` is not recursive.
+- Checked: before/after - the new test was written, built and run against the pre-step wrapper
+  (139 PASS) and after the move (139 PASS); PASS lines identical for all six runtime tests, krom.h /
+  warning / error log lines identical apart from the random temp directory names in
+  `krom_scene_api_tests` (`out/claude-entityapi-test-<test>-before.log` / `-after.log`). After the move:
+  `krom_entity_api_tests` 139 PASS, `krom_scene_api_tests` 53, `krom_scene_lifetime_tests` 11,
+  `krom_runtime_material_tests` 21, `krom_render_settings_tests` 25, `krom_surface_tests` 26 (all 0 FAIL),
+  `krom_tests` 507 passed / 0 failed (`out/claude-entityapi-build.log`; only the known C4834 warning
+  from `MaterialRuntimeBridge.hpp`).
+  Full Debug build (`out/claude-entityapi-build-all.log`, exit 0, no errors, no new warnings;
+  DX11/Vulkan/OpenGL runtimes, examples and DemoProject relinked), then the test targets rebuilt (up to
+  date) and all seven test programs run again with the same counts and identical PASS lines
+  (`out/claude-entityapi-test-<test>-final.log`). `krom_tests` does not link the wrapper (exe not
+  rebuilt by this step).
+- Not checked: Release; runs under Vulkan/OpenGL (only linked by the full build); the GLFW wrapper
+  `engine_krom_wrapper_glfw` (not configured in `out/build/x64-Debug`, so `KromEntityApi.cpp` was never
+  compiled into it); editor play path (does not use these wrapper functions); script hooks that call
+  the entity functions indirectly were only exercised through the existing scene tests.
+- Please review: that `SetParent`/`Detach` are the only functions needing more than the world;
+  `MakeEntityContext` (field order); the camera/light creators calling `internal::CreateEntity` /
+  `SetPosition` / `SetRotationEulerDeg` with the same world instead of going back through krom.h (same
+  pointer, same checks); the include of `KromEntityApi.hpp` in `KromSceneManager.cpp`.
+- Still open in the split: mesh/material/texture functions and `CreateEntityFromAsset` /
+  `PrintAssetTree`, project/user files, `Run()`.
+
+---
+
+## krom.h wrapper: scene management moved to `KromSceneManager` (Claude Opus 5.5, 2026-11-21)
+
+- User request: next step of the `src/app/KromWrapper.cpp` split, on branch
+  `refactor/krom-runtime-materials` on top of the uncommitted runtime-materials step, not committed.
+- New `src/app/KromSceneManager.hpp/.cpp` (`Krom::internal`): `KromSceneData`, `SceneRecord`, the
+  `.kscene` parser (`HasLegacyKsceneEntities`, `ParseKscene`), scene instantiation
+  (`MarkPersistentRecursive`, `PreservePersistentSubtrees`, `UnloadSceneById`,
+  `RebuildChildrenComponentsForLoadedEntities`, `EnsureRuntimeTransformComponents`,
+  `ResolveSerializedSceneAssetBindings`, `LoadComponentSerializedScene`, `ApplySceneEnvironment`,
+  `InstantiateSceneData`, `LoadSceneFromData`, `LoadKsceneFile`), `DestroyEntityRecursive`,
+  `DetachEntityFromParent`, `RegisterScriptSpawn`, and the bodies of the krom.h scene functions
+  (`LoadScene`/`LoadSceneAdditive` by path and by index, `GetSceneCount`, `LoadSceneAsync`,
+  `IsSceneReady`, `ActivateScene`, `UnloadScene`, `UnloadAll`, `SetPersistent`,
+  `SetScenePersistent`, `FindEntityInScene`). Helpers moved by script (renames only:
+  `State& state` -> `const SceneContext& ctx`, `state.x` -> `ctx.x` / `ctx.manager.x`,
+  `MakeMaterialContext(state)` -> `ctx.materials`, `LoadMaterial`/`LoadTexture` -> `Krom::...`);
+  the krom.h bodies were copied and diffed against the old ones (only signature/`Get()` lines
+  differ).
+- Cut: the module OWNS `SceneManagerState` (`scenes`, `persistentEntityIds`, `nextSceneId`,
+  `projectScenePaths`; member `sceneManager` in `State`, at the place of the old fields so the
+  destruction order is unchanged). Everything shared comes in per call through `SceneContext`
+  (built by `MakeSceneContext(state)`): world, asset pipeline, asset registry, transform and bounds
+  systems, event bus, script registry, game simulation, asset root, project settings,
+  `editorLiveStateEnabled`, render settings, camera options (ambient), active environment, render
+  system, and a `RuntimeMaterialContext`. `IsSceneReady`, `SetPersistent`, `GetSceneCount` and the
+  index overloads only take `SceneManagerState&`; the index overloads call `Krom::LoadScene(path)` /
+  `Krom::LoadSceneAdditive(path)` as before.
+- Public in the header: the krom.h functions, plus `DestroyEntityRecursive` and
+  `DetachEntityFromParent` (also used by `DestroyEntity`, `SetParent`/`Detach` and the
+  script destroy hook in `Run()`) and `RegisterScriptSpawn` (script hook in `Run()`). Everything
+  else is `static` in the .cpp. `EnsureInitialized()` stays in the wrapper forwards.
+- Stayed in the wrapper: `ReadProjectFile` and `NormalizeProjectScenePath` (project loading; writes
+  `state.sceneManager.projectScenePaths`), `InstantiatePrefabForScript` (users: script hook and
+  shader warm-up, not scenes), `CaptureWorldTransform` / `IsDescendantOf` / `ApplyLocalFromWorld`
+  (only `SetParent`/`Detach`), `WriteRuntimeStateSnapshot` (editor live state in `Run()`), `FindEntity`,
+  `GetMainCamera`. `Shutdown()` and `DestroyEntity()` / the destroy hook now clear/erase through
+  `state.sceneManager`. Nothing was left behind because of entanglement.
+- `KromWrapper.cpp` 4149 -> 3439 lines (module: 762 .cpp + 146 .hpp). krom.h is unchanged.
+- New opt-in test `krom_scene_api_tests` (`tests/test_runtime_scene_api.cpp`, DX11, hidden
+  window, 53 checks): `LoadProject` + `GetSceneCount`, `FindEntityInScene` (own scene only, null
+  name, unknown scene), additive load + `UnloadScene` of the additive scene leaving the first one
+  intact, `LoadSceneAsync` + `IsSceneReady` + `ActivateScene` (also blocking activate, missing file),
+  `SetPersistent` / `SetScenePersistent` / a `persistent:true` scene file across `LoadScene` and
+  `UnloadAll`, index range checks, DemoProject `Scenes/Room 0.kscene`, then `LoadScene(4)` inside
+  `Run()` and 5 frames, `Shutdown` clearing the scene order.
+- Checked: before/after - the new test built and run against the pre-step wrapper (53 PASS) and
+  after the move (53 PASS), PASS lines identical for all five runtime tests; scene/warning/error log
+  lines identical apart from a one-time IBL cache cleanup in the first run
+  (`out/claude-scenemanager-test-<test>-before.log` / `-after.log`). After the move:
+  `krom_scene_api_tests` 53 PASS, `krom_scene_lifetime_tests` 11 PASS, `krom_runtime_material_tests`
+  21 PASS, `krom_render_settings_tests` 25 PASS, `krom_surface_tests` 26 PASS, `krom_tests` 507
+  passed / 0 failed (`out/claude-scenemanager-build.log`).
+  Full Debug build (`out/claude-scenemanager-build-all.log`, exit 0, no errors; DX11/Vulkan/OpenGL
+  runtimes, examples and DemoProject relinked), then the test targets rebuilt (up to date) and all
+  six test programs run again with the same counts (`out/claude-scenemanager-test-<test>-final.log`).
+- Not checked: Release; runs under Vulkan/OpenGL (only linked by the full build); the GLFW wrapper
+  `engine_krom_wrapper_glfw` (not configured in `out/build/x64-Debug`, so not compiled at all); editor live state (`runtime-state.json`) and the editor play path (it does not use the
+  wrapper scene code); scenes with environment textures under a backend other than DX11.
+- Please review: `MakeSceneContext` (field order against `SceneContext`, `assetPipeline.get()` /
+  `world.get()` taken after `EnsureInitialized()` in the forwards), that `ActivateScene`,
+  `UnloadScene`, `UnloadAll`, `SetScenePersistent` and `FindEntityInScene` build the context without
+  `EnsureInitialized()` exactly like before (world may be null), and `RegisterScriptSpawn` now
+  building a full context per script spawn.
+- Still open in the split: EntityApi, project/user files, `Run()`.
+
+---
+
+## krom.h wrapper: runtime materials moved to `KromRuntimeMaterials` (Claude, 2026-11-21)
+
+- User request: next step of the `src/app/KromWrapper.cpp` split. Branch
+  `refactor/krom-runtime-materials` (from `refactor/krom-render-settings`, PR #42), not committed.
+- New `src/app/KromRuntimeMaterials.hpp/.cpp` (`Krom::internal`): the material block of the wrapper
+  (lit / unlit / custom / PBR runtime materials from assets, `RealizeMaterialForEntity`, imported
+  model materials, default lit material, code materials, `GenerateMissingNormals`,
+  `ResolveEngineAssetPath` / `LoadEngineShader`). Moved by script, bodies unchanged except
+  `State& state` -> `const RuntimeMaterialContext& ctx`.
+- `RuntimeMaterialContext` holds references to the 11 things the block used from `State`: asset
+  registry, asset pipeline, material system, render system (device for custom shader reflection),
+  world, asset root, engine shader root, `runtimeMaterialCache`, `texturePaths`, plus `openGL` and
+  `enableForwardPlus`. The fields stay in `State` (surfaces and `Shutdown` use the cache too);
+  the wrapper builds the context per call with `MakeMaterialContext(state)`.
+- Public from the module: the eight functions the rest of the wrapper calls; the other 17 are
+  `static` in the .cpp. `MeshHasSkinning(mesh)` is gone (callers use `mesh.HasSkinning()`).
+  Three German comments that sat above the wrong function are replaced by the header comments.
+- `KromWrapper.cpp` 5161 -> 4149 lines. krom.h is unchanged.
+- New opt-in test `krom_runtime_material_tests` (`tests/test_runtime_materials.cpp`, DX11, hidden
+  window): default material and its per-mesh cache, code lit material and the per material+mesh
+  cache, `SetPBR`, a pbr-lit and a custom-shader `.mat` of the DemoProject, texture materials,
+  three rendered frames.
+- Checked: before/after - the new test built once against the old `KromWrapper.cpp` (21 PASS) and
+  against the new one (21 PASS), material/shader/warning/error log lines identical
+  (`out/claude-runtimematerials-old.log` / `-new.log`). Final state: full Debug build
+  (`out/claude-runtimematerials-build-all.log`), `krom_runtime_material_tests` 21 PASS,
+  `krom_render_settings_tests` 25 PASS, `krom_surface_tests` 26 PASS, `krom_scene_lifetime_tests`
+  11 PASS (its own generated .kscene, so the scene-load material path runs), `krom_tests` all pass.
+- Not checked: Release; a run under Vulkan/OpenGL (the `openGL` shader paths are only compiled);
+  skinned meshes and imported glTF materials at runtime (`ApplyImportedMeshMaterialsForEntity`,
+  `CreateEntityFromAsset`) - no test loads a model.
+- Please review: the context construction in `MakeMaterialContext` (`openGL`, `enableForwardPlus`
+  against the old inline expressions) and that no call site lost its `state` argument order.
+- Still open in the split: SceneManager, EntityApi, project/user files, `Run()`.
+
+---
+
+## krom.h wrapper: render options moved to `KromRenderSettings` (Claude, 2026-11-21)
+
+- User request: continue splitting `src/app/KromWrapper.cpp`, starting with the render options.
+  Branch `refactor/krom-render-settings` (from `feature/shadow-tent-filter`), not committed.
+- New `src/app/KromRenderSettings.hpp/.cpp` (`Krom::internal`): `RenderSettingsState` owns the 15
+  former `State` fields (tonemap + effective tonemap, base intensities, auto-exposure status, MSAA,
+  post-AA, GTAO/SSR/contact-shadow resources, shadow quality, player's quality level, shading,
+  probe runtime); `State` keeps one member `render`. Moved without behaviour change:
+  `ApplyProjectRenderSettings`, user-settings.json load/save, the scene values (exposure, grading,
+  probe bake passes -> `ApplySceneRenderSettings`), `KROM_MSAA`/`KROM_POST_AA`, the post-process
+  volume blend of `Run()` (`ApplyPostProcessVolumes`), all render Set*/Get* of krom.h and the script
+  block (`Get/SetScriptRenderSettings`). The functions take `RenderSettingsState&` plus
+  `editorLiveState` / window title where needed, not the wrapper `State`.
+- `KromWrapper.cpp`: krom.h functions are one-line forwards, `WrapperRenderSettingsService` only
+  delegates; feature registration and `BakeReflectionProbe` stay and use `state.render.*`.
+  5565 -> 5161 lines. Only text change: the two warnings "KromWrapper.cpp: unknown tonemap
+  operator / post-AA mode" now start with "krom.h:". krom.h itself is unchanged.
+- New opt-in test `krom_render_settings_tests` (`tests/test_runtime_render_settings.cpp`, DX11,
+  hidden window, `KROM_USER_SETTINGS_DIR` in the temp folder): module without a device (clamping,
+  null add-ons, script block, scene values, player's level saved/read/ignored from the editor,
+  project options with the level on top), then krom.h against the runtime (Low/Medium/High round
+  trip, switches, shading, grading).
+- Checked: full Debug build (`out/claude-rendersettings-build-all.log`, all backends; correction:
+  the GLFW wrapper is not configured in `out/build/x64-Debug` and was never compiled); `krom_render_settings_tests` 25 PASS, `krom_surface_tests` 26 PASS,
+  `krom_scene_lifetime_tests` 11 PASS (scene loads and `Run()` frames on DX11), `krom_tests` all pass
+  (`out/claude-rendersettings-*.log`).
+- Not checked: Release; a run under Vulkan/OpenGL; `LoadProject` with a real user-settings.json in
+  an exported game; editor play (does not use this file).
+- Please review: that the moved bodies match the old ones (order in `ApplySceneEnvironment`:
+  legacy project options first, then scene values), and the `editorLiveState` argument at the four
+  `ApplyProjectRenderSettings` call sites.
+- Still open in the split: RuntimeMaterials, SceneManager, EntityApi, project/user files, `Run()`.
+
+---
+
+## Shadows: tent PCF and dithered cascade transition (Claude, 2026-11-21)
+
+- User request: stair-stepped shadow edges with PCF 3x3, noise and a
+  visible cascade seam with PCSS. Branch `feature/shadow-tent-filter` (from `fix/d3dcompiler-redist`),
+  not committed.
+- `SampleShadowTent` in `shaders/pbr_shadow_poisson.hlsl`: "optimized PCF" of The Witness (MJP,
+  github.com/TheRealMJP/Shadows), bilinear compares placed and weighted to a tent over 3x3/5x5/7x7 texels
+  (4/9/16 taps, one inlined compare site in two `[loop]`s), receiver-plane bias per tap as before.
+- `ShadowFilter`: `PCF2x2`/`PCF3x3` renamed `Tent3x3`/`Tent5x5` (values 1/2 unchanged, scenes keep
+  their number and get the tent kernel), new `Tent7x7 = 5` (= `kShadowFilterMax`). Inspector list
+  order None, 3x3, 5x5, 7x7, Poisson, PCSS via a value map; tooltip de/en. Frozen OpenGL and legacy
+  lit keep their old box kernels (mode 5 falls into their 3x3 branch).
+- Cascades: `ChooseCascadeIndexFromViewDepth` (pbr_lit, Forward+) returns a blend factor for the last
+  10% of each cascade; pixels pick the next cascade when it exceeds interleaved gradient noise. The
+  filter still runs once. `ComputeCascadeBounds` starts each later cascade 10% of the previous
+  slice earlier so it covers that band (constant in both places). Stable CSM border reserve
+  4 -> 10 texels for the 7x7 footprint. No TAA in KROM, so the band shows a fixed noise pattern.
+- Checked: fxc ps_5_0 /O1 (pbr_lit 2 s, Forward+ 1 s) and dxc spirv compile; Debug build of
+  `krom_tests`, three editors and loading tests (`out/claude-shadow-tent-build2.log`); `krom_tests`
+  all 22 suites pass (`out/claude-shadow-tent-tests.log`), "Directional shadow slices match camera
+  depth" adapted to the overlap. Room 2 copies with the sun on PCSS / 5x5 / 7x7
+  (`out/claude-shadow-{pcss,tent5,tent7}`), `KROM_CAPTURE_LIT=1 --gtao-motion`: DX11 runs, Vulkan with
+  `KROM_VALIDATION=1` no messages (DX11 vs Vulkan 1.1/255, scene animates), OpenGL starts and captures.
+  Zoom `out/claude-shadow-check/edge-zoom.png`: that view has no diagonal edge or cascade seam, so it
+  shows no clear difference.
+- Not checked: the user's problem views (diagonal edge, cascade seam) by eye in the editor; Release.
+- Please review: tent weights/offsets against MJP, the cascade overlap vs. the shader band, and
+  `KromInterleavedGradientNoise` use outside the Poisson path.
+- Follow-up: steps remain on the Room 2 floor (one wall edge clean, the other jagged; shadow
+  distance has no effect). Before changing resolution, a debug view `DBG_VIEW_SHADOW_CASCADE`
+  (bit 24): first directional shadow tinted per cascade with the shadow-map texels as a
+  checkerboard (`KromShadowCascadeDebugColor`, pbr_lit and Forward+, not OpenGL). Editor:
+  Shift+F9 or the settings checkbox "Schatten-Kaskaden anzeigen". Observation for later:
+  `stableAtlasViewCount` in ShadowExtraction.cpp only grows, so atlas tiles never get larger again.
+- Measured result: steps are ~6-10 texels long, not one texel. Cause is the sun orientation in
+  Room 2 (24° elevation, ~9° yaw to the room axis): wall edges lie almost parallel to the shadow
+  texel grid. Rotating the sun moves the steps to the other wall. Planned fix: moment shadow maps
+  (MSM) for the sun, step 1 of that plan below.
+- MSM step 1, filter per light: until now `fc.shadowFilterMode` and the PCSS light size came from
+  the first shadow request and applied to every light. Now `ShadowFilterFrameParams` is a two-slot
+  block (slots 5-6, slot 5 was free): `featureParams[5]` = light size per CB light 0..3,
+  `[6].x` = light size of the first light (unchanged for OpenGL), `[6].y` = filter per CB light,
+  4 bits each. `GpuShadowLightData` gets `params` (filter, lightSize), 32 -> 48 bytes (Forward+).
+  Shaders set `gKromShadowFilter`/`gKromShadowLightSize` at the selected light
+  (`KromSelectShadowFilterFromFrame` / `KromSelectShadowFilter`); `SampleShadowAtlas` and
+  `KromPreparePcss` read those. `fc.shadowFilterMode` stays for OpenGL and legacy lit. Tooltip de/en.
+  Tests: block layout, and the 5-spot test now gives alternating filters/light sizes and checks
+  both paths.
+- Sun resolution (before MSM): the atlas was a grid of equal tiles (ceil(sqrt(views))², capped
+  at 4096), so in Room 2 (11 views) every sun cascade got 1024 although the sun asks for 4096,
+  and `stableAtlasViewCount` never shrank. New `ShadowAtlasLayout` (addons/shadow): square atlas,
+  power-of-two tiles per request, guillotine packing largest first; atlas grows in 1024 steps up
+  to the cap (now 6144, was 4096); when full, local lights shrink while larger than a quarter of
+  the sun tile, then the largest tile. Room 2: sun 2048, point/spot 1024 in a 5120 atlas
+  (D32 ~100 MB, was 64 MB). `ShadowView::atlasX/Y` carry the tile; contributor rects and the
+  pass viewport read them (no shader change, texel size stays 1/atlasSize). The atlas grows at
+  once and shrinks after 120 frames too large (`kShadowAtlasShrinkDelayFrames`); tiles follow the
+  current lights. `atlasViewCountHint` removed. Tests: packer cases (Room 2, held size, tight cap,
+  overlap/bounds), 5-spot rects, cascade test expects 1024 again after 4 cascades.
+  Correction: the captures I reported for the atlas change (and the Vulkan check of the per-light
+  filter) ran with stale `krom_editor_loading_tests*.exe` (09:04/12:47); `cmake --build` without
+  `--target` does not rebuild them. Re-checked on the committed state (2995bd9) with binaries built
+  by target at 16:10: `krom_tests` all pass; Room 2 copy (sun PCF 5x5, normal bias 0.02, fixed
+  exposure) on DX11, Vulkan with `KROM_VALIDATION=1` (no messages, DX11 vs Vulkan mean < 1/255) and
+  OpenGL (`out/claude-final`). The tile size the sun gets is covered by the unit tests only.
+- MSM tried and discarded (not committed): moment shadow maps for the sun (Hamburger 4MSM, 16-bit
+  optimized moments, half resolution + 7-tap blur, opaque input on a new slot t21). Edges were
+  smooth but soft, and at small depth gaps (contacts, the inside of a box, worse with the sun's
+  normal bias of 1 m) light bled through and shadows detached (`out/claude-msm/contact-*.png`).
+  The user wants sharp shadows, so MSM was dropped; all its code was reverted. Room 2 saved with
+  shadowFilter 6 now loads as Tent7x7 (clamped to kShadowFilterMax).
+- Normal bias in texels (like Unity/Unreal): `ShadowSettings::normalBias` is now shadow-map texels of
+  the sampled view (default 1, presets 1.5/1/0.75, range 0..8), saved as `shadowNormalBiasTexels`;
+  the old world-unit key `shadowNormalBias` is ignored on load (no texel equivalent). All five
+  shadow shaders (pbr_lit, Forward+, lit, and the frozen OpenGL pbr_lit/lit, which would otherwise
+  read texels as metres) compute the world offset per view in `KromShadowNormalOffset` from the
+  view-projection x row, the tile rect and the receiver's clip w (works for ortho and
+  perspective). Point lights pick the cube face from the unbiased position. Editor/script default
+  lights no longer set 0.001 m. Inspector shows "texel" with a tooltip (de/en).
+- Shadow distance fade: directional shadow strength fades to 0 over the last 10% of the shadow
+  distance (`KromShadowDistanceFade`, pbr_lit and Forward+) instead of a hard end.
+- Not done: cascade split control. Unity (percent splits) and Unreal (distribution exponent) also
+  scale every cascade with the shadow distance, so the "better/worse" sawtooth when changing the
+  distance is normal CSM behaviour there too.
+- Checked (binaries by target 17:05): build, `krom_tests` all pass; fxc/dxc pbr_lit, Forward+, lit;
+  Room 2 copy (sun PCF 5x5) DX11, Vulkan `KROM_VALIDATION=1` no messages, OpenGL runs without
+  errors (`out/claude-bias`). 1 texel vs. the old 0.02 m looks the same there (no acne); the fade
+  is not in that camera view, so not checked by eye.
+- Measured cascade texels (FOV 60, 1080p, lambda 0.5, 2048 tiles): at 40 m the last cascade has
+  4.7 cm texels (~1 pixel at its far end, 2-3 px at its near end); a low sun (24 deg) stretches any
+  bias shift on the floor by ~2.2x, so far shadows detached by ~20 cm. Changes:
+  - Normal bias scaled by (1 - NdotL) as in Unity (`gKromShadowToLight`, set before the shadow
+    block; all five shadow shaders): floor under a low sun keeps ~60%, surfaces facing the light 0.
+  - Real cascade blend instead of noise dither: in the last 20% of a cascade (was 10%; C++ overlap
+    `kCascadeBlendBand` and the shader band 0.2, cascade test adapted) both cascades are filtered and
+    mixed; the filter stays one call site in a `[loop]` of 1 or 2 iterations.
+  - Receiver-plane gradient (`KromShadowGradientFor`) now analytic from ddx/ddy of the world
+    position taken once at the top of main, instead of ddx/ddy of the shadow coordinates: those
+    were wrong across cascade seams (a dashed line at the band start) and inside the loop. This also
+    removes the old X3595 warning in Forward+.
+  - Tried hardware slope bias 0.5 instead of 1.0: faint acne stripes on lit walls and boxes, no
+    visible contact gain -> kept 1.0.
+- Checked (binaries by target 17:57-17:59): `krom_tests` all pass; fxc (no warnings) / dxc for
+  pbr_lit and Forward+ (all shadow variants), lit; Room 2 copy at 40 m (`out/claude-far`): base
+  (HEAD shaders) vs new: dither band on the wall gone, no seam line, contact under the cubes a bit
+  tighter; DX11, Vulkan `KROM_VALIDATION=1` no messages (DX11 vs Vulkan mean < 1/255), OpenGL no
+  errors. Not checked: editor by eye, GPU cost of the band (two filters only there).
+- Light settings cleanup (like Unreal/Unity): shadow-map resolution and filter are global quality
+  settings now. `RenderQualityOptions` gains `sunShadowResolution`, `localShadowResolution`,
+  `shadowFilter` (Low 1024/512/PCF 3x3, Medium 2048/1024/PCF 5x5, High 2048/2048/PCF 5x5);
+  `ProjectRenderSettings` stores `shadowSunResolution`/`shadowLocalResolution`/`shadowFilter`
+  (project files without them take the values of the level their other options match, so the
+  level stays). The shadow add-on gets `ShadowFeatureConfig::quality`
+  (`shared_ptr<ShadowQualitySettings>`, owned by editor app / krom.h like the post-AA settings);
+  `ExtractShadow` replaces resolution and filter of every light with it, scene values stay. krom.h:
+  `SetShadowQuality`/`GetShadowQuality`; `SetQualityLevel` and the script `RenderSettings` include
+  them. Editor: project settings section "Schatten" (sun / point-spot resolution, filter); the
+  light inspector drops resolution and filter, bias / normal bias / light size (PCSS only) moved
+  under a collapsed "Erweitert". New suns (editor menu, default scene, krom.h
+  `CreateDirectionalLight`) get `ApplyDirectionalShadowDefaults`: 4 cascades, split 0.5, 50 m.
+  The per-light `resolution`/`filter` fields stay in the component and file (unused when quality
+  is set; tests without quality keep per-light behaviour).
+- Checked (binaries by target 18:42): build, `krom_tests` all pass (new: quality override test,
+  presets, migration/clamping/round trip of the project keys); Room 2 copy DX11 / Vulkan
+  `KROM_VALIDATION=1` (no messages) / OpenGL runs, image unchanged vs. before (same values).
+  Not checked: the new editor UI by eye.
+
 ## SDK: short project build folder and path-length checks (Claude, 2026-11-21)
 
-Branch `fix/sdk-long-paths` from `main` 1af019a, not committed. Plan agreed with the user after
+Branch `fix/sdk-long-paths` from `main` 1af019a, PR #41. Plan agreed with the user after
 the review "Lösung 1 mit drei Ergänzungen".
 
 - Starting point: SDK package `Krom-windows-x64-4585ef3906ae` (after PR #39, D3DCompiler is the

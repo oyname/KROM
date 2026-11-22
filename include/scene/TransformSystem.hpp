@@ -36,6 +36,18 @@ public:
     // Zwingt Neuaufbau der Topologie beim nächsten Update()
     void Invalidate() noexcept { m_cachedVersion = UINT64_MAX; }
 
+    // World transform of one entity computed from the local transforms of its parent
+    // chain, as Update() would produce it now (current right after a setter, before
+    // the next Update()). Reads only: no component is written and no dirty flag
+    // changes, so the regular Update() still runs as before.
+    // A parent counts like in RebuildSortedList()/Update(): alive, with
+    // TransformComponent and WorldTransformComponent, not the entity itself.
+    // Without TransformComponent (or dead entity): identity. A parent cycle in broken
+    // data (which Update() never processes) returns the stored WorldTransformComponent
+    // if present, otherwise the entity's local transform as a root.
+    [[nodiscard]] static WorldTransformComponent ComputeCurrentWorldTransform(const ecs::World& world,
+                                                                             EntityID entity);
+
     [[nodiscard]] size_t  SortedEntityCount() const noexcept { return m_sortedEntities.size(); }
     [[nodiscard]] uint32_t UpdateCount()      const noexcept { return m_lastUpdateCount; }
 

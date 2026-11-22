@@ -55,6 +55,12 @@ struct ProjectRenderSettings
     uint32_t contactShadowSteps = 12u;
     // Post-process AA after tonemapping: off, fxaa, smaa (forward add-on, not under OpenGL).
     std::string postAA = "off";
+    // Shadow maps (shadow add-on): tile edge of each sun cascade and of each
+    // point/spot light view, and the filter (engine::ShadowFilter id). Global
+    // like in Unity/Unreal; lights keep only scene values (distance, bias, ...).
+    uint32_t shadowSunResolution = 2048u;
+    uint32_t shadowLocalResolution = 1024u;
+    uint8_t  shadowFilter = 2u;   // Tent5x5
 };
 
 struct ProjectSettings
@@ -92,6 +98,9 @@ struct ProjectSettings
     options.gtaoEnabled = settings.gtaoEnabled;
     options.ssrEnabled = settings.ssrEnabled;
     options.contactShadowsEnabled = settings.contactShadowsEnabled;
+    options.sunShadowResolution = settings.shadowSunResolution;
+    options.localShadowResolution = settings.shadowLocalResolution;
+    options.shadowFilter = settings.shadowFilter;
     return options;
 }
 
@@ -103,6 +112,9 @@ inline void SetRenderQualityOptions(ProjectRenderSettings& settings, const Rende
     settings.gtaoEnabled = options.gtaoEnabled;
     settings.ssrEnabled = options.ssrEnabled;
     settings.contactShadowsEnabled = options.contactShadowsEnabled;
+    settings.shadowSunResolution = options.sunShadowResolution;
+    settings.shadowLocalResolution = options.localShadowResolution;
+    settings.shadowFilter = options.shadowFilter;
 }
 
 // Sets the options of a level; Custom keeps the current options.
@@ -220,6 +232,41 @@ inline void ReadRenderSettingKeys(const serialization::JsonValue& object, Projec
     number("contactShadowIntensity", out.contactShadowIntensity, 0.0f, 1.0f);
     if (const auto* v = object.Get("contactShadowSteps"); v && v->IsNumber() && std::isfinite(v->numVal))
         out.contactShadowSteps = static_cast<uint32_t>(std::clamp(v->numVal, 4.0, 32.0));
+
+    // Shadow quality (since 2026-11-21). Files without it take the values of the
+    // quality level their other options match, so the level stays the same.
+    bool hasShadowQuality = false;
+    if (const auto* v = object.Get("shadowSunResolution"); v && v->IsNumber() && std::isfinite(v->numVal))
+    {
+        out.shadowSunResolution = ClampShadowQualityResolution(static_cast<uint32_t>(std::max(v->numVal, 0.0)));
+        hasShadowQuality = true;
+    }
+    if (const auto* v = object.Get("shadowLocalResolution"); v && v->IsNumber() && std::isfinite(v->numVal))
+    {
+        out.shadowLocalResolution = ClampShadowQualityResolution(static_cast<uint32_t>(std::max(v->numVal, 0.0)));
+        hasShadowQuality = true;
+    }
+    if (const auto* v = object.Get("shadowFilter"); v && v->IsNumber() && std::isfinite(v->numVal))
+    {
+        out.shadowFilter = static_cast<uint8_t>(std::clamp(v->numVal, 0.0, static_cast<double>(kMaxShadowQualityFilter)));
+        hasShadowQuality = true;
+    }
+    if (!hasShadowQuality)
+    {
+        for (uint8_t i = 0; i < static_cast<uint8_t>(RenderQualityLevel::Custom); ++i)
+        {
+            const RenderQualityOptions preset = RenderQualityPreset(static_cast<RenderQualityLevel>(i));
+            RenderQualityOptions current = GetRenderQualityOptions(out);
+            current.sunShadowResolution = preset.sunShadowResolution;
+            current.localShadowResolution = preset.localShadowResolution;
+            current.shadowFilter = preset.shadowFilter;
+            if (current == preset)
+            {
+                SetRenderQualityOptions(out, preset);
+                break;
+            }
+        }
+    }
 }
 
 // Render options from the "environment" block of a scene file written before
@@ -351,6 +398,9 @@ inline void WriteProjectSettings(serialization::JsonWriter& out, const ProjectSe
     out.WriteFloat("contactShadowThickness", settings.rendering.contactShadowThickness);
     out.WriteFloat("contactShadowIntensity", settings.rendering.contactShadowIntensity);
     out.WriteUint("contactShadowSteps", settings.rendering.contactShadowSteps);
+    out.WriteUint("shadowSunResolution", settings.rendering.shadowSunResolution);
+    out.WriteUint("shadowLocalResolution", settings.rendering.shadowLocalResolution);
+    out.WriteUint("shadowFilter", settings.rendering.shadowFilter);
     out.EndObject();
     out.EndObject();
 }

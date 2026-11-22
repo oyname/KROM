@@ -1,6 +1,7 @@
 // =============================================================================
 // KROM Engine - shaders/pbr_shadow_poisson.hlsl
-// Shadow filter modes 3 and 4. Mode 3 (ShadowFilter::Poisson): 12-tap Poisson disc, rotated
+// Shadow filters of the PBR shaders: tent PCF (modes 1, 2, 5) and modes 3 and 4.
+// Mode 3 (ShadowFilter::Poisson): 12-tap Poisson disc, rotated
 // per pixel by interleaved gradient noise. Include after
 // CompareShadowManualBilinear; that function clamps every tap to the atlas
 // rect of the shadow view, so the kernel never reads a neighbouring view.
@@ -38,6 +39,113 @@ float KromInterleavedGradientNoise(float2 pixelPos)
     return frac(52.9829189f * frac(dot(pixelPos, float2(0.06711056f, 0.00583715f))));
 }
 
+// -----------------------------------------------------------------------------
+// Tent PCF (ShadowFilter::Tent3x3 / Tent5x5 / Tent7x7): the "optimized PCF" of
+// The Witness (MJP, github.com/TheRealMJP/Shadows).
+// Each tap is a bilinear 2x2 compare placed and weighted so that the taps
+// together form a tent filter over 3x3, 5x5 or 7x7 texels with 4, 9 or 16
+// taps. Unlike the box kernels this gives straight, smooth edges and no noise.
+// quality: 1 = 3x3, 2 = 5x5, 3 = 7x7.
+// -----------------------------------------------------------------------------
+
+// Weight (normalized per axis) and texel offset of tap k along one axis; s is
+// the sub-texel position of the receiver.
+// Filter of the shadow light being shaded (ShadowFilter value) and its light
+// size. Each light keeps its own filter; set before KromPreparePcss and
+// SampleShadowAtlas.
+static uint  gKromShadowFilter    = 0u;
+static float gKromShadowLightSize = 0.0f;
+
+// Constant-buffer path (pbr_lit, shadow lights 0..3), kShadowFilterFrameParameterBlock:
+// featureParams[5] = light sizes, featureParams[6].y = filters, 4 bits per light.
+void KromSelectShadowFilterFromFrame(uint shadowIndex)
+{
+    const uint index = min(shadowIndex, 3u);
+    gKromShadowFilter = (asuint(featureParams[6].y) >> (4u * index)) & 0xFu;
+    gKromShadowLightSize = featureParams[5][index];
+}
+
+// Structured-buffer path (Forward+): GpuShadowLightData::params = (filter, lightSize, 0, 0).
+void KromSelectShadowFilter(float4 shadowParams)
+{
+    gKromShadowFilter = (uint)(shadowParams.x + 0.5f);
+    gKromShadowLightSize = shadowParams.y;
+}
+
+void KromShadowTentAxis(uint quality, uint k, float s, out float weight, out float offset)
+{
+    if (quality <= 1u)
+    {
+        if (k == 0u) { weight = 3.0f - 2.0f * s; offset = (2.0f - s) / weight - 1.0f; }
+        else         { weight = 1.0f + 2.0f * s; offset = s / weight + 1.0f; }
+        weight *= (1.0f / 4.0f);
+    }
+    else if (quality == 2u)
+    {
+        if (k == 0u)      { weight = 4.0f - 3.0f * s; offset = (3.0f - 2.0f * s) / weight - 2.0f; }
+        else if (k == 1u) { weight = 7.0f;            offset = (3.0f + s) / 7.0f; }
+        else              { weight = 1.0f + 3.0f * s; offset = s / weight + 2.0f; }
+        weight *= (1.0f / 12.0f);
+    }
+    else
+    {
+        if (k == 0u)      { weight = 6.0f - 5.0f * s;   offset = (5.0f - 4.0f * s) / weight - 3.0f; }
+        else if (k == 1u) { weight = 28.0f - 11.0f * s; offset = (16.0f - 4.0f * s) / weight - 1.0f; }
+        else if (k == 2u) { weight = 17.0f + 11.0f * s; offset = (5.0f + 7.0f * s) / weight + 1.0f; }
+        else              { weight = 1.0f + 5.0f * s;   offset = s / weight + 3.0f; }
+        weight *= (1.0f / 52.0f);
+    }
+}
+
+float SampleShadowTent(float2 atlasUv, float depth, float2 dDepth_dUV, float baseBias, float4 atlasRect, uint quality)
+{
+    const float texel = max(shadowTexelSize, 1e-8f);
+    const float2 texelPos = atlasUv / texel;                 // 1 unit = 1 texel
+    const float2 baseTexel = floor(texelPos + 0.5f);
+    const float2 st = texelPos + 0.5f - baseTexel;
+    const float2 baseUv = (baseTexel - 0.5f) * texel;
+    const uint taps = min(quality, 3u) + 1u;
+
+    float visibility = 0.0f;
+    [loop]
+    for (uint y = 0u; y < taps; ++y)
+    {
+        float wy;
+        float oy;
+        KromShadowTentAxis(quality, y, st.y, wy, oy);
+        [loop]
+        for (uint x = 0u; x < taps; ++x)
+        {
+            float wx;
+            float ox;
+            KromShadowTentAxis(quality, x, st.x, wx, ox);
+            const float2 tapUv = baseUv + float2(ox, oy) * texel;
+            const float depthRef = depth + dot(dDepth_dUV, tapUv - atlasUv) - baseBias;
+            visibility += wx * wy * CompareShadowManualBilinear(tapUv, depthRef, atlasRect);
+        }
+    }
+    return visibility;
+}
+
+// Debug view DBG_VIEW_SHADOW_CASCADE: tints the first directional shadow by its
+// cascade (0 red, 1 green, 2 blue, 3 yellow) and draws the shadow-map texels as
+// a checkerboard, so the size of one shadow texel on screen can be compared with
+// the steps of a shadow edge. Darker means shadowed. Grey: no directional shadow.
+float3 KromShadowCascadeDebugColor(uint cascade, float4 positionLightCS, float4 atlasRect, float visibility)
+{
+    if (cascade == 0xFFFFFFFFu || positionLightCS.w <= 1e-6f)
+        return float3(0.25f, 0.25f, 0.25f);
+    static const float3 kCascadeColors[6] = {
+        float3(1.0f, 0.35f, 0.35f), float3(0.35f, 1.0f, 0.35f), float3(0.4f, 0.55f, 1.0f),
+        float3(1.0f, 0.9f, 0.3f),   float3(1.0f, 0.4f, 1.0f),   float3(0.3f, 1.0f, 1.0f) };
+    const float2 ndc = positionLightCS.xy / positionLightCS.w;
+    const float2 localUv = float2(ndc.x * 0.5f + 0.5f, 0.5f - ndc.y * 0.5f);
+    const float2 atlasUv = atlasRect.xy + saturate(localUv) * atlasRect.zw;
+    const uint2 texel = (uint2)floor(atlasUv / max(shadowTexelSize, 1e-8f));
+    const float checker = ((texel.x + texel.y) & 1u) != 0u ? 1.0f : 0.72f;
+    return kCascadeColors[min(cascade, 5u)] * checker * (0.25f + 0.75f * saturate(visibility));
+}
+
 float SampleShadowPoisson(float2 atlasUv, float depth, float2 dDepth_dUV, float baseBias, float4 atlasRect)
 {
     const float angle = KromInterleavedGradientNoise(gKromShadowPixelPos) * 6.28318530718f;
@@ -65,12 +173,12 @@ float SampleShadowPoisson(float2 atlasUv, float depth, float2 dDepth_dUV, float 
 // Poisson filter radius grows with that distance, so shadows are sharp at the
 // contact and soft further away.
 //
-// featureParams[6] (kShadowFilterFrameParameterBlock, shadow add-on):
-//   x = light size of the first shadow-casting light (ShadowSettings::lightSize)
+// The light size (ShadowSettings::lightSize) is the one of the light being
+// shaded, set with its filter by KromSelectShadowFilter* below.
 // The depth-to-distance relation of the shadow view is derived from its
 // view-projection (KromPreparePcss), so no near/far planes are needed.
 // -----------------------------------------------------------------------------
-#define shadowLightSize (featureParams[6].x)
+#define shadowLightSize gKromShadowLightSize
 
 static const float kPcssSearchRadiusTexels = 6.0f;   // blocker search
 static const float kPcssMinRadiusTexels    = 1.0f;   // filter radius at the contact
@@ -88,7 +196,7 @@ static float gPcssUvPerWorld    = 0.0f;   // atlas UV per world unit at the rece
 // shadow view, the receiver position and the direction to the light.
 void KromPreparePcss(float4x4 shadowVP, float4 atlasRect, float3 receiverWS, float3 toLightDir)
 {
-    if (shadowFilterMode != 4u)
+    if (gKromShadowFilter != 4u)
         return;
 
     const float delta = 0.1f;

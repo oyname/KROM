@@ -27,11 +27,9 @@ void SanitizeShadowSettings(LightComponent& light) noexcept
     settings.maxDistance = std::max(settings.maxDistance, 0.1f);
 
     const float minBias = light.type == LightType::Directional ? 0.0005f : 0.0001f;
-    const float minNormalBias = light.type == LightType::Directional ? 0.0010f : 0.0010f;
     if (settings.bias <= 0.0f)
         settings.bias = minBias;
-    if (settings.normalBias <= 0.0f)
-        settings.normalBias = minNormalBias;
+    settings.normalBias = std::clamp(settings.normalBias, kShadowNormalBiasMin, kShadowNormalBiasMax);
 }
 
 } // namespace
@@ -50,7 +48,7 @@ void WriteLightingFields(serialization::JsonWriter& w, const LightComponent& c)
     w.WriteUint("shadowFilter", static_cast<uint32_t>(c.shadowSettings.filter));
     w.WriteUint("shadowResolution", c.shadowSettings.resolution);
     w.WriteFloat("shadowBias", c.shadowSettings.bias);
-    w.WriteFloat("shadowNormalBias", c.shadowSettings.normalBias);
+    w.WriteFloat("shadowNormalBiasTexels", c.shadowSettings.normalBias);
     w.WriteFloat("shadowMaxDistance", c.shadowSettings.maxDistance);
     w.WriteFloat("shadowStrength", c.shadowSettings.strength);
     w.WriteUint("shadowCascadeCount", c.shadowSettings.cascadeCount);
@@ -75,7 +73,10 @@ LightComponent ReadLightingFields(const serialization::JsonValue& v)
         lc.shadowSettings.filter = static_cast<ShadowFilter>(std::min<uint32_t>(sf->AsUint(), kShadowFilterMax));
     if (const auto* sr = v.Get("shadowResolution")) lc.shadowSettings.resolution = sr->AsUint();
     if (const auto* sb = v.Get("shadowBias")) lc.shadowSettings.bias = sb->AsFloat();
-    if (const auto* sn = v.Get("shadowNormalBias")) lc.shadowSettings.normalBias = sn->AsFloat();
+    // Texels since 2026-11-21. The old "shadowNormalBias" was in world units and
+    // has no texel equivalent (it depends on the cascade); it is ignored and the
+    // default of 1 texel applies.
+    if (const auto* sn = v.Get("shadowNormalBiasTexels")) lc.shadowSettings.normalBias = sn->AsFloat();
     if (const auto* smd = v.Get("shadowMaxDistance")) lc.shadowSettings.maxDistance = smd->AsFloat();
     if (const auto* ss = v.Get("shadowStrength")) lc.shadowSettings.strength = ss->AsFloat();
     if (const auto* scc = v.Get("shadowCascadeCount")) lc.shadowSettings.cascadeCount = scc->AsUint();
