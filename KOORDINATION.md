@@ -17,6 +17,108 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## krom.h wrapper: mesh, material, texture and model-import functions moved to `KromAssetApi` (Claude Opus 5.5, 2026-11-22)
+
+- User request: next step of the `src/app/KromWrapper.cpp` split, on branch `refactor/krom-mesh-material-api`
+  (from `fix/krom-world-transform-read`), not committed.
+- New `src/app/KromAssetApi.hpp/.cpp` (`Krom::internal`), bodies of: `CreateEntityFromAsset`, `PrintAssetTree`,
+  `LoadMesh`, `LoadTexture`, `LoadMaterial`, both `CreateTextureMaterial`, `CreateLitMaterial`, `SetMesh`,
+  `SetMaterial`, `SetMaterialRecursive`, both `SetTexture`, `SetPBR`, `SetMeshFromAsset`, `SetMaterialFromAsset`,
+  `CreateMeshAsset`, `CreateMeshEntity`, `CreateMesh`; the helpers `ComputeImportedModelCenter`,
+  `BundleHasSkeletonsOrAnimations`, `ApplyMaterialRecursive`, `AddVertex(SubMeshData&, const MeshVertex&)`,
+  `RegisterProceduralMesh` (all `static`, their only users moved) and `CreateProceduralEntity` (public, also used
+  by `SpawnShaderWarmupAssets`). Moved by script from `git show HEAD` (renames only: `State& state = Get();`
+  dropped, `State& state` -> `const AssetContext& ctx`, `state.x` -> `ctx.x`, `MakeMaterialContext(state)` ->
+  `ctx.materials`, `state.texturePaths` -> `ctx.materials.texturePaths`, `EnsureAnimationSystems(state)` ->
+  `ctx.ensureAnimationSystems()`, calls between moved functions get `ctx` / `ctx.world` / `ctx.assetPipeline`,
+  e.g. `CreateEntity(name)` -> `CreateEntity(ctx.world, name)`; the two calls in `SetTexture` that rely on the
+  krom.h default arguments go to `Krom::CreateTextureMaterial(...)`). The line diff against HEAD
+  (`out/claude-assetapi-bodydiff.log`) shows only signature lines and these renames.
+- Cut: the module owns no fields. `AssetContext {initialized, world, assetPipeline, assetRegistry,
+  transformSystem, boundsSystem, scriptAddonRegistry, ensureAnimationSystems, materials}` (the last one a
+  `RuntimeMaterialContext` by value, as in `SceneContext`), built per call by `MakeAssetContext(state)`.
+  `LoadMesh`, `LoadMaterial` and `PrintAssetTree` take only the `AssetPipeline*`, `LoadTexture` the pipeline and
+  the `TexturePathMap&`. The `state.initialized` / world checks moved with the bodies (`ctx.initialized`), so
+  every forward is a one-liner and the order of checks and side effects is unchanged; building the context has
+  no side effects (references, `.get()`, `GetRenderSystem()`).
+- `EnsureAnimationSystems` stays in the wrapper: it creates `State::animationSystem` / `skinningSystem`, which
+  `Run()` and `Shutdown()` also use, and its clip loader lambda captures the static `State`. The context carries
+  it as a plain function pointer (`[] { EnsureAnimationSystems(Get()); }`), called at the same place as before.
+  Moving it would have meant putting both `unique_ptr`s and the render system into the context or changing what
+  the stored lambda captures.
+- `texturePaths` stays in `State`: besides `LoadTexture` / `CreateTextureMaterial(LPTEXTURE)` it is written by
+  the runtime materials (through `RuntimeMaterialContext::texturePaths`) and cleared by `Shutdown()`; owning it
+  here would only move the map into a struct of the module without any gain, and the lower-level runtime
+  materials would then write into a field of the higher-level asset module.
+- Stayed in the wrapper: `CreateEnvironmentFromHDR` and `SetActiveEnvironment` (render-environment functions:
+  they need the render system and `activeEnvironment`, which the scene manager shares; the only asset part is a
+  call of `Krom::LoadTexture`, which now forwards to the module; they fit a later render/probe step);
+  `EnsureAnimationSystems` (above); `ComputeImportedModelRadius` (still no user at all; moved as `static` it
+  produced C4505 "unreferenced function removed", so it was left where it was, unchanged - not deleted);
+  the surface forwards; `SpawnShaderWarmupAssets` / `CreateWarmupCubeMesh` (call `internal::CreateProceduralEntity`
+  and krom.h functions); `InstantiatePrefabForScript`. Nothing was left behind because of entanglement.
+- `KromWrapper.cpp` 2856 -> 2432 lines; module 592 .cpp + 85 .hpp. krom.h is unchanged.
+  `src/app/KromAssetApi.cpp` added to both wrapper libraries in `CMakeLists.txt`.
+- New opt-in test `krom_asset_api_tests` (`tests/test_runtime_asset_api.cpp`, DX11, hidden window, 129 checks):
+  all asset functions before `Graphics()` (null / false; `CreateTextureMaterial(LPTEXTURE)` logs "no known
+  path", `PrintAssetTree` logs an error); `LoadMesh` (on a copy of `wuerfel.glb` in `out/krom-asset-api-test`,
+  because loading a model writes a `.kmesh` next to it), `LoadTexture`, `LoadMaterial` with valid / missing /
+  null paths and repeated loads; `CreateTextureMaterial` (path, handle, Unlit warning path, null and missing
+  texture, unknown handle), `CreateLitMaterial`; `CreateMeshAsset` with / without indices, index pointer with
+  count 0, generation flags off, null name, empty input; `SetMesh` (mesh, local bounds, default material, kept
+  material on a second `SetMesh`, null mesh / null / destroyed entity); `SetMeshFromAsset` /
+  `SetMaterialFromAsset` (asset path stored, runtime material, missing files, null); `SetMaterialRecursive`,
+  `SetTexture` non-recursive / recursive (handle overload) and `SetPBR` recursive over root (no mesh) -> mesh
+  child -> mesh grandchild + empty child; `CreateMeshEntity`, `CreateMesh`. Model import (no runtime test
+  before): `PrintAssetTree` of `Models/car.glb` (static, one node 'Circle.005') and `Models/CesiumMan.glb`
+  (skinned, 22 nodes, one skeleton, one clip) plus missing / null / empty; `CreateEntityFromAsset` of both:
+  synthetic root named after the file or the name argument, children and names, every mesh entity with
+  material and bounds, model centred on its root, `SkinComponent` with skeleton on 'Cesium_Man', clip playing
+  and looping on root and skinned mesh, none on the static model; `car.glb` imported twice (same mesh handles,
+  new runtime materials); missing file and null / empty path; then 7 frames with camera + light, the
+  imported hierarchies destroyed in frame 4, the clip time advanced, all imported entities gone.
+- Current behaviour the test documents (reported, not changed): `LoadMesh` and `LoadMaterial` of a missing
+  file return a valid handle (failed asset in the registry), `LoadTexture` returns null; `SetMeshFromAsset` of
+  a missing file returns true and leaves the failed mesh and no material; `CreateEntityFromAsset` of a missing
+  file falls back to a single entity with the failed mesh and no material (named after the path without a
+  name) and logs "kein Bundle-Importer", although the glTF importer exists and only the file is missing;
+  `SetMaterialFromAsset` of a missing `.mat` returns true and assigns a material; `SetMaterial` on an entity
+  without a mesh stores the unrealized registry handle (the handle-space mix in the material component);
+  `CreateMesh` (empty mesh) gets no default material; `CreateTextureMaterial(nullptr)` and with a missing
+  texture file return materials, a non-Lit model only warns; `CreateTextureMaterial(LPTEXTURE)` and the import
+  make new materials per call (not cached); a second import of the same file replaces the mesh assets by path,
+  so both instances share them; loading a model writes `<name>.kmesh` next to the source file (inside the
+  project when the path is relative). From the code, not checkable through krom.h: `RegisterProceduralMesh`
+  always fills zero normals, so `MeshData::generateNormals = false` does not keep zero normals.
+- Checked: before/after - the new test was written, built and run against the pre-step wrapper
+  (129 PASS) and after the move (129 PASS). PASS/FAIL lines identical for all seven runtime tests and
+  `krom_tests`, krom.h / warning / error log lines identical; the only differing line is the `INFO` clip time
+  after three frames (frame timing) (`out/claude-assetapi-test-<test>-before.log` / `-after.log`). After the move
+  (`out/claude-assetapi-build.log`, only the known C4834 from `MaterialRuntimeBridge.hpp`):
+  `krom_asset_api_tests` 129 PASS, `krom_entity_api_tests` 156, `krom_scene_api_tests` 53,
+  `krom_scene_lifetime_tests` 11, `krom_runtime_material_tests` 21, `krom_render_settings_tests` 25,
+  `krom_surface_tests` 26 (all 0 FAIL), `krom_tests` 510 passed / 0 failed (does not link the wrapper).
+  Full Debug build (`cmake --build out/build/x64-Debug`, `out/claude-assetapi-build-full.log`, exit 0, no
+  errors, no warnings in the log; DX11/Vulkan/OpenGL runtimes, examples and DemoProject relinked), then the test
+  targets rebuilt (up to date, `out/claude-assetapi-build-final.log`) and all eight test programs run again with
+  the same counts and identical PASS lines (again only the clip-time `INFO` line differs;
+  `out/claude-assetapi-test-<test>-final.log`).
+- Not checked: Release; runs under Vulkan/OpenGL (only linked by the full build); the GLFW wrapper
+  `engine_krom_wrapper_glfw` (not configured in `out/build/x64-Debug`, so `KromAssetApi.cpp` was never compiled
+  into it); the editor and Play (do not use these wrapper functions); importers other than glTF; models with
+  several meshes per node or several root nodes, models without nodes (the `_Mesh_<n>` path of the prefab
+  build); the no-importer fallback with an existing file (needs a build without `KROM_WRAPPER_HAS_GLTF`).
+- Please review: `MakeAssetContext` (field order; `initialized` copied by value, `world` / `assetPipeline`
+  taken per call like before); the function pointer for `EnsureAnimationSystems`; the two `Krom::CreateTextureMaterial`
+  calls in `SetTexture` (default arguments of krom.h) versus `internal::` calls everywhere else; that
+  `CreateEntityFromAsset` now builds one `RuntimeMaterialContext` per call instead of one per record (same
+  values); `ComputeImportedModelRadius` left behind.
+- Still open in the split: project/user files (`LoadProject`, `ReadProjectFile`), render/probe/environment
+  functions (`BakeReflectionProbe`, `CreateEnvironmentFromHDR`, `SetActiveEnvironment`, warm-up), `Run()`,
+  `DestroyEntity`, component/system/script functions.
+
+---
+
 ## krom.h: world transform read right after a setter was stale; LookAt ignored the parent rotation (Claude Opus 5.5, 2026-11-22)
 
 - User request: behaviour fix on branch `fix/krom-world-transform-read` (from `refactor/krom-entity-api`),
