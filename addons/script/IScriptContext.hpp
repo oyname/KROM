@@ -419,8 +419,8 @@ public:
     [[nodiscard]] math::Vec3 Right(EntityID entity = NULL_ENTITY);
     [[nodiscard]] math::Vec3 Up(EntityID entity = NULL_ENTITY);
 
-    // Weltposition aus dem letzten TransformSystem-Update (ein Frame alt,
-    // falls die Entity in diesem Frame bewegt wurde).
+    // World position (including the parent chain), current also right after
+    // SetPosition/Translate in the same frame (before the TransformSystem update).
     [[nodiscard]] math::Vec3 GetWorldPosition(EntityID entity = NULL_ENTITY);
 
     // ── Input ────────────────────────────────────────────────────────────────

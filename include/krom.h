@@ -240,7 +240,8 @@ bool Detach(LPENTITY child, bool keepWorldTransform = true);
 bool SetPosition(LPENTITY entity, const engine::math::Vec3& position);
 bool SetPosition(LPENTITY entity, float x, float y, float z);
 bool SetRotationEulerDeg(LPENTITY entity, float pitch, float yaw, float roll);
-// Gibt (pitch, yaw, roll) in Grad aus der WorldTransform-Quaternion zurück.
+// Returns (pitch, yaw, roll) in degrees of the current world rotation (parent
+// chain included), also right after SetRotationEulerDeg/TurnEntity in the same step.
 // Konvention: ZYX-Euler (Reihenfolge: Roll → Pitch → Yaw).
 engine::math::Vec3 GetRotationEulerDeg(LPENTITY entity);
 bool SetScale(LPENTITY entity, const engine::math::Vec3& scale);
@@ -252,6 +253,8 @@ bool GetWorldBounds(LPENTITY entity,
                     engine::math::Vec3& outCenter,
                     engine::math::Vec3& outExtents,
                     float& outBoundingSphere);
+// Turns the entity so that its world -Z points at target (world space, current
+// positions, parent rotation accounted for); up is a world direction.
 bool LookAt(LPENTITY entity, const engine::math::Vec3& target, const engine::math::Vec3& up = engine::math::Vec3::Up());
 bool LookAt(LPENTITY entity, LPENTITY targetEntity, const engine::math::Vec3& up = engine::math::Vec3::Up());
 

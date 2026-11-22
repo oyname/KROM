@@ -1,5 +1,6 @@
 #include "addons/script/IScriptContext.hpp"
 #include "core/Debug.hpp"
+#include "scene/TransformSystem.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -647,7 +648,13 @@ math::Vec3 IScriptContext::Up(EntityID entity)
 math::Vec3 IScriptContext::GetWorldPosition(EntityID entity)
 {
     if (const WorldTransformComponent* w = Get<WorldTransformComponent>(entity))
+    {
+        // Current also right after a setter in this frame (before the
+        // TransformSystem update); without a local transform the stored value.
+        if (Has<TransformComponent>(entity))
+            return TransformSystem::ComputeCurrentWorldTransform(*GetWorld(), Resolve(entity)).position;
         return w->position;
+    }
     return GetPosition(entity);
 }
 

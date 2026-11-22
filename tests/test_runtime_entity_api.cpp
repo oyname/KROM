@@ -51,6 +51,24 @@ Vec3 Forward(LPENTITY entity)
     return tr ? tr->localRotation.Rotate(Vec3{0.f, 0.f, -1.f}) : Vec3{};
 }
 
+// Forward / right from the stored world rotation (valid after a transform update).
+Vec3 WorldForward(LPENTITY entity)
+{
+    const auto* wt = Krom::GetComponent<engine::WorldTransformComponent>(entity);
+    return wt ? wt->rotation.Rotate(Vec3{0.f, 0.f, -1.f}) : Vec3{};
+}
+
+Vec3 WorldRight(LPENTITY entity)
+{
+    const auto* wt = Krom::GetComponent<engine::WorldTransformComponent>(entity);
+    return wt ? wt->rotation.Rotate(Vec3{1.f, 0.f, 0.f}) : Vec3{};
+}
+
+Quat EulerToQuat(const Vec3& eulerDeg)
+{
+    return Quat::FromEulerDeg(eulerDeg.x, eulerDeg.y, eulerDeg.z);
+}
+
 LPENTITY CreateTriangleEntity(const char* name)
 {
     // Bounds [-1, 1] on every axis.
@@ -254,13 +272,29 @@ int main()
         check(Krom::SetScale(mover, 7.f) && tr && NearVec(tr->localScale, {7.f, 7.f, 7.f}), "SetScale(uniform)");
     }
 
-    // GetRotationEulerDeg reads the world transform, which only changes with a
-    // transform update (SetParent/Detach/DestroyEntity or a frame).
+    // GetRotationEulerDeg returns the current world rotation, also right after a
+    // setter and before the next transform update (frame).
     const LPENTITY rot = Krom::CreateEntity("Rot");
     Krom::SetRotationEulerDeg(rot, 20.f, 30.f, 0.f);
-    check(NearVec(Krom::GetRotationEulerDeg(rot), {0.f, 0.f, 0.f}),
-          "GetRotationEulerDeg right after SetRotationEulerDeg still returns the old world rotation");
+    check(SameRotation(EulerToQuat(Krom::GetRotationEulerDeg(rot)), Quat::FromEulerDeg(20.f, 30.f, 0.f)),
+          "GetRotationEulerDeg right after SetRotationEulerDeg returns the new rotation");
+    Krom::TurnEntity(rot, 0.f, 15.f, 0.f);
+    check(SameRotation(EulerToQuat(Krom::GetRotationEulerDeg(rot)),
+                       (Quat::FromEulerDeg(20.f, 30.f, 0.f) * Quat::FromEulerDeg(0.f, 15.f, 0.f)).Normalized()),
+          "GetRotationEulerDeg right after TurnEntity returns the turned rotation");
     check(NearVec(Krom::GetRotationEulerDeg(NULL_LPENTITY), {0.f, 0.f, 0.f}), "GetRotationEulerDeg(null) is zero");
+
+    // Child under a rotated parent: GetRotationEulerDeg is the world rotation,
+    // current right after the child's own setter. Compared with the frame below.
+    const LPENTITY rotParent = Krom::CreateEntity("RotParent");
+    const LPENTITY rotChild = Krom::CreateEntity("RotChild");
+    Krom::SetRotationEulerDeg(rotParent, 0.f, 90.f, 0.f);
+    check(Krom::SetParent(rotChild, rotParent, false), "rotated parent for GetRotationEulerDeg");
+    Krom::SetRotationEulerDeg(rotChild, 0.f, 30.f, 0.f);
+    const Quat rotChildExpected = (Quat::FromEulerDeg(0.f, 90.f, 0.f) * Quat::FromEulerDeg(0.f, 30.f, 0.f)).Normalized();
+    const Vec3 rotChildEulerBeforeFrame = Krom::GetRotationEulerDeg(rotChild);
+    check(SameRotation(EulerToQuat(rotChildEulerBeforeFrame), rotChildExpected),
+          "GetRotationEulerDeg of a child right after its setter returns parent * local (world)");
 
     // Round trip entities, checked after the first frame.
     const Vec3 eulerCases[] = {
@@ -282,6 +316,38 @@ int main()
     check(Krom::LookAt(looker, Vec3{0.f, 10.f, 0.f}) && NearVec(Forward(looker), Vec3{0.f, 1.f, 0.f}),
           "LookAt(point) straight up falls back to another right vector");
     check(!Krom::LookAt(looker, Vec3{0.f, 0.f, 0.f}), "LookAt at its own position fails");
+
+    // LookAt right after SetPosition in the same step uses the new position
+    // (follow camera without one frame of lag).
+    const LPENTITY movedLooker = Krom::CreateEntity("MovedLooker");
+    Krom::SetPosition(movedLooker, 0.f, 0.f, 3.f);
+    check(Krom::LookAt(movedLooker, Vec3{3.f, 0.f, -1.f}) && NearVec(Forward(movedLooker), Vec3{0.6f, 0.f, -0.8f}),
+          "LookAt(point) right after SetPosition uses the new position");
+    Krom::MoveEntity(movedLooker, 0.f, 0.f, -5.f);   // along the new forward: now at (3, 0, -1)
+    check(Krom::LookAt(movedLooker, Vec3{3.f, 0.f, -11.f}) && NearVec(Forward(movedLooker), Vec3{0.f, 0.f, -1.f}),
+          "LookAt(point) right after MoveEntity uses the moved position");
+
+    // LookAt for a child of a rotated parent: after a transform update the
+    // child's WORLD forward points at the target. Checked after the first frame.
+    const LPENTITY lookParentRot = Krom::CreateEntity("LookParentRot");
+    const LPENTITY lookChildRot = Krom::CreateEntity("LookChildRot");
+    Krom::SetPosition(lookParentRot, 5.f, 0.f, 0.f);
+    Krom::SetRotationEulerDeg(lookParentRot, 0.f, 90.f, 0.f);
+    check(Krom::SetParent(lookChildRot, lookParentRot, false), "child of a rotated parent for LookAt");
+    const Vec3 lookTargetRot{8.f, 0.f, -4.f};   // from (5, 0, 0): direction (0.6, 0, -0.8)
+    check(Krom::LookAt(lookChildRot, lookTargetRot), "LookAt(point) of a child of a rotated parent");
+
+    // Same with a rotated (yaw and pitch) and non-uniformly scaled parent and a child offset.
+    const LPENTITY lookParentScaled = Krom::CreateEntity("LookParentScaled");
+    const LPENTITY lookChildScaled = Krom::CreateEntity("LookChildScaled");
+    Krom::SetPosition(lookParentScaled, -2.f, 1.f, 4.f);
+    Krom::SetRotationEulerDeg(lookParentScaled, 20.f, 45.f, 10.f);
+    Krom::SetScale(lookParentScaled, 2.f, 1.f, 0.5f);
+    Krom::SetPosition(lookChildScaled, 1.f, 0.5f, -2.f);
+    check(Krom::SetParent(lookChildScaled, lookParentScaled, false), "child of a rotated, scaled parent for LookAt");
+    const Vec3 lookTargetScaled{6.f, -3.f, -7.f};
+    check(Krom::LookAt(lookChildScaled, lookTargetScaled), "LookAt(point) of a child of a rotated, scaled parent");
+    const Vec3 lookChildScaledEulerBeforeFrame = Krom::GetRotationEulerDeg(lookChildScaled);
     // Targets for LookAt(entity), checked after the first frame.
     const LPENTITY lookTarget = Krom::CreateEntity("LookTarget");
     Krom::SetPosition(lookTarget, -4.f, 0.f, 3.f);
@@ -457,6 +523,37 @@ int main()
             check(Krom::LookAt(entityLooker, lookTarget), "LookAt(entity)");
             check(NearVec(Forward(entityLooker), {-1.f, 0.f, 0.f}), "LookAt(entity) points local -Z at the target");
             check(!Krom::LookAt(entityLooker, entityLooker), "LookAt at itself fails");
+            // Target moved in the same step: LookAt sees its new position.
+            Krom::SetPosition(lookTarget, 3.f, 0.f, -1.f);
+            check(Krom::LookAt(entityLooker, lookTarget) && NearVec(Forward(entityLooker), {0.6f, 0.f, -0.8f}),
+                  "LookAt(entity) towards a target moved in the same step uses its new position");
+
+            // The frame's regular transform update produced what the getters returned before it.
+            {
+                const auto* wt = Krom::GetComponent<engine::WorldTransformComponent>(rotChild);
+                check(wt && SameRotation(wt->rotation, rotChildExpected) &&
+                      SameRotation(wt->rotation, EulerToQuat(rotChildEulerBeforeFrame)) &&
+                      SameRotation(EulerToQuat(Krom::GetRotationEulerDeg(rotChild)), rotChildExpected),
+                      "frame update gives the world rotation GetRotationEulerDeg returned before the frame");
+            }
+            check(NearVec(WorldPosition(movedLooker), {3.f, 0.f, -1.f}) &&
+                  NearVec(WorldForward(movedLooker), {0.f, 0.f, -1.f}),
+                  "frame update keeps the moved looker's position and LookAt direction");
+
+            // LookAt under rotated parents: world forward points at the target, no roll.
+            check(NearVec(WorldPosition(lookChildRot), {5.f, 0.f, 0.f}) &&
+                  NearVec(WorldForward(lookChildRot), {0.6f, 0.f, -0.8f}),
+                  "LookAt of a child of a rotated parent: world forward points at the target");
+            {
+                const Vec3 expected = (lookTargetScaled - WorldPosition(lookChildScaled)).Normalized();
+                check(NearVec(WorldForward(lookChildScaled), expected),
+                      "LookAt of a child of a rotated, scaled parent: world forward points at the target");
+                check(Near(WorldRight(lookChildScaled).y, 0.f) && Near(WorldRight(lookChildRot).y, 0.f),
+                      "LookAt under rotated parents keeps the world up (no roll)");
+                const auto* wt = Krom::GetComponent<engine::WorldTransformComponent>(lookChildScaled);
+                check(wt && SameRotation(wt->rotation, EulerToQuat(lookChildScaledEulerBeforeFrame)),
+                      "frame update gives the world rotation GetRotationEulerDeg returned after LookAt");
+            }
 
             Vec3 center{}, extents{};
             float sphere = 0.f;
@@ -468,6 +565,12 @@ int main()
                   NearVec(center, {4.f, 10.f, 0.f}) && NearVec(extents, {1.f, 1.f, 1.f}),
                   "GetWorldBounds of the child alone");
             check(!Krom::GetWorldBounds(noBounds, center, extents, sphere), "GetWorldBounds without bounds fails");
+        }
+        else if (frame == 3)
+        {
+            check(NearVec(WorldForward(entityLooker), {0.6f, 0.f, -0.8f}) &&
+                  NearVec(WorldPosition(lookTarget), {3.f, 0.f, -1.f}),
+                  "frame update keeps LookAt(entity) towards the moved target");
         }
         else if (frame == 5)
         {
