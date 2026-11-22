@@ -377,13 +377,21 @@ void SetSsrEnabled(bool enabled);
 // No effect under OpenGL; GetContactShadowsEnabled then returns false.
 void SetContactShadowsEnabled(bool enabled);
 [[nodiscard]] bool GetContactShadowsEnabled();
+// Shadow-map quality for all lights (as in Unreal/Unity, not per light): tile
+// edge in texels of each sun cascade and of each point/spot view (256..4096,
+// rounded down to a power of two) and the filter (0 none, 1 PCF 3x3, 2 PCF 5x5,
+// 3 Poisson, 4 PCSS, 5 PCF 7x7). The project settings shadowSunResolution,
+// shadowLocalResolution and shadowFilter give the start values; the quality
+// levels set them too.
+void SetShadowQuality(uint32_t sunResolution, uint32_t localResolution, uint8_t filter);
+void GetShadowQuality(uint32_t& sunResolution, uint32_t& localResolution, uint8_t& filter);
 // Post-process anti-aliasing after tonemapping (off, FXAA, SMAA), in addition
 // to MSAA; the project setting postAA gives the start value. No effect under OpenGL.
 void SetPostAA(engine::RenderPostAA mode);
 [[nodiscard]] engine::RenderPostAA GetPostAA();
 
-// Quality level for a player's options menu: sets MSAA, post-AA, GTAO, SSR and
-// contact shadows of Low / Medium / High at once (engine::RenderQualityPreset);
+// Quality level for a player's options menu: sets MSAA, post-AA, GTAO, SSR,
+// contact shadows and shadow quality of Low / Medium / High at once (engine::RenderQualityPreset);
 // Custom changes nothing. The level is remembered on this computer
 // (user-settings.json below %LOCALAPPDATA%\KROM\Games\<window title>) and
 // replaces the project's options at the next start. Runs started from the

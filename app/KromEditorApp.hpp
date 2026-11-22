@@ -9,6 +9,7 @@
 #include "addons/probes/ProbeBake.hpp"
 #include "addons/ssr/SsrPass.hpp"
 #include "addons/contact_shadow/ContactShadowPass.hpp"
+#include "addons/shadow/ShadowExtraction.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/mesh_renderer/MeshBounds.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
@@ -340,6 +341,9 @@ private:
     std::shared_ptr<renderer::addons::gtao::GtaoGpuResources>    m_gtaoResources;
     std::shared_ptr<renderer::addons::ssr::SsrGpuResources>      m_ssrResources;
     std::shared_ptr<renderer::addons::contact_shadow::ContactShadowGpuResources> m_contactShadowResources;
+    // Shadow resolution and filter of the quality level; read by the shadow add-on every frame.
+    std::shared_ptr<addons::shadow::ShadowQualitySettings> m_shadowQuality =
+        std::make_shared<addons::shadow::ShadowQualitySettings>();
     // Reflection probes: runtime of the probe feature and the capture in flight.
     std::shared_ptr<engine::addons::probes::ProbeRuntime> m_probeRuntime;
     std::unique_ptr<engine::addons::probes::ProbeCapture> m_probeCapture;
