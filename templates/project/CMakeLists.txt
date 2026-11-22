@@ -14,7 +14,7 @@ add_compile_options(/utf-8 /permissive- /Zc:__cplusplus)
 add_compile_definitions(_CRT_SECURE_NO_WARNINGS)
 krom_add_project_script_module("${KROM_PROJECT_ROOT}")
 krom_read_project_runtime_target("${KROM_PROJECT_ROOT}" _project)
-foreach(_backend IN ITEMS dx11 vulkan opengl)
+foreach(_backend IN ITEMS dx11 vulkan)
     if(TARGET Krom::engine_${_backend})
         string(TOUPPER "${_backend}" _upper)
         krom_add_project_runtime("krom_runtime_${_project}_${_backend}" "${_project}_${_backend}"

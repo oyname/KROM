@@ -214,7 +214,7 @@ MaterialHandle PbrMasterMaterial::GetOrRegisterPermutation(uint64_t flagBits)
     };
 
     if (m_config.materialGraph)
-        AddMaterialGraphParameters(desc, m_config.openGL);
+        AddMaterialGraphParameters(desc);
 
     desc.name = "PBR_Perm_" + std::to_string(flagBits);
     desc.materialGraph = "template://krom/pbr-lit";

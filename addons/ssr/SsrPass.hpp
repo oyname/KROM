@@ -18,7 +18,6 @@
 //                 confidence * (hit * weight - specular light) to the scene
 //                 colour buffer the overlays and tonemap use, so the hit
 //                 replaces the probe/IBL reflection; misses keep it.
-// Not on OpenGL (no MRT path there).
 // =============================================================================
 #include "renderer/IDevice.hpp"
 #include "renderer/RenderFrameConstants.hpp"

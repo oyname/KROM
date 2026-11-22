@@ -12,7 +12,7 @@ enum class ShadowFilter : uint8_t
 {
     None    = 0, // hard shadow: single bilinear compare
     // Tent PCF ("The Witness" / MJP): bilinear compares weighted to a tent over
-    // 3x3, 5x5 or 7x7 texels (4, 9, 16 taps). PBR shaders; the frozen OpenGL and
+    // 3x3, 5x5 or 7x7 texels (4, 9, 16 taps). PBR shaders; the
     // legacy lit shaders keep their old 2x2/3x3 box kernels for 1 and 2 and use
     // 3x3 for Tent7x7.
     Tent3x3 = 1,

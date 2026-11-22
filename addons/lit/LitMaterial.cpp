@@ -122,7 +122,7 @@ MaterialDesc LitMaterial::BuildDesc(const LitMaterialCreateInfo& info)
     };
 
     if (info.materialGraph)
-        AddMaterialGraphParameters(desc, info.openGL);
+        AddMaterialGraphParameters(desc);
 
     return desc;
 }

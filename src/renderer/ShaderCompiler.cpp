@@ -54,7 +54,6 @@ ShaderTargetApi ResolveTargetApiNameSpaceSafe(assets::ShaderTargetProfile profil
     case assets::ShaderTargetProfile::DirectX11_SM5: return ShaderTargetApi::DirectX11;
     case assets::ShaderTargetProfile::DirectX12_SM6: return ShaderTargetApi::DirectX12;
     case assets::ShaderTargetProfile::Vulkan_SPIRV: return ShaderTargetApi::Vulkan;
-    case assets::ShaderTargetProfile::OpenGL_GLSL450: return ShaderTargetApi::OpenGL;
     default: return ShaderTargetApi::Generic;
     }
 }
@@ -76,7 +75,6 @@ ShaderBinaryFormat ShaderCompiler::ResolveBinaryFormat(assets::ShaderTargetProfi
     case assets::ShaderTargetProfile::Vulkan_SPIRV: return ShaderBinaryFormat::Spirv;
     case assets::ShaderTargetProfile::DirectX11_SM5: return ShaderBinaryFormat::Dxbc;
     case assets::ShaderTargetProfile::DirectX12_SM6: return ShaderBinaryFormat::Dxil;
-    case assets::ShaderTargetProfile::OpenGL_GLSL450: return ShaderBinaryFormat::GlslSource;
     case assets::ShaderTargetProfile::Null:
     case assets::ShaderTargetProfile::Generic:
     default:
@@ -92,7 +90,6 @@ const char* ShaderCompiler::ToString(assets::ShaderTargetProfile profile) noexce
     case assets::ShaderTargetProfile::DirectX11_SM5: return "DirectX11_SM5";
     case assets::ShaderTargetProfile::DirectX12_SM6: return "DirectX12_SM6";
     case assets::ShaderTargetProfile::Vulkan_SPIRV: return "Vulkan_SPIRV";
-    case assets::ShaderTargetProfile::OpenGL_GLSL450: return "OpenGL_GLSL450";
     default: return "Generic";
     }
 }

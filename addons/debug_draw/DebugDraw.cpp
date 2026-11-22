@@ -53,32 +53,6 @@ float4 main(PSIn input) : SV_TARGET
 }
 )";
 
-constexpr const char* kDebugLineVsGlsl = R"(#version 450 core
-layout(std140, binding = 0) uniform DebugDrawFrame
-{
-    mat4 uViewProjection;
-};
-layout(location = 0) in vec3 inPosition;
-layout(location = 6) in vec4 inColor;
-layout(location = 0) out vec4 vColor;
-
-void main()
-{
-    gl_Position = uViewProjection * vec4(inPosition, 1.0);
-    vColor = inColor;
-}
-)";
-
-constexpr const char* kDebugLineFsGlsl = R"(#version 450 core
-layout(location = 0) in vec4 vColor;
-layout(location = 0) out vec4 fragColor;
-
-void main()
-{
-    fragColor = vColor;
-}
-)";
-
 [[nodiscard]] uint32_t NextCapacity(uint32_t required) noexcept
 {
     uint32_t capacity = 1u;
@@ -90,14 +64,13 @@ void main()
 [[nodiscard]] ShaderHandle CreateDebugShader(renderer::IDevice& device,
                                                         assets::ShaderTargetProfile target,
                                                         assets::ShaderStage stage,
-                                                        assets::ShaderSourceLanguage language,
                                                         const char* source,
                                                         const char* debugName)
 {
     assets::ShaderAsset shader{};
     shader.debugName = debugName;
     shader.stage = stage;
-    shader.sourceLanguage = language;
+    shader.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
     shader.entryPoint = "main";
     shader.sourceCode = source;
 
@@ -105,39 +78,34 @@ void main()
         ? renderer::ShaderStageMask::Vertex
         : renderer::ShaderStageMask::Fragment;
 
-    if (target != assets::ShaderTargetProfile::OpenGL_GLSL450)
+    assets::CompiledShaderArtifact compiled{};
+    std::string error;
+    if (!renderer::ShaderCompiler::CompileForTarget(shader, target, compiled, &error))
     {
-        assets::CompiledShaderArtifact compiled{};
-        std::string error;
-        if (!renderer::ShaderCompiler::CompileForTarget(shader, target, compiled, &error))
-        {
-            Debug::LogError("DebugDraw: failed to compile shader '%s': %s",
-                                      debugName,
-                                      error.c_str());
-            return ShaderHandle::Invalid();
-        }
-
-        if (!compiled.bytecode.empty())
-        {
-            return device.CreateShaderFromBytecode(compiled.bytecode.data(),
-                                                   compiled.bytecode.size(),
-                                                   stageMask,
-                                                   debugName);
-        }
-
-        if (target == assets::ShaderTargetProfile::Vulkan_SPIRV)
-        {
-            Debug::LogError("DebugDraw: shader '%s' produced no SPIR-V bytecode", debugName);
-            return ShaderHandle::Invalid();
-        }
-
-        return device.CreateShaderFromSource(compiled.sourceText.empty() ? source : compiled.sourceText,
-                                             stageMask,
-                                             compiled.entryPoint.empty() ? "main" : compiled.entryPoint,
-                                             debugName);
+        Debug::LogError("DebugDraw: failed to compile shader '%s': %s",
+                                  debugName,
+                                  error.c_str());
+        return ShaderHandle::Invalid();
     }
 
-    return device.CreateShaderFromSource(source, stageMask, "main", debugName);
+    if (!compiled.bytecode.empty())
+    {
+        return device.CreateShaderFromBytecode(compiled.bytecode.data(),
+                                               compiled.bytecode.size(),
+                                               stageMask,
+                                               debugName);
+    }
+
+    if (target == assets::ShaderTargetProfile::Vulkan_SPIRV)
+    {
+        Debug::LogError("DebugDraw: shader '%s' produced no SPIR-V bytecode", debugName);
+        return ShaderHandle::Invalid();
+    }
+
+    return device.CreateShaderFromSource(compiled.sourceText.empty() ? source : compiled.sourceText,
+                                         stageMask,
+                                         compiled.entryPoint.empty() ? "main" : compiled.entryPoint,
+                                         debugName);
 }
 
 } // namespace
@@ -297,19 +265,16 @@ bool DebugDrawRenderer::EnsureGpuResources(renderer::IDevice& device, uint32_t r
         return true;
 
     const assets::ShaderTargetProfile target = renderer::ShaderCompiler::ResolveTargetProfile(device);
-    const bool useOpenGlShaders = target == assets::ShaderTargetProfile::OpenGL_GLSL450;
     m_gpu.vertexShader = CreateDebugShader(device,
                                            target,
                                            assets::ShaderStage::Vertex,
-                                           useOpenGlShaders ? assets::ShaderSourceLanguage::GLSL : assets::ShaderSourceLanguage::HLSL,
-                                           useOpenGlShaders ? kDebugLineVsGlsl : kDebugLineVsHlsl,
-                                           useOpenGlShaders ? "DebugDrawLineVS_GL" : "DebugDrawLineVS");
+                                           kDebugLineVsHlsl,
+                                           "DebugDrawLineVS");
     m_gpu.fragmentShader = CreateDebugShader(device,
                                              target,
                                              assets::ShaderStage::Fragment,
-                                             useOpenGlShaders ? assets::ShaderSourceLanguage::GLSL : assets::ShaderSourceLanguage::HLSL,
-                                             useOpenGlShaders ? kDebugLineFsGlsl : kDebugLinePsHlsl,
-                                             useOpenGlShaders ? "DebugDrawLineFS_GL" : "DebugDrawLinePS");
+                                             kDebugLinePsHlsl,
+                                             "DebugDrawLinePS");
     if (!m_gpu.vertexShader.IsValid() || !m_gpu.fragmentShader.IsValid())
         return false;
 

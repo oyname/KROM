@@ -593,13 +593,9 @@ EditorImportShaders LoadEditorImportShaders(EditorFrameContext& ctx, bool skinne
     if (!ctx.assetPipeline)
         return shaders;
 
-    const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
-    const char* vsPath = opengl
-        ? "lit.opengl.vs.glsl"
-        : (skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl");
-    const char* fsPath = opengl ? "lit.opengl.fs.glsl" : "lit.ps.hlsl";
-    const char* shadowPath = opengl ? "shadow.opengl.vs.glsl"
-                           : (skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl");
+    const char* vsPath = skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl";
+    const char* fsPath = "lit.ps.hlsl";
+    const char* shadowPath = skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl";
 
     shaders.vertex = ctx.assetPipeline->LoadShader(
         PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)),
@@ -682,19 +678,15 @@ RuntimeMaterialResult CreateRuntimeMaterialForMesh(
 
             if (!pbrLayout.attributes.empty())
             {
-                const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
-                const bool forwardPlus = ctx.forwardPlusActive && !opengl;
-                const char* pbrFsPath = opengl ? "pbr_lit.opengl.fs.glsl" : (forwardPlus ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl");
+                const char* pbrFsPath = ctx.forwardPlusActive ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl";
                 ShaderHandle vs = ctx.assetPipeline->LoadShader(
-                    PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "pbr_lit.opengl.vs.glsl"
-                                                       : (skinned ? "skinned_pbr_lit.vs.hlsl" : "pbr_lit.vs.hlsl"))),
+                    PathToUtf8(ResolveEngineShaderPath(ctx, skinned ? "skinned_pbr_lit.vs.hlsl" : "pbr_lit.vs.hlsl")),
                     assets::ShaderStage::Vertex);
                 ShaderHandle fs = ctx.assetPipeline->LoadShader(
                     PathToUtf8(ResolveEngineShaderPath(ctx, pbrFsPath)),
                     assets::ShaderStage::Fragment);
                 ShaderHandle shadow = ctx.assetPipeline->LoadShader(
-                    PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "shadow.opengl.vs.glsl"
-                                                       : (skinned ? "skinned_shadow_pbr.vs.hlsl" : "shadow.vs.hlsl"))),
+                    PathToUtf8(ResolveEngineShaderPath(ctx, skinned ? "skinned_shadow_pbr.vs.hlsl" : "shadow.vs.hlsl")),
                     assets::ShaderStage::Vertex);
 
                 if (vs.IsValid() && fs.IsValid() && shadow.IsValid())

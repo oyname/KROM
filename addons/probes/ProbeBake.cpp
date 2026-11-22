@@ -26,7 +26,7 @@ using namespace engine::renderer;
 namespace {
 
 // Same fullscreen triangle and UV handling as the tonemap pass
-// (shaders/fullscreen.vs.hlsl, fullscreen.opengl.vs.glsl, passthrough.*), so
+// (shaders/fullscreen.vs.hlsl, passthrough.ps.hlsl), so
 // the capture ends up in the target with the orientation the tonemap gives.
 constexpr const char* kEncodeVsHlsl = R"(struct VSOutput
 {
@@ -67,60 +67,11 @@ float4 main(PSInput IN) : SV_TARGET
 }
 )";
 
-constexpr const char* kEncodeVsGlsl = R"(#version 410 core
-
-out vec2 vTexCoord;
-
-void main()
-{
-    const vec2 pos[3] = vec2[3](
-        vec2(-1.0,  1.0),
-        vec2(-1.0, -3.0),
-        vec2( 3.0,  1.0)
-    );
-    const vec2 uv[3] = vec2[3](
-        vec2(0.0, 0.0),
-        vec2(0.0, 2.0),
-        vec2(2.0, 0.0)
-    );
-
-    gl_Position = vec4(pos[gl_VertexID], 0.0, 1.0);
-    vTexCoord = vec2(uv[gl_VertexID].x, 1.0 - uv[gl_VertexID].y);
-}
-)";
-
-constexpr const char* kEncodePsGlsl = R"(#version 410 core
-
-uniform sampler2D uHDRInput;
-
-in vec2 vTexCoord;
-layout(location = 0) out vec4 fragColor;
-
-void main()
-{
-    vec2 uv = vec2(vTexCoord.x, 1.0 - vTexCoord.y);
-    vec3 c = texture(uHDRInput, uv).rgb;
-    c = vec3(isnan(c.r) ? 0.0 : c.r, isnan(c.g) ? 0.0 : c.g, isnan(c.b) ? 0.0 : c.b);
-    c = clamp(c, vec3(0.0), vec3(65504.0));
-    float m = max(c.r, max(c.g, c.b));
-    if (m < 1e-30)
-    {
-        fragColor = vec4(0.0);
-        return;
-    }
-    float e = clamp(ceil(log2(m)), -126.0, 127.0);
-    fragColor = vec4(clamp(c / exp2(e), vec3(0.0), vec3(1.0)), (e + 127.0) / 255.0);
-}
-)";
-
 ShaderHandle CreateShader(IDevice& device, assets::ShaderTargetProfile target, assets::ShaderStage stage,
-                          const char* hlsl, const char* glsl, const char* debugName)
+                          const char* hlsl, const char* debugName)
 {
     const ShaderStageMask stageMask = stage == assets::ShaderStage::Vertex
         ? ShaderStageMask::Vertex : ShaderStageMask::Fragment;
-    if (target == assets::ShaderTargetProfile::OpenGL_GLSL450)
-        return device.CreateShaderFromSource(glsl, stageMask, "main", debugName);
-
     assets::ShaderAsset shader{};
     shader.debugName = debugName;
     shader.stage = stage;
@@ -231,8 +182,8 @@ bool ProbeCapture::Begin(IDevice& device, ProbeRuntime& runtime, const RenderVie
     m_captureSize = m_request.resolution * 2u;
 
     const assets::ShaderTargetProfile target = ShaderCompiler::ResolveTargetProfile(device);
-    m_vs = CreateShader(device, target, assets::ShaderStage::Vertex, kEncodeVsHlsl, kEncodeVsGlsl, "ProbeCaptureEncodeVS");
-    m_ps = CreateShader(device, target, assets::ShaderStage::Fragment, kEncodePsHlsl, kEncodePsGlsl, "ProbeCaptureEncodePS");
+    m_vs = CreateShader(device, target, assets::ShaderStage::Vertex, kEncodeVsHlsl, "ProbeCaptureEncodeVS");
+    m_ps = CreateShader(device, target, assets::ShaderStage::Fragment, kEncodePsHlsl, "ProbeCaptureEncodePS");
     if (m_vs.IsValid() && m_ps.IsValid())
     {
         PipelineDesc desc{};

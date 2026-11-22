@@ -88,7 +88,7 @@ bool ShaderRuntime::NeedsMaterialRebuild(const IShaderMaterialSource& materials,
                     // artifact.sourceText wurde von ShaderCompiler::BuildShaderSource
                     // assembliert und enthält die Defines bereits korrekt positioniert
                     // (nach der #version-Direktive). Würde hier nochmals prepended,
-                    // landet #version auf Zeile 2+ → OpenGL-Kompilierfehler C0204.
+                    // landet #version auf Zeile 2+ und der GLSL-Compiler lehnt die Quelle ab.
                     // Deshalb: sourceText unverändert übergeben.
                     return m_device->CreateShaderFromSource(
                         artifact.sourceText,

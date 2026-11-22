@@ -8,7 +8,6 @@ int main()
     const int backends[] = {
         Krom::Renderer::DX11,
         Krom::Renderer::DX12,
-        Krom::Renderer::OpenGL,
         Krom::Renderer::Vulkan,
     };
 

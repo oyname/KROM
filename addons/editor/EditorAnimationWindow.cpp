@@ -3169,9 +3169,7 @@ void DrawPreviewPane(EditorFrameContext& ctx, const TargetNodes& nodes)
     drawList->AddRectFilled(min, max, IM_COL32(26, 28, 33, 255));
     if (void* texture = ctx.animationPreviewTexture ? ctx.animationPreviewTexture() : nullptr)
     {
-        const ImVec2 uv0 = ctx.animationPreviewFlipY ? ImVec2(0.f, 1.f) : ImVec2(0.f, 0.f);
-        const ImVec2 uv1 = ctx.animationPreviewFlipY ? ImVec2(1.f, 0.f) : ImVec2(1.f, 1.f);
-        drawList->AddImage(reinterpret_cast<ImTextureID>(texture), min, max, uv0, uv1);
+        drawList->AddImage(reinterpret_cast<ImTextureID>(texture), min, max);
     }
     drawList->AddRect(min, max, ImGui::GetColorU32(theme::kBorder));
     drawList->PushClipRect(min, max, true);

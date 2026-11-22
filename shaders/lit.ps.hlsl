@@ -303,7 +303,7 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
         {
             float2 uv = atlasRect.xy + localUv * atlasRect.zw;
 
-            // Slope-scaled Receiver-Plane Depth Bias (analog zum OpenGL-Pfad):
+            // Slope-scaled Receiver-Plane Depth Bias:
             // Verhindert Shadow Acne auf schrägen Flächen ohne übermäßiges Peter-Panning.
 
             float2 dDepth_dUV = KromShadowDepthGradient(depth, uv);

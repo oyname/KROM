@@ -311,9 +311,7 @@ static void DrawSceneViewportPanel(EditorFrameContext& ctx)
 
     if (ctx.sceneViewTexture)
     {
-        const ImVec2 uv0 = ctx.sceneViewFlipY ? ImVec2(0.f, 1.f) : ImVec2(0.f, 0.f);
-        const ImVec2 uv1 = ctx.sceneViewFlipY ? ImVec2(1.f, 0.f) : ImVec2(1.f, 1.f);
-        ImGui::Image(reinterpret_cast<ImTextureID>(ctx.sceneViewTexture), ImVec2(width, height), uv0, uv1);
+        ImGui::Image(reinterpret_cast<ImTextureID>(ctx.sceneViewTexture), ImVec2(width, height));
     }
     else
     {
@@ -370,9 +368,7 @@ static void DrawGamePanel(EditorFrameContext& ctx)
 
     if (ctx.gameViewTexture)
     {
-        const ImVec2 uv0 = ctx.gameViewFlipY ? ImVec2(0.f, 1.f) : ImVec2(0.f, 0.f);
-        const ImVec2 uv1 = ctx.gameViewFlipY ? ImVec2(1.f, 0.f) : ImVec2(1.f, 1.f);
-        ImGui::Image(reinterpret_cast<ImTextureID>(ctx.gameViewTexture), ImVec2(width, height), uv0, uv1);
+        ImGui::Image(reinterpret_cast<ImTextureID>(ctx.gameViewTexture), ImVec2(width, height));
     }
     else
     {
@@ -1053,9 +1049,7 @@ static void DrawCameraPreviewWindow(EditorFrameContext& ctx)
             const float  aspect = camera->aspectRatio > 1e-6f ? camera->aspectRatio : (16.f / 9.f);
             const float  w      = avail.x;
             const float  h      = w / aspect;
-            const ImVec2 uv0 = ctx.previewFlipY ? ImVec2(0.f, 1.f) : ImVec2(0.f, 0.f);
-            const ImVec2 uv1 = ctx.previewFlipY ? ImVec2(1.f, 0.f) : ImVec2(1.f, 1.f);
-            ImGui::Image(reinterpret_cast<ImTextureID>(texId), ImVec2(w, h), uv0, uv1);
+            ImGui::Image(reinterpret_cast<ImTextureID>(texId), ImVec2(w, h));
         }
         else
         {

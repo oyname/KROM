@@ -70,7 +70,6 @@
 #include "core/Debug.hpp"
 #include "jobs/JobSystem.hpp"
 #include "DX11Device.hpp"
-#include "OpenGLDevice.hpp"
 #include "LitMaterial.hpp"
 #include "PbrMasterMaterial.hpp"
 #include "PbrInstanceBuilder.hpp"
@@ -246,8 +245,6 @@ static void TestShaderRuntimeValidation(test::TestContext& ctx);
 static void TestShaderToolOverride(test::TestContext& ctx);
 static void TestMaterialTextureWrites(test::TestContext& ctx);
 static void TestPerMaterialLayoutFromReflection(test::TestContext& ctx);
-static void TestGlslStd140BlockReflection(test::TestContext& ctx);
-static void TestGeneratedTonemapGlslMatchesHandWritten(test::TestContext& ctx);
 static void TestCompiledPerMaterialReflection(test::TestContext& ctx);
 static void TestExampleShadersKeepPerMaterialLayout(test::TestContext& ctx);
 static void TestCustomVertexShadersCompileInstanced(test::TestContext& ctx);
@@ -267,7 +264,7 @@ static void TestShadowExtractionCullsLocalShadowOutsideReceiverBounds(test::Test
 static void TestShadowExtractionCullsLocalShadowBehindCameraFrustum(test::TestContext& ctx);
 static void TestShadowExtractionFiltersDirectionalCasterOutliers(test::TestContext& ctx);
 static void TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance(test::TestContext& ctx);
-static void TestBackendShadowClipSpaceAdjustmentsDx11OpenGL(test::TestContext& ctx);
+static void TestBackendShadowClipSpaceAdjustmentDx11(test::TestContext& ctx);
 static void TestShadowDrawListIncludesAllCastersForSelectedDirectionalRequest(test::TestContext& ctx);
 static void TestSceneExtractionWithRenderWorldContext(test::TestContext& ctx);
 static void TestFrameExtractionStagePassesJobSystemToSceneExtractionContext(test::TestContext& ctx);
@@ -913,7 +910,7 @@ static void TestPbrMasterMaterial(test::TestContext& ctx)
     {
         CHECK(ctx, graphLayout->FindByName("graphTexture0") != nullptr);
         CHECK(ctx, graphLayout->FindByName("graphTexture1") != nullptr);
-        // Must match the PerMaterial cbuffers of the PBR shaders (HLSL and GLSL).
+        // Must match the PerMaterial cbuffers of the PBR shaders.
         CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("boxTileSize"), 104u);
         CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("clearcoatFactor"), 108u);
         CHECK_EQ(ctx, materials.GetCBLayout(graphMaterial).GetOffset("clearcoatRoughness"), 112u);
@@ -3355,7 +3352,7 @@ static void TestShadingSettingsFlags(test::TestContext& ctx)
 
     // Filter parameters where pbr_shadow_poisson.* reads them: featureParams[5] =
     // light size per shadow light, featureParams[6].x = light size of the first
-    // light (OpenGL), featureParams[6].y = filter per light, 4 bits each.
+    // light (legacy lit), featureParams[6].y = filter per light, 4 bits each.
     using engine::addons::shadow::kShadowFilterFrameParameterBlock;
     CHECK(ctx, IsFrameParameterBlockInRange(kShadowFilterFrameParameterBlock));
     CHECK_EQ(ctx, kShadowFilterFrameParameterBlock.firstSlot, 5u);
@@ -5317,26 +5314,16 @@ static void TestLightingFrameConstantsTrackPackedAndDroppedLights(test::TestCont
     device.Shutdown();
 }
 
-static void TestBackendShadowClipSpaceAdjustmentsDx11OpenGL(test::TestContext& ctx)
+static void TestBackendShadowClipSpaceAdjustmentDx11(test::TestContext& ctx)
 {
     engine::renderer::dx11::DX11Device dx11;
-    engine::renderer::opengl::OpenGLDevice opengl;
 
     const math::Mat4 dx11Shadow = dx11.GetShadowClipSpaceAdjustment();
-    const math::Mat4 glShadow = opengl.GetShadowClipSpaceAdjustment();
 
     CHECK(ctx, NearlyEqual(dx11Shadow.m[1][1], 1.0f));
     CHECK(ctx, NearlyEqual(dx11Shadow.m[0][0], 1.0f));
     CHECK(ctx, NearlyEqual(dx11Shadow.m[2][2], 1.0f));
     CHECK(ctx, NearlyEqual(dx11Shadow.m[3][3], 1.0f));
-
-    // Y-Flip (m[1][1] == -1) ist erforderlich, damit CullMode::Front im Shadow-Pass
-    // auf OpenGL korrekt cullt (frontFace-Inversion passend zur Rasterung).
-    CHECK(ctx, NearlyEqual(glShadow.m[1][1], -1.0f));
-    CHECK(ctx, NearlyEqual(glShadow.m[0][0], 1.0f));
-    CHECK(ctx, NearlyEqual(glShadow.m[2][2], 2.0f));
-    CHECK(ctx, NearlyEqual(glShadow.m[3][2], -1.0f));
-    CHECK(ctx, NearlyEqual(glShadow.m[3][3], 1.0f));
 }
 
 static void TestShadowDrawListIncludesAllCastersForSelectedDirectionalRequest(test::TestContext& ctx)
@@ -6506,40 +6493,6 @@ static void TestShaderVariantCache(test::TestContext& ctx)
     device.Shutdown();
 }
 
-static void TestOpenGLBackendRegistration(test::TestContext& ctx)
-{
-    using BackendType = DeviceFactory::BackendType;
-    DeviceFactory::Registry registry;
-
-    CHECK(ctx, registry.IsRegistered(BackendType::OpenGL));
-    auto adapters = registry.EnumerateAdapters(BackendType::OpenGL);
-    CHECK(ctx, !adapters.empty());
-
-    auto device = registry.Create(BackendType::OpenGL);
-    CHECK(ctx, device != nullptr);
-
-    IDevice::DeviceDesc dd{};
-    dd.appName = "OpenGLRegistrationTest";
-    CHECK(ctx, device->Initialize(dd));
-
-    auto cmd = device->CreateCommandList(QueueType::Graphics);
-    CHECK(ctx, cmd != nullptr);
-    cmd->Begin();
-    cmd->Draw(3u);
-    cmd->End();
-    cmd->Submit();
-    CHECK_GT(ctx, device->GetDrawCallCount(), 0u);
-
-    device->Shutdown();
-}
-
-static void TestOpenGLFrontFaceMapping(test::TestContext& ctx)
-{
-    CHECK_EQ(ctx, engine::renderer::opengl::ToGLFrontFace(WindingOrder::CCW), GLenum(0x0900u)); // GL_CW
-    CHECK_EQ(ctx, engine::renderer::opengl::ToGLFrontFace(WindingOrder::CW), GLenum(0x0901u));  // GL_CCW
-}
-
-
 // Ein Shader, der nicht kompiliert, bricht den Frame nicht ab und wird erst nach
 // einer Quellaenderung erneut versucht (TestDevice liefert nie gueltige Shader).
 static void TestFailedShaderDoesNotAbortFrame(test::TestContext& ctx)
@@ -7170,7 +7123,7 @@ float4 main(float4 pixel : SV_Position) : SV_Target
 
     MaterialDesc materialDesc{};
     materialDesc.name = "NormalGraphReadback";
-    AddMaterialGraphParameters(materialDesc, false);
+    AddMaterialGraphParameters(materialDesc);
     MaterialSystem materialSystem;
     const auto material = materialSystem.RegisterMaterial(materialDesc);
     desc = {};
@@ -7476,7 +7429,7 @@ int RunRendererTests()
         .Add("Shadow view builder clamps spot/point far plane", TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance)
         .Add("Lighting extraction sorts shadowed first", TestLightingExtractionSortsShadowedAndDirectionalFirst)
         .Add("Lighting frame constants track packed/dropped lights", TestLightingFrameConstantsTrackPackedAndDroppedLights)
-        .Add("Backend shadow clip-space adjustments DX11/OpenGL", TestBackendShadowClipSpaceAdjustmentsDx11OpenGL)
+        .Add("Backend shadow clip-space adjustment DX11", TestBackendShadowClipSpaceAdjustmentDx11)
         .Add("Shadow draw list includes all selected casters", TestShadowDrawListIncludesAllCastersForSelectedDirectionalRequest)
         .Add("RenderFrame state",         TestRenderFrameExecutionState)
         .Add("Frame TaskGraph parallel",   TestFrameTaskGraphParallelStructure)
@@ -7492,8 +7445,6 @@ int RunRendererTests()
         .Add("Shader tool override", TestShaderToolOverride)
                 .Add("Material texture writes", TestMaterialTextureWrites)
         .Add("PerMaterial layout from reflection", TestPerMaterialLayoutFromReflection)
-        .Add("GLSL std140 block reflection", TestGlslStd140BlockReflection)
-        .Add("Generated tonemap GLSL matches hand-written", TestGeneratedTonemapGlslMatchesHandWritten)
         .Add("Compiled PerMaterial reflection (DXBC/SPIR-V)", TestCompiledPerMaterialReflection)
         .Add("Example shaders keep PerMaterial layout", TestExampleShadersKeepPerMaterialLayout)
         .Add("Custom vertex shaders compile instanced", TestCustomVertexShadersCompileInstanced)
@@ -7506,8 +7457,6 @@ int RunRendererTests()
         .Add("ShaderRuntime background variant compile", TestShaderRuntimeCompilesVariantsInBackground)
         .Add("ShaderRuntime IBL variant rebuild", TestShaderRuntimeRebuildsShaderVariantOnEnvironmentToggle)
         .Add("ShaderVariant cache",      TestShaderVariantCache)
-        .Add("OpenGL front-face mapping", TestOpenGLFrontFaceMapping)
-        .Add("OpenGL backend registration", TestOpenGLBackendRegistration)
         .Add("RenderSystem uses host job system", TestRenderSystemUsesHostJobSystem)
         .Add("PlatformRenderLoop",        TestPlatformRenderLoop)
         .Add("Recipe extra colour targets (MRT)", TestRecipeExtraColorTargets)
@@ -7923,130 +7872,6 @@ static void TestPerMaterialLayoutFromReflection(test::TestContext& ctx)
     CHECK_EQ(ctx, ms2.GetCBData(paddedMat).size(), static_cast<size_t>(96u));
 }
 
-// Experiment (Auftrag 13): the tonemap GLSL generated from HLSL via SPIR-V and
-// SPIRV-Cross must reflect like the hand-written file and use the names the
-// OpenGL backend binds after linking (block PerPass, samplers by texture name).
-static void TestGeneratedTonemapGlslMatchesHandWritten(test::TestContext& ctx)
-{
-    const std::filesystem::path assetRoot = PathFromUtf8(__FILE__).parent_path().parent_path() / "shaders";
-    const auto readText = [](const std::filesystem::path& path) {
-        std::ifstream input(path, std::ios::in | std::ios::binary);
-        return std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-    };
-
-    const std::string handFs = readText(assetRoot / "passthrough.opengl.fs.glsl");
-    const std::string generatedFs = readText(assetRoot / "generated" / "passthrough.opengl.fs.glsl");
-    const std::string generatedVs = readText(assetRoot / "generated" / "fullscreen.opengl.vs.glsl");
-    CHECK(ctx, !handFs.empty());
-    CHECK(ctx, !generatedFs.empty());
-    CHECK(ctx, !generatedVs.empty());
-
-    CHECK(ctx, generatedFs.rfind("#version 410", 0u) == 0u);
-    CHECK(ctx, generatedVs.rfind("#version 410", 0u) == 0u);
-
-    ReflectedConstantBuffer hand{};
-    ReflectedConstantBuffer generated{};
-    std::string error;
-    CHECK(ctx, ReflectGlslStd140Block(handFs, "PerPass", hand, &error));
-    CHECK(ctx, ReflectGlslStd140Block(generatedFs, "PerPass", generated, &error));
-    CHECK(ctx, hand.valid && generated.valid);
-    CHECK_EQ(ctx, generated.byteSize, hand.byteSize);
-    CHECK_EQ(ctx, generated.fields.size(), hand.fields.size());
-    for (const ReflectedCBField& field : hand.fields)
-    {
-        const ReflectedCBField* other = generated.Find(field.name);
-        CHECK(ctx, other != nullptr);
-        CHECK(ctx, other && other->byteOffset == field.byteOffset && other->byteSize == field.byteSize);
-    }
-
-    ReflectedTextureBindings handBindings;
-    ReflectedTextureBindings generatedBindings;
-    CHECK(ctx, ReflectGlslTextureBindings(handFs, handBindings, &error));
-    CHECK(ctx, ReflectGlslTextureBindings(generatedFs, generatedBindings, &error));
-    CHECK(ctx, handBindings == generatedBindings);
-
-    // Names the backend binds by (OpenGLResources.cpp), and no SPIRV-Cross
-    // default names left that it would not find.
-    CHECK(ctx, generatedFs.find("uniform sampler2D uHDRInput;") != std::string::npos);
-    CHECK(ctx, generatedFs.find("uniform sampler2D uBloomTexture;") != std::string::npos);
-    CHECK(ctx, generatedFs.find("SPIRV_Cross_Combined") == std::string::npos);
-    CHECK(ctx, generatedFs.find("type_") == std::string::npos);
-    CHECK(ctx, generatedFs.find("binding") == std::string::npos);
-
-    // Vertex output and fragment input match by name.
-    CHECK(ctx, generatedVs.find("out vec2 krom_TEXCOORD0;") != std::string::npos);
-    CHECK(ctx, generatedFs.find("in vec2 krom_TEXCOORD0;") != std::string::npos);
-}
-
-static void TestGlslStd140BlockReflection(test::TestContext& ctx)
-{
-    const char* source = R"(#version 450 core
-layout(std140, binding = 2) uniform PerObject { mat4 worldMatrix; };
-layout(std140) uniform PerMaterial
-{
-    vec4  baseColorFactor;   // 0
-    vec4  emissiveFactor;    // 16
-    float customValue;       // 32
-    /* Kommentar */ float metallicFactor; // 36
-    vec2  uvScale;           // 40 (std140: vec2 auf 8)
-#ifdef SOMETHING
-#endif
-    vec3  tint;              // 48
-    int   mode;              // 60
-    float weights[2];        // 64, Stride 16
-    mat4  extra;             // 96
-    highp float a, b;        // 160, 164
-};
-void main() {}
-)";
-    ReflectedConstantBuffer block{};
-    std::string error;
-    CHECK(ctx, ReflectGlslStd140Block(source, "PerMaterial", block, &error));
-    CHECK(ctx, block.valid);
-    const auto offsetOf = [&](const char* name) -> uint32_t {
-        const ReflectedCBField* field = block.Find(name);
-        return field ? field->byteOffset : UINT32_MAX;
-    };
-    CHECK_EQ(ctx, offsetOf("baseColorFactor"), 0u);
-    CHECK_EQ(ctx, offsetOf("emissiveFactor"), 16u);
-    CHECK_EQ(ctx, offsetOf("customValue"), 32u);
-    CHECK_EQ(ctx, offsetOf("metallicFactor"), 36u);
-    CHECK_EQ(ctx, offsetOf("uvScale"), 40u);
-    CHECK_EQ(ctx, offsetOf("tint"), 48u);
-    CHECK_EQ(ctx, offsetOf("mode"), 60u);
-    CHECK_EQ(ctx, offsetOf("weights"), 64u);
-    CHECK_EQ(ctx, offsetOf("extra"), 96u);
-    CHECK_EQ(ctx, offsetOf("a"), 160u);
-    CHECK_EQ(ctx, offsetOf("b"), 164u);
-    CHECK(ctx, block.Find("worldMatrix") == nullptr);
-    CHECK_EQ(ctx, block.byteSize, 176u);
-
-    // Der Regressionsfall als GLSL: gleiche Offsets wie unter HLSL.
-    const char* reordered = R"(#version 450 core
-layout(std140) uniform PerMaterial
-{
-    vec4  baseColorFactor;
-    vec4  emissiveFactor;
-    float customValue;
-    float metallicFactor;
-    float roughnessFactor;
-    float opacityFactor;
-    float alphaCutoff;
-    int   materialFeatureMask;
-    float materialModel;
-};
-)";
-    ReflectedConstantBuffer glBlock{};
-    CHECK(ctx, ReflectGlslStd140Block(reordered, "PerMaterial", glBlock, &error));
-    CheckReorderedPerMaterial(ctx, glBlock);
-
-    // Nicht unterstuetzter Typ -> keine Reflection (Fallback auf festes Layout).
-    ReflectedConstantBuffer unsupported{};
-    CHECK(ctx, !ReflectGlslStd140Block("uniform PerMaterial { MyStruct s; };", "PerMaterial", unsupported, &error));
-    CHECK(ctx, !unsupported.valid);
-    CHECK(ctx, !ReflectGlslStd140Block("uniform Other { float x; };", "PerMaterial", unsupported, &error));
-}
-
 static void TestCompiledPerMaterialReflection(test::TestContext& ctx)
 {
     assets::ShaderAsset vs{};
@@ -8121,11 +7946,7 @@ static void TestExampleShadersKeepPerMaterialLayout(test::TestContext& ctx)
 
     for (const char* name : { "animated_color", "grayscale" })
     {
-        ReflectedConstantBuffer glsl{};
         std::string error;
-        const std::string glslSource = readText(examples / (std::string(name) + ".opengl.fs.glsl"));
-        CHECK(ctx, ReflectGlslStd140Block(glslSource, "PerMaterial", glsl, &error));
-        checkSameAsLegacy(glsl, name);
 
         assets::ShaderAsset ps{};
         ps.debugName = std::string(name) + "_ps";
@@ -8270,26 +8091,7 @@ static void TestCustomTextureRegisterFromReflection(test::TestContext& ctx)
     // Vorgegebenes Override (wie es die Reflection liefert): Slot 13.
     CHECK_EQ(ctx, RegisteredDetailMapSlot(ctx, { { "detailMap", 13u } }), 13u);
 
-    // GLSL: layout(binding = N); Sampler ohne binding und Bloecke fehlen.
-    const char* glsl = R"(#version 450 core
-layout(std140, binding = 2) uniform PerMaterial { vec4 baseColorFactor; };
-uniform sampler2D tAlbedo;
-layout(binding = 13) uniform sampler2D detailMap; // eigene Textur
-layout(location = 0, binding=14) uniform highp sampler2D secondMap;
-/* layout(binding = 15) uniform sampler2D commented; */
-layout(binding = 21) uniform sampler2D outOfRange; // = TexSlots::COUNT
-void main() {}
-)";
-    ReflectedTextureBindings glslBindings;
     std::string error;
-    CHECK(ctx, ReflectGlslTextureBindings(glsl, glslBindings, &error));
-    CHECK_EQ(ctx, FindTextureSlot(glslBindings, "detailMap"), 13u);
-    CHECK_EQ(ctx, FindTextureSlot(glslBindings, "secondMap"), 14u);
-    CHECK(ctx, glslBindings.count("tAlbedo") == 0u);
-    CHECK(ctx, glslBindings.count("commented") == 0u);
-    CHECK(ctx, glslBindings.count("outOfRange") == 0u);
-    CHECK(ctx, glslBindings.count("PerMaterial") == 0u);
-    CHECK_EQ(ctx, RegisteredDetailMapSlot(ctx, glslBindings), 13u);
 
     // DXBC und SPIR-V aus echtem HLSL, wenn der Compiler vorhanden ist.
     assets::ShaderAsset vs{};

@@ -52,10 +52,10 @@ struct RenderSettingsState
     // Post-process AA after tonemapping (project settings, KROM_POST_AA).
     std::shared_ptr<engine::renderer::addons::forward::PostAASettings> postAASettings =
         std::make_shared<engine::renderer::addons::forward::PostAASettings>();
-    // GTAO add-on resources (settings); null without GTAO (OpenGL, enableGtao off).
+    // GTAO add-on resources (settings); null without GTAO (enableGtao off).
     std::shared_ptr<engine::renderer::addons::gtao::GtaoGpuResources> gtaoResources;
     std::shared_ptr<engine::renderer::addons::ssr::SsrGpuResources> ssrResources;
-    // Contact shadow add-on resources; null without it (OpenGL, enableContactShadows off).
+    // Contact shadow add-on resources; null without it (enableContactShadows off).
     std::shared_ptr<engine::renderer::addons::contact_shadow::ContactShadowGpuResources> contactShadowResources;
     // Shadow resolution and filter of the quality level (read by the shadow add-on).
     std::shared_ptr<engine::addons::shadow::ShadowQualitySettings> shadowQuality =

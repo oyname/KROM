@@ -23,7 +23,7 @@ inline constexpr std::array<const char*, assets::kMaterialGraphMaxTextures * 2> 
 
 // Appends the graph parameters. They must follow the last field of the
 // material's PerMaterial block so that shaders can declare them behind it.
-inline void AddMaterialGraphParameters(MaterialDesc& desc, bool openGL)
+inline void AddMaterialGraphParameters(MaterialDesc& desc)
 {
     desc.features = desc.features | MaterialFeatureFlags::MaterialGraph;
 
@@ -51,8 +51,8 @@ inline void AddMaterialGraphParameters(MaterialDesc& desc, bool openGL)
     }
 
     desc.textureBindingOverrides[kGraphTextureParams[0]] = 13u;
-    // GLSL uses unit 9 for raw shadow depth. HLSL uses t14 for Forward+ shadow data.
-    desc.textureBindingOverrides[kGraphTextureParams[1]] = openGL ? 14u : 9u;
+    // t14 carries the Forward+ shadow data, so the second graph texture uses t9.
+    desc.textureBindingOverrides[kGraphTextureParams[1]] = 9u;
     desc.textureBindingOverrides[kGraphTextureParams[2]] = TexSlots::GraphTexture2;
     desc.textureBindingOverrides[kGraphTextureParams[3]] = TexSlots::GraphTexture3;
 }

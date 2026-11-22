@@ -5,7 +5,7 @@ This reference describes how to use the KROM ENGINE API.
 The focus is on the direct engine path:
 - engine initialization and the frame loop
 - platform window and input
-- backend selection (DX11 / DX12 / OpenGL / Vulkan)
+- backend selection (DX11 / DX12 / Vulkan)
 - render features / AddOns
 - ECS usage
 - mesh and material setup
@@ -33,7 +33,7 @@ are Win32, GLFW/Linux, and a headless platform for tests.
 
 ### `platform::WindowDesc`
 
-Configures the window and (optionally) the OpenGL context hints.
+Configures the window.
 
 ```cpp
 struct WindowDesc
@@ -46,11 +46,6 @@ struct WindowDesc
     uint32_t    framebufferWidth  = 1280u;
     uint32_t    framebufferHeight = 720u;
     std::string title             = "KROM Engine";
-
-    bool openglContext      = false;   // OpenGL backend only
-    int  openglMajor        = 4;
-    int  openglMinor        = 1;
-    bool openglDebugContext = false;
 
     bool vsync = true;
 };
@@ -191,12 +186,11 @@ and selected by an enum at initialization time.
 
 ```cpp
 // engine::renderer::DeviceFactory
-enum class BackendType { Null, DirectX11, DirectX12, OpenGL, Vulkan };
+enum class BackendType { Null, DirectX11, DirectX12, Vulkan };
 ```
 
 - `Null` — headless/no-op device (tests, CI).
 - `DirectX11`, `DirectX12`, `Vulkan` — modern HLSL path backends.
-- `OpenGL` — isolated 4.1 legacy path (macOS).
 
 You pass the chosen `BackendType` into `PlatformRenderLoop::Initialize`. Adapter/device
 details are described by `IDevice::DeviceDesc` (optional debug layer, app name, etc.).
@@ -712,7 +706,7 @@ rs.RegisterFeature(renderer::addons::outline::CreateOutlineFeature(
     /* shouldOutline    */ [&](EntityID e){ return IsSelectable(e); }));
 ```
 
-Renders nothing when no entity is selected. HLSL backends only (disabled on OpenGL).
+Renders nothing when no entity is selected.
 
 ### Offscreen rendering (render-to-texture)
 

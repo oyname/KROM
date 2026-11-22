@@ -530,10 +530,10 @@ offset 2320 (`packoffset(c145)`). The core only zeroes it each frame.
 - **Fill:** the feature's `IFrameConstantsContributor` writes its own trivially copyable
   struct with `WriteFrameParameterBlock(fc, block, value)`, which refuses data larger
   than the claimed slots.
-- **Bind:** nothing extra; the block travels in `b0`, so DX11, Vulkan and OpenGL bind it
+- **Bind:** nothing extra; the block travels in `b0`, so DX11 and Vulkan bind it
   the same way as the rest of the frame constants.
 - **Shaders:** every PerFrame declaration that reaches the end of the buffer ends with
-  `float4 featureParams[8];` (GLSL `vec4 featureParams[8];`). Shaders that use a block
+  `float4 featureParams[8];`. Shaders that use a block
   name its fields with `#define`s on `featureParams[firstSlot]`; the slot number in the
   AddOn and in its shaders must match. Shaders that declare a shorter PerFrame block,
   including custom shaders, never see the area and keep working.
@@ -554,7 +554,7 @@ genuine dependencies.
 
 | AddOn | Library | Kind | Notes |
 | --- | --- | --- | --- |
-| `dx11`, `opengl`, `vulkan`, `null` | `engine_<name>` | backend | self-registering device backends |
+| `dx11`, `vulkan`, `null` | `engine_<name>` | backend | self-registering device backends |
 | `forward` | `engine_forward` | render feature | forward / Forward+ pipeline, sky, bloom/tonemap stages |
 | `mesh_renderer` | `engine_mesh_renderer` | render feature | `MeshComponent`/`MaterialComponent`, extraction, mesh collision queries |
 | `lighting` | `engine_lighting` | render feature | `LightComponent` extraction |
@@ -752,7 +752,7 @@ public:
 ```
 
 Backends are registered as factories and selected by
-`DeviceFactory::BackendType { Null, DirectX11, DirectX12, OpenGL, Vulkan }`. This
+`DeviceFactory::BackendType { Null, DirectX11, DirectX12, Vulkan }`. This
 boundary is critical:
 
 - the renderer decides what work needs to happen

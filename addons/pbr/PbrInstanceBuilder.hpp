@@ -187,9 +187,7 @@ private:
     float m_alphaCutoff  = 0.5f;
     // IBL must be opt-in. A material flag alone is not enough; the runtime also
     // needs a valid environment. Defaulting this to true makes non-environment
-    // scenes compile KROM_IBL variants by accident, which is especially toxic on
-    // OpenGL because missing combined sampler resources produce black output
-    // without a useful API error.
+    // scenes compile KROM_IBL variants by accident.
     bool  m_ibl          = false;
 };
 

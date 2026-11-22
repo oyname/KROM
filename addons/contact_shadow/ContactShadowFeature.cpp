@@ -91,11 +91,6 @@ public:
 
     bool Initialize(const FeatureInitializationContext& context) override
     {
-        if (context.device.GetShaderTargetProfile() == assets::ShaderTargetProfile::OpenGL_GLSL450)
-        {
-            Debug::LogWarning("ContactShadowFeature: contact shadows not supported on OpenGL, disabled");
-            return true; // not fatal; the pass stays a no-op
-        }
         m_device = &context.device;
         return InitializeContactShadowResources(context.device, *m_resources);
     }

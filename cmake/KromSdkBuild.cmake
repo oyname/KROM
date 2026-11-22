@@ -32,7 +32,7 @@ file(GLOB_RECURSE _krom_identity_files RELATIVE "${CMAKE_SOURCE_DIR}" CONFIGURE_
     "${CMAKE_SOURCE_DIR}/templates/project/*")
 list(SORT _krom_identity_files)
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS ${_krom_identity_files})
-set(_krom_identity "${PROJECT_VERSION};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_CXX_FLAGS};${CMAKE_CXX_FLAGS_RELEASE};${KROM_WITH_PHYSICS};${KROM_WITH_AUDIO};${KROM_WITH_PARTICLES};${KROM_BUILD_DX11};${KROM_BUILD_VULKAN};${KROM_BUILD_OPENGL}")
+set(_krom_identity "${PROJECT_VERSION};${CMAKE_CXX_COMPILER_VERSION};${CMAKE_CXX_FLAGS};${CMAKE_CXX_FLAGS_RELEASE};${KROM_WITH_PHYSICS};${KROM_WITH_AUDIO};${KROM_WITH_PARTICLES};${KROM_BUILD_DX11};${KROM_BUILD_VULKAN}")
 foreach(_file IN LISTS _krom_identity_files)
     file(SHA256 "${CMAKE_SOURCE_DIR}/${_file}" _hash)
     string(APPEND _krom_identity "${_file}:${_hash};")

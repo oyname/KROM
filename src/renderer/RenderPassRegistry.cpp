@@ -5,7 +5,7 @@ namespace engine::renderer {
 RenderPassRegistry::RenderPassRegistry()
 {
     // Fullscreen/Postprocess: DepthTest, DepthWrite und Cull müssen zwingend OFF sein.
-    // Sonst verwirft der Rasterizer den Fullscreen-Triangle → schwarzes Bild auf OpenGL.
+    // Sonst kann der Rasterizer den Fullscreen-Triangle verwerfen → schwarzes Bild.
     PassLocks postprocessLocks{};
     postprocessLocks.depthTestLocked  = true;  postprocessLocks.depthTestValue  = false;
     postprocessLocks.depthWriteLocked = true;  postprocessLocks.depthWriteValue = false;

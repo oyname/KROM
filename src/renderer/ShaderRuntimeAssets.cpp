@@ -378,8 +378,7 @@ namespace engine::renderer {
         {
             const bool needsCompiledTarget = (target == assets::ShaderTargetProfile::Vulkan_SPIRV)
                 || (target == assets::ShaderTargetProfile::DirectX11_SM5)
-                || (target == assets::ShaderTargetProfile::DirectX12_SM6)
-                || (target == assets::ShaderTargetProfile::OpenGL_GLSL450);
+                || (target == assets::ShaderTargetProfile::DirectX12_SM6);
 
             const bool hasSource = !mutableShaderAsset->sourceCode.empty() || !mutableShaderAsset->bytecode.empty();
             if (needsCompiledTarget && !FindCompiledArtifact(*mutableShaderAsset) && AsyncShaderCompilesEnabled() &&
@@ -521,8 +520,7 @@ namespace engine::renderer {
         const bool needsCompilation =
             target == assets::ShaderTargetProfile::Vulkan_SPIRV       ||
             target == assets::ShaderTargetProfile::DirectX11_SM5      ||
-            target == assets::ShaderTargetProfile::DirectX12_SM6      ||
-            target == assets::ShaderTargetProfile::OpenGL_GLSL450;
+            target == assets::ShaderTargetProfile::DirectX12_SM6;
 
         // Plattformen ohne separaten Compile-Schritt (z.B. Null-Backend): direkt hochladen.
         if (!needsCompilation || !jobSystem.IsParallel())

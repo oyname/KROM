@@ -33,7 +33,6 @@ struct RuntimeMaterialContext
     const std::filesystem::path& engineAssetRoot;             // built-in shaders next to the EXE
     RuntimeMaterialCache& runtimeMaterialCache;
     TexturePathMap& texturePaths;
-    bool openGL = false;
     bool enableForwardPlus = false;                           // GraphicsConfig::enableForwardPlus
 };
 

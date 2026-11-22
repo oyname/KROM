@@ -167,8 +167,8 @@ bool RenderFrameOrchestrator::Execute(const RenderFrameOrchestratorContext& cont
     const auto parallelStart = Clock::now();
 
     // PrepareFrameData stays on the calling (render) thread: frame-constant
-    // contributors may create or update GPU buffers, and a device call from a
-    // worker has no context under OpenGL. It still overlaps with the two
+    // contributors may create or update GPU buffers, and device calls belong
+    // on the render thread. It still overlaps with the two
     // collection jobs below, which run on the workers meanwhile.
     const auto prepareFrame = [&frameConstantStage, &frameConstantContext, &state]() {
         const auto start = Clock::now();

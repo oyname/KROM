@@ -34,26 +34,26 @@ struct ProjectRenderSettings
     bool brdfBurleyDiffuse = true;
     bool specularAntiAliasing = true;      // geometric specular AA (HLSL backends)
     bool specularOcclusion = true;
-    // Screen-space reflections (SSR add-on, not under OpenGL).
+    // Screen-space reflections (SSR add-on).
     bool  ssrEnabled = true;
     float ssrIntensity = 1.0f;
     float ssrMaxRoughness = 0.6f;
     float ssrMaxDistance = 30.0f;
     float ssrThickness = 0.3f;
-    // Ambient occlusion (GTAO add-on, not under OpenGL); defaults = GtaoSettings.
+    // Ambient occlusion (GTAO add-on); defaults = GtaoSettings.
     // Off also drops the depth prepass unless another add-on needs it.
     bool  gtaoEnabled = true;
     float gtaoRadius = 0.50f;      // world-space metres
     float gtaoIntensity = 0.65f;   // 0 = no AO
     float gtaoBias = 0.05f;        // horizon angle bias against self-occlusion
     // Screen-space contact shadows of the main directional light (contact shadow
-    // add-on, not under OpenGL); defaults = ContactShadowSettings.
+    // add-on); defaults = ContactShadowSettings.
     bool     contactShadowsEnabled = true;
     float    contactShadowLength = 0.30f;     // world-space metres
     float    contactShadowThickness = 0.05f;  // world-space metres
     float    contactShadowIntensity = 1.0f;   // 0 = none
     uint32_t contactShadowSteps = 12u;
-    // Post-process AA after tonemapping: off, fxaa, smaa (forward add-on, not under OpenGL).
+    // Post-process AA after tonemapping: off, fxaa, smaa (forward add-on).
     std::string postAA = "off";
     // Shadow maps (shadow add-on): tile edge of each sun cascade and of each
     // point/spot light view, and the filter (engine::ShadowFilter id). Global

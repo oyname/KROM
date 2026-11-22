@@ -75,34 +75,6 @@ float4 main(PSIn input) : SV_TARGET
 }
 )";
 
-constexpr const char* kTextVsGlsl = R"(#version 450 core
-layout(location = 0) in vec2 inPosition;
-layout(location = 4) in vec2 inUv;
-layout(location = 6) in vec4 inColor;
-layout(location = 0) out vec2 vUv;
-layout(location = 1) out vec4 vColor;
-
-void main()
-{
-    gl_Position = vec4(inPosition, 0.0, 1.0);
-    vUv = inUv;
-    vColor = inColor;
-}
-)";
-
-constexpr const char* kTextFsGlsl = R"(#version 450 core
-layout(binding = 8) uniform sampler2D uAtlas;
-layout(location = 0) in vec2 vUv;
-layout(location = 1) in vec4 vColor;
-layout(location = 0) out vec4 fragColor;
-
-void main()
-{
-    float coverage = texture(uAtlas, vUv).a;
-    fragColor = vec4(vColor.rgb, vColor.a * coverage);
-}
-)";
-
 [[nodiscard]] uint32_t NextCapacity(uint32_t required) noexcept
 {
     uint32_t capacity = 256u;
@@ -128,16 +100,11 @@ void main()
                                             assets::ShaderStage stage,
                                             const char* debugName)
 {
-    const bool openGl = target == assets::ShaderTargetProfile::OpenGL_GLSL450;
     const bool vertex = stage == assets::ShaderStage::Vertex;
-    const char* source = openGl ? (vertex ? kTextVsGlsl : kTextFsGlsl)
-                                : (vertex ? kTextVsHlsl : kTextPsHlsl);
+    const char* source = vertex ? kTextVsHlsl : kTextPsHlsl;
     const renderer::ShaderStageMask stageMask = vertex
         ? renderer::ShaderStageMask::Vertex
         : renderer::ShaderStageMask::Fragment;
-
-    if (openGl)
-        return device.CreateShaderFromSource(source, stageMask, "main", debugName);
 
     assets::ShaderAsset shader{};
     shader.debugName = debugName;
@@ -614,8 +581,7 @@ void TextRenderer::Flush(const renderer::RGExecContext& execCtx)
     }
 
     // Pixel (oben links) → Clip-Space mit y nach oben. Ohne
-    // GetClipSpaceAdjustment: deren Y-Flip gilt unter OpenGL nur fuer die
-    // Offscreen-Szenenziele; der UI-Pass schreibt direkt in den Backbuffer, in
+    // GetClipSpaceAdjustment: der UI-Pass schreibt direkt in den Backbuffer, in
     // dem diese Orientierung auf allen Backends stimmt (Vulkan per Viewport).
     for (TextVertex& v : vertices)
     {

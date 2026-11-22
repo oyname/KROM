@@ -382,18 +382,14 @@ struct EditorFrameContext
     RenderTargetHandle previewRT;
     uint32_t           previewWidth  = 320u;
     uint32_t           previewHeight = 180u;
-    bool               previewFlipY  = false;
     RenderTargetHandle materialPreviewRT;
     uint32_t           materialPreviewWidth  = 256u;
     uint32_t           materialPreviewHeight = 256u;
-    bool               materialPreviewFlipY  = false;
     std::function<void*()> animationPreviewTexture;
-    bool               animationPreviewFlipY = false;
     std::function<void*()> prefabPreviewTexture; // ImGui-Texture-ID fuer Prefab-Vorschau
     RenderTargetHandle prefabPreviewRT;
     uint32_t           prefabPreviewWidth  = 512u;
     uint32_t           prefabPreviewHeight = 512u;
-    bool               prefabPreviewFlipY  = false;
     engine::addons::debug_draw::DebugDrawRenderer* debugDraw = nullptr;
     bool                   drawingAnimationPreviewGizmos = false;
     std::function<void()> requestClose;
@@ -533,11 +529,8 @@ struct EditorFrameContext
 
     const RenderStats* renderStats = nullptr;
     GpuPassTimingReport gpuPassTimings{};   // filled by the app each frame
-    bool msaaAvailable = true;                // false on backends without MSAA (OpenGL)
-    bool gtaoAvailable = true;                // false when the GTAO add-on is not registered (OpenGL)
-    bool ssrAvailable = true;                 // false when the SSR add-on is not registered (OpenGL)
-    bool contactShadowAvailable = true;       // false when the contact shadow add-on is not registered (OpenGL)
-    bool autoExposureAvailable = true;        // false on backends without compute (OpenGL)
+    bool gtaoAvailable = true;                // false when the host did not register the GTAO add-on
+    bool contactShadowAvailable = true;       // false when the host did not register the contact shadow add-on
     // Automatic exposure as last measured (Inspector display); null without renderer.
     const renderer::addons::forward::AutoExposureStatus* autoExposureStatus = nullptr;
     renderer::RenderFrameDataView frameData{};
@@ -571,7 +564,6 @@ struct EditorFrameContext
     uint32_t sceneViewRequestWidth = 0u;
     uint32_t sceneViewRequestHeight = 0u;
     void* sceneViewTexture = nullptr;
-    bool sceneViewFlipY = false;
     // Game-Reiter: Bild der Spielkamera (Bildschirmkoordinaten, Stand letzter UI-Frame).
     // Sichtbar = die App rendert diesen Frame die Spielkamera statt der Editor-Kamera.
     bool gameViewVisible = false;
@@ -584,7 +576,6 @@ struct EditorFrameContext
     uint32_t gameViewRequestWidth = 0u;
     uint32_t gameViewRequestHeight = 0u;
     void* gameViewTexture = nullptr;
-    bool gameViewFlipY = false;
     // Bildschirmtext der Scripts in Pixeln des Spielbilds (gameViewRequest*).
     struct GameOverlayText
     {

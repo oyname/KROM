@@ -3,7 +3,6 @@
 // BRDF options of the forward add-on (ShadingSettings, ForwardShading.hpp).
 // All bits clear = the former shading without specular AA (bit 3 replaces the
 // old always-on normal-map variant). Include after the PerFrame block.
-// GLSL twin: pbr_shading_options.opengl.glsl.
 //
 // featureParams[2] (kShadingFrameParameterBlock): x = flags (uint bits)
 //   bit 0  height-correlated Smith visibility for direct light

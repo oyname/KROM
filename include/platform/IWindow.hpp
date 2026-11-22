@@ -74,14 +74,6 @@ struct WindowDesc
     // work area and shrunk to fit; borderless and fullscreen cover it.
     MonitorRect monitor{};
 
-    // OpenGL context hints used by the platform and swapchain. The typed native
-    // handle contract tells the renderer whether to use WGL or the GLFW context.
-    // Non-OpenGL backends ignore these fields.
-    bool openglContext = false;
-    int openglMajor = 4;
-    int openglMinor = 1;
-    bool openglDebugContext = false;
-
     bool vsync = true;
 };
 

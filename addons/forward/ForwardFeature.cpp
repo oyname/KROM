@@ -311,86 +311,6 @@ float4 main(PSInput IN) : SV_TARGET
     return float4(uInput.SampleLevel(uSampler, finalUv, 0.0f).rgb, center.a);
 })";
 
-        constexpr const char* kSkyFullscreenVsGlsl = R"(#version 410 core
-
-out vec2 vTexCoord;
-
-void main()
-{
-    // Y-Positionen invertiert: OpenGL-Szene-Geometrie wird durch GetClipSpaceAdjustment()
-    // (m[1][1]=-1) Y-gespiegelt ins HDR-FBO gerendert. Der Sky-VS umgeht die
-    // Projektionsmatrix komplett und muss dieselbe Spiegelung manuell anwenden,
-    // damit der Tonemap-Pass sky und scene konsistent aus dem FBO liest.
-    const vec2 pos[3] = vec2[3](
-        vec2(-1.0, -1.0),
-        vec2(-1.0,  3.0),
-        vec2( 3.0, -1.0)
-    );
-    const vec2 uv[3] = vec2[3](
-        vec2(0.0, 0.0),
-        vec2(0.0, 2.0),
-        vec2(2.0, 0.0)
-    );
-
-    gl_Position = vec4(pos[gl_VertexID], 0.0, 1.0);
-    vTexCoord = uv[gl_VertexID];
-})";
-
-        constexpr const char* kSkyFullscreenPsGlsl = R"(#version 410 core
-
-struct GpuLightData
-{
-    vec4 positionWS;
-    vec4 directionWS;
-    vec4 colorIntensity;
-    vec4 params;
-};
-
-layout(std140) uniform PerFrame
-{
-    mat4         viewMatrix;
-    mat4         projMatrix;
-    mat4         viewProjMatrix;
-    mat4         invViewProjMatrix;
-    vec4         cameraPositionWS;
-    vec4         cameraForwardWS;
-    vec4         screenSize;
-    vec4         timeData;
-    vec4         ambientColor;
-    uint         lightCount;
-    uint         shadowCascadeCount;
-    float        nearPlane;
-    float        farPlane;
-    GpuLightData lights[7];
-    mat4         shadowViewProj;
-    float        iblPrefilterLevels;
-    float        shadowBias;
-    float        shadowNormalBias;
-    float        shadowStrength;
-    float        shadowTexelSize;
-    uint         debugFlags;
-    vec2         _shadowPad;
-};
-
-uniform samplerCube uEnvironment;
-
-in vec2 vTexCoord;
-layout(location = 0) out vec4 fragColor;
-
-void main()
-{
-    vec2 clipXY = vec2(vTexCoord.x * 2.0 - 1.0, 1.0 - vTexCoord.y * 2.0);
-    vec2 focal = max(abs(vec2(projMatrix[0][0], projMatrix[1][1])), vec2(1e-6));
-    vec3 cameraRightWS = normalize(vec3(viewMatrix[0][0], viewMatrix[1][0], viewMatrix[2][0]));
-    vec3 cameraUpWS = normalize(vec3(viewMatrix[0][1], viewMatrix[1][1], viewMatrix[2][1]));
-    vec3 viewDir = normalize(
-        cameraRightWS * (clipXY.x / focal.x) +
-        cameraUpWS * (clipXY.y / focal.y) +
-        cameraForwardWS.xyz);
-    vec3 color = textureLod(uEnvironment, viewDir, 0.0).rgb;
-    fragColor = vec4(color, 1.0);
-})";
-
         constexpr const char* kBloomExtractPsHlsl = R"(Texture2D    uHDRInput : register(t8);
 SamplerState uSampler  : register(s1);
 
@@ -470,77 +390,6 @@ float4 main(PSInput IN) : SV_TARGET
     color += uHDRInput.Sample(uSampler, IN.uv + texel * 3.230769f).rgb * 0.070270f;
     color += uHDRInput.Sample(uSampler, IN.uv - texel * 3.230769f).rgb * 0.070270f;
     return float4(color, 1.0f);
-})";
-
-        constexpr const char* kBloomExtractPsGlsl = R"(#version 410 core
-
-layout(std140) uniform PerPass
-{
-    vec4 bloomParams;
-};
-
-uniform sampler2D uHDRInput;
-
-in vec2 vTexCoord;
-layout(location = 0) out vec4 fragColor;
-
-void main()
-{
-    vec3 hdr = texture(uHDRInput, vTexCoord).rgb;
-    float luminance = dot(hdr, vec3(0.2126, 0.7152, 0.0722));
-    float knee = max(bloomParams.x * 0.25, 0.0001);
-    float soft = clamp((luminance - bloomParams.x + knee) / (2.0 * knee), 0.0, 1.0);
-    float contribution = max(luminance - bloomParams.x, 0.0) + soft * soft * knee;
-    float scale = contribution / max(luminance, 0.0001);
-    fragColor = vec4(hdr * scale, 1.0);
-})";
-
-        constexpr const char* kBloomBlurHPsGlsl = R"(#version 410 core
-
-layout(std140) uniform PerPass
-{
-    vec4 bloomParams;
-};
-
-uniform sampler2D uHDRInput;
-
-in vec2 vTexCoord;
-layout(location = 0) out vec4 fragColor;
-
-void main()
-{
-    vec2 size = vec2(max(textureSize(uHDRInput, 0).x, 1), max(textureSize(uHDRInput, 0).y, 1));
-    vec2 texel = vec2(max(bloomParams.z, 0.0) / size.x, 0.0);
-    vec3 color = texture(uHDRInput, vTexCoord).rgb * 0.227027;
-    color += texture(uHDRInput, vTexCoord + texel * 1.384615).rgb * 0.316216;
-    color += texture(uHDRInput, vTexCoord - texel * 1.384615).rgb * 0.316216;
-    color += texture(uHDRInput, vTexCoord + texel * 3.230769).rgb * 0.070270;
-    color += texture(uHDRInput, vTexCoord - texel * 3.230769).rgb * 0.070270;
-    fragColor = vec4(color, 1.0);
-})";
-
-        constexpr const char* kBloomBlurVPsGlsl = R"(#version 410 core
-
-layout(std140) uniform PerPass
-{
-    vec4 bloomParams;
-};
-
-uniform sampler2D uHDRInput;
-
-in vec2 vTexCoord;
-layout(location = 0) out vec4 fragColor;
-
-void main()
-{
-    vec2 size = vec2(max(textureSize(uHDRInput, 0).x, 1), max(textureSize(uHDRInput, 0).y, 1));
-    vec2 texel = vec2(0.0, max(bloomParams.z, 0.0) / size.y);
-    vec3 color = texture(uHDRInput, vTexCoord).rgb * 0.227027;
-    color += texture(uHDRInput, vTexCoord + texel * 1.384615).rgb * 0.316216;
-    color += texture(uHDRInput, vTexCoord - texel * 1.384615).rgb * 0.316216;
-    color += texture(uHDRInput, vTexCoord + texel * 3.230769).rgb * 0.070270;
-    color += texture(uHDRInput, vTexCoord - texel * 3.230769).rgb * 0.070270;
-    fragColor = vec4(color, 1.0);
 })";
 
         struct SkyGpuResources
@@ -706,14 +555,12 @@ void main()
         }
 
         // Creates shaders, pipelines and buffers once. False on backends without
-        // compute (OpenGL is frozen and keeps the fixed exposure).
+        // compute, which keep the fixed exposure.
         bool EnsureAutoExposureGpuResources(IDevice& device, AutoExposureGpuResources& res)
         {
             if (res.attempted)
                 return res.ready;
             res.attempted = true;
-            if (ShaderCompiler::ResolveTargetProfile(device) == assets::ShaderTargetProfile::OpenGL_GLSL450)
-                return false;
             const ComputeRuntimeDesc compute = device.GetComputeRuntime();
             if (!compute.computePipelinesSupported || !compute.computeDispatchSupported)
                 return false;
@@ -801,21 +648,20 @@ void main()
             std::shared_ptr<ShadingSettings> m_settings;
         };
 
-        // Shared between feature and pipeline: MSAA is off on backends that cannot do it.
+        // MSAA and post-AA settings shared between feature and pipeline.
         struct MsaaRuntime
         {
             std::shared_ptr<MsaaSettings> settings;
-            bool supported = true;
-            // Post-process AA; off on backends without it (OpenGL).
+            // Post-process AA.
             std::shared_ptr<PostAASettings> postAA;
 
             [[nodiscard]] uint32_t EffectiveSamples() const noexcept
             {
-                return (supported && settings) ? NormalizeMsaaSamples(settings->sampleCount) : 1u;
+                return settings ? NormalizeMsaaSamples(settings->sampleCount) : 1u;
             }
             [[nodiscard]] PostAAMode EffectivePostAA() const noexcept
             {
-                return (supported && postAA) ? postAA->mode : PostAAMode::Off;
+                return postAA ? postAA->mode : PostAAMode::Off;
             }
         };
 
@@ -883,14 +729,13 @@ void main()
         [[nodiscard]] ShaderHandle CreateSkyShader(IDevice& device,
                                                    assets::ShaderTargetProfile target,
                                                    assets::ShaderStage stage,
-                                                   assets::ShaderSourceLanguage language,
                                                    const char* source,
                                                    const char* debugName)
         {
             assets::ShaderAsset shader{};
             shader.debugName = debugName;
             shader.stage = stage;
-            shader.sourceLanguage = language;
+            shader.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
             shader.entryPoint = "main";
             shader.sourceCode = source;
 
@@ -898,39 +743,34 @@ void main()
                 ? ShaderStageMask::Vertex
                 : ShaderStageMask::Fragment;
 
-            if (target != assets::ShaderTargetProfile::OpenGL_GLSL450)
+            assets::CompiledShaderArtifact compiled{};
+            std::string error;
+            if (!ShaderCompiler::CompileForTarget(shader, target, compiled, &error))
             {
-                assets::CompiledShaderArtifact compiled{};
-                std::string error;
-                if (!ShaderCompiler::CompileForTarget(shader, target, compiled, &error))
+                Debug::LogError("ForwardRenderPipeline: failed to compile sky shader '%s': %s",
+                    debugName, error.c_str());
+                return ShaderHandle::Invalid();
+            }
+            if (compiled.bytecode.empty())
+            {
+                if (target == assets::ShaderTargetProfile::Vulkan_SPIRV)
                 {
-                    Debug::LogError("ForwardRenderPipeline: failed to compile sky shader '%s': %s",
-                        debugName, error.c_str());
+                    Debug::LogError("ForwardRenderPipeline: compiled sky shader '%s' produced no bytecode",
+                        debugName);
                     return ShaderHandle::Invalid();
                 }
-                if (compiled.bytecode.empty())
-                {
-                    if (target == assets::ShaderTargetProfile::Vulkan_SPIRV)
-                    {
-                        Debug::LogError("ForwardRenderPipeline: compiled sky shader '%s' produced no bytecode",
-                            debugName);
-                        return ShaderHandle::Invalid();
-                    }
 
-                    // DX11/DX12 should normally land here with bytecode; if a future
-                    // target only returns source text we still keep a functional fallback.
-                    return device.CreateShaderFromSource(compiled.sourceText.empty() ? source : compiled.sourceText,
-                        stageMask,
-                        compiled.entryPoint.empty() ? "main" : compiled.entryPoint,
-                        debugName);
-                }
-                return device.CreateShaderFromBytecode(compiled.bytecode.data(),
-                    compiled.bytecode.size(),
+                // DX11/DX12 should normally land here with bytecode; if a future
+                // target only returns source text we still keep a functional fallback.
+                return device.CreateShaderFromSource(compiled.sourceText.empty() ? source : compiled.sourceText,
                     stageMask,
+                    compiled.entryPoint.empty() ? "main" : compiled.entryPoint,
                     debugName);
             }
-
-            return device.CreateShaderFromSource(source, stageMask, "main", debugName);
+            return device.CreateShaderFromBytecode(compiled.bytecode.data(),
+                compiled.bytecode.size(),
+                stageMask,
+                debugName);
         }
 
         void DestroySkyGpuResources(IDevice& device, SkyGpuResources& resources)
@@ -989,32 +829,26 @@ void main()
         bool InitializeBloomGpuResources(IDevice& device, BloomGpuResources& resources)
         {
             const assets::ShaderTargetProfile target = ShaderCompiler::ResolveTargetProfile(device);
-            const bool useOpenGlShaders = target == assets::ShaderTargetProfile::OpenGL_GLSL450;
-
             resources.vertexShader = CreateSkyShader(device,
                 target,
                 assets::ShaderStage::Vertex,
-                useOpenGlShaders ? assets::ShaderSourceLanguage::GLSL : assets::ShaderSourceLanguage::HLSL,
-                useOpenGlShaders ? kSkyFullscreenVsGlsl : kSkyFullscreenVsHlsl,
-                useOpenGlShaders ? "ForwardBloomFullscreenVS_GL" : "ForwardBloomFullscreenVS");
+                kSkyFullscreenVsHlsl,
+                "ForwardBloomFullscreenVS");
             resources.extractShader = CreateSkyShader(device,
                 target,
                 assets::ShaderStage::Fragment,
-                useOpenGlShaders ? assets::ShaderSourceLanguage::GLSL : assets::ShaderSourceLanguage::HLSL,
-                useOpenGlShaders ? kBloomExtractPsGlsl : kBloomExtractPsHlsl,
-                useOpenGlShaders ? "ForwardBloomExtractPS_GL" : "ForwardBloomExtractPS");
+                kBloomExtractPsHlsl,
+                "ForwardBloomExtractPS");
             resources.blurHShader = CreateSkyShader(device,
                 target,
                 assets::ShaderStage::Fragment,
-                useOpenGlShaders ? assets::ShaderSourceLanguage::GLSL : assets::ShaderSourceLanguage::HLSL,
-                useOpenGlShaders ? kBloomBlurHPsGlsl : kBloomBlurHPsHlsl,
-                useOpenGlShaders ? "ForwardBloomBlurHPS_GL" : "ForwardBloomBlurHPS");
+                kBloomBlurHPsHlsl,
+                "ForwardBloomBlurHPS");
             resources.blurVShader = CreateSkyShader(device,
                 target,
                 assets::ShaderStage::Fragment,
-                useOpenGlShaders ? assets::ShaderSourceLanguage::GLSL : assets::ShaderSourceLanguage::HLSL,
-                useOpenGlShaders ? kBloomBlurVPsGlsl : kBloomBlurVPsHlsl,
-                useOpenGlShaders ? "ForwardBloomBlurVPS_GL" : "ForwardBloomBlurVPS");
+                kBloomBlurVPsHlsl,
+                "ForwardBloomBlurVPS");
             if (!resources.vertexShader.IsValid() || !resources.extractShader.IsValid() ||
                 !resources.blurHShader.IsValid() || !resources.blurVShader.IsValid())
             {
@@ -1053,20 +887,16 @@ void main()
         bool InitializeSkyGpuResources(IDevice& device, SkyGpuResources& resources)
         {
             const assets::ShaderTargetProfile target = ShaderCompiler::ResolveTargetProfile(device);
-            const bool useOpenGlShaders = target == assets::ShaderTargetProfile::OpenGL_GLSL450;
-
             resources.vertexShader = CreateSkyShader(device,
                 target,
                 assets::ShaderStage::Vertex,
-                useOpenGlShaders ? assets::ShaderSourceLanguage::GLSL : assets::ShaderSourceLanguage::HLSL,
-                useOpenGlShaders ? kSkyFullscreenVsGlsl : kSkyFullscreenVsHlsl,
-                useOpenGlShaders ? "ForwardFullscreenSkyVS_GL" : "ForwardFullscreenSkyVS");
+                kSkyFullscreenVsHlsl,
+                "ForwardFullscreenSkyVS");
             resources.fragmentShader = CreateSkyShader(device,
                 target,
                 assets::ShaderStage::Fragment,
-                useOpenGlShaders ? assets::ShaderSourceLanguage::GLSL : assets::ShaderSourceLanguage::HLSL,
-                useOpenGlShaders ? kSkyFullscreenPsGlsl : kSkyFullscreenPsHlsl,
-                useOpenGlShaders ? "ForwardFullscreenSkyPS_GL" : "ForwardFullscreenSkyPS");
+                kSkyFullscreenPsHlsl,
+                "ForwardFullscreenSkyPS");
             if (!resources.vertexShader.IsValid() || !resources.fragmentShader.IsValid())
             {
                 DestroySkyGpuResources(device, resources);
@@ -1110,17 +940,14 @@ void main()
                 DestroySkyGpuResources(device, resources);
                 return false;
             }
-            if (!useOpenGlShaders)
-            {
-                // Variants for the multisampled scene target; failure only disables
-                // the sky while MSAA is on.
-                pipelineDesc.sampleCount = 2u;
-                pipelineDesc.debugName = "ForwardFullscreenSky_Pipeline_2x";
-                resources.pipeline2x = device.CreatePipeline(pipelineDesc);
-                pipelineDesc.sampleCount = 4u;
-                pipelineDesc.debugName = "ForwardFullscreenSky_Pipeline_4x";
-                resources.pipeline4x = device.CreatePipeline(pipelineDesc);
-            }
+            // Variants for the multisampled scene target; failure only disables
+            // the sky while MSAA is on.
+            pipelineDesc.sampleCount = 2u;
+            pipelineDesc.debugName = "ForwardFullscreenSky_Pipeline_2x";
+            resources.pipeline2x = device.CreatePipeline(pipelineDesc);
+            pipelineDesc.sampleCount = 4u;
+            pipelineDesc.debugName = "ForwardFullscreenSky_Pipeline_4x";
+            resources.pipeline4x = device.CreatePipeline(pipelineDesc);
 
             resources.initialized = true;
             return true;
@@ -2384,12 +2211,10 @@ void main()
                 {
                     res.shadersAttempted = true;
                     const assets::ShaderTargetProfile target = ShaderCompiler::ResolveTargetProfile(*device);
-                    if (target == assets::ShaderTargetProfile::OpenGL_GLSL450)
-                        return false;
                     res.vertexShader = CreateSkyShader(*device, target, assets::ShaderStage::Vertex,
-                        assets::ShaderSourceLanguage::HLSL, kSkyFullscreenVsHlsl, "ForwardPostAAVS");
+                        kSkyFullscreenVsHlsl, "ForwardPostAAVS");
                     res.fxaaShader = CreateSkyShader(*device, target, assets::ShaderStage::Fragment,
-                        assets::ShaderSourceLanguage::HLSL, kFxaaPsHlsl, "ForwardFxaaPS");
+                        kFxaaPsHlsl, "ForwardFxaaPS");
                     if (!res.vertexShader.IsValid() || !res.fxaaShader.IsValid())
                         Debug::LogError("ForwardFeature.cpp: FXAA shaders failed, post-AA stays off");
                 }
@@ -2425,11 +2250,11 @@ void main()
                     res.smaaAttempted = true;
                     const assets::ShaderTargetProfile target = ShaderCompiler::ResolveTargetProfile(device);
                     res.smaaEdgeShader = CreateSkyShader(device, target, assets::ShaderStage::Fragment,
-                        assets::ShaderSourceLanguage::HLSL, smaa::kEdgeDetectionPsHlsl, "ForwardSmaaEdgePS");
+                        smaa::kEdgeDetectionPsHlsl, "ForwardSmaaEdgePS");
                     res.smaaWeightShader = CreateSkyShader(device, target, assets::ShaderStage::Fragment,
-                        assets::ShaderSourceLanguage::HLSL, smaa::kBlendingWeightPsHlsl, "ForwardSmaaWeightPS");
+                        smaa::kBlendingWeightPsHlsl, "ForwardSmaaWeightPS");
                     res.smaaBlendShader = CreateSkyShader(device, target, assets::ShaderStage::Fragment,
-                        assets::ShaderSourceLanguage::HLSL, smaa::kNeighborhoodBlendingPsHlsl, "ForwardSmaaBlendPS");
+                        smaa::kNeighborhoodBlendingPsHlsl, "ForwardSmaaBlendPS");
                     if (res.smaaEdgeShader.IsValid() && res.smaaWeightShader.IsValid())
                     {
                         res.smaaEdgePipeline = CreatePostAAPipeline(device, res.vertexShader, res.smaaEdgeShader,
@@ -2517,13 +2342,11 @@ void main()
                 if (!device)
                     return false;
                 const assets::ShaderTargetProfile target = ShaderCompiler::ResolveTargetProfile(*device);
-                if (target == assets::ShaderTargetProfile::OpenGL_GLSL450)
-                    return false;
 
                 m_resolveResources->vertexShader = CreateSkyShader(*device, target, assets::ShaderStage::Vertex,
-                    assets::ShaderSourceLanguage::HLSL, kSkyFullscreenVsHlsl, "ForwardMsaaResolveVS");
+                    kSkyFullscreenVsHlsl, "ForwardMsaaResolveVS");
                 m_resolveResources->fragmentShader = CreateSkyShader(*device, target, assets::ShaderStage::Fragment,
-                    assets::ShaderSourceLanguage::HLSL, kMsaaResolvePsHlsl, "ForwardMsaaResolvePS");
+                    kMsaaResolvePsHlsl, "ForwardMsaaResolvePS");
                 if (!m_resolveResources->vertexShader.IsValid() || !m_resolveResources->fragmentShader.IsValid())
                 {
                     Debug::LogError("ForwardFeature.cpp: MSAA resolve shaders failed, MSAA stays off");
@@ -2601,7 +2424,7 @@ void main()
                 , m_forwardPlusResources(std::make_shared<ForwardPlusGpuResources>())
                 , m_tonemapResources(std::make_shared<TonemapGpuResources>())
                 , m_pipelineConfig(WithTonemapSettings(std::move(config)))
-                , m_msaa(std::make_shared<MsaaRuntime>(MsaaRuntime{ m_pipelineConfig.msaaSettings, true, m_pipelineConfig.postAASettings }))
+                , m_msaa(std::make_shared<MsaaRuntime>(MsaaRuntime{ m_pipelineConfig.msaaSettings, m_pipelineConfig.postAASettings }))
                 , m_shadingContributor(std::make_shared<ShadingFrameConstantsContributor>(m_pipelineConfig.shadingSettings))
                 , m_effectiveMode(std::make_shared<ForwardRendererMode>(m_pipelineConfig.mode))
                 , m_effectiveCullingMode(std::make_shared<ForwardPlusCullingMode>(m_pipelineConfig.cullingMode))
@@ -2642,17 +2465,6 @@ void main()
 
             bool Initialize(const FeatureInitializationContext& context) override
             {
-                // Forward+ auf OpenGL nicht unterstützt → einmalig Fallback setzen
-                if (*m_effectiveMode == ForwardRendererMode::ForwardPlus &&
-                    context.device.GetShaderTargetProfile() == assets::ShaderTargetProfile::OpenGL_GLSL450)
-                {
-                    Debug::LogWarning("ForwardFeature: Forward+ not supported on OpenGL, using Forward");
-                    *m_effectiveMode = ForwardRendererMode::Forward;
-                }
-                // OpenGL is frozen for this series: no MSAA resolve shader there.
-                if (m_msaa && context.device.GetShaderTargetProfile() == assets::ShaderTargetProfile::OpenGL_GLSL450)
-                    m_msaa->supported = false;
-
                 if (*m_effectiveMode == ForwardRendererMode::ForwardPlus &&
                     *m_effectiveCullingMode == ForwardPlusCullingMode::Compute)
                 {

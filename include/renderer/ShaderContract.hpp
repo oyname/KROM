@@ -13,7 +13,6 @@ enum class ShaderTargetApi : uint8_t
     DirectX11,
     DirectX12,
     Vulkan,
-    OpenGL,
 };
 
 enum class ShaderBinaryFormat : uint8_t
@@ -23,7 +22,6 @@ enum class ShaderBinaryFormat : uint8_t
     Spirv,
     Dxbc,
     Dxil,
-    GlslSource,
 };
 
 enum class ShaderBindingClass : uint8_t

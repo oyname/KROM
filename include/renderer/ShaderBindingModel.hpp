@@ -148,7 +148,7 @@ struct BufSRVSlots
 // Motivation:
 //   - Vulkan materialisiert daraus DescriptorSetLayouts / DescriptorWrites.
 //   - DX12 kann daraus später Root Signatures + Descriptor Heaps ableiten.
-//   - DX11/OpenGL nutzen weiterhin die abstrakten Slots direkt.
+//   - DX11 nutzt weiterhin die abstrakten Slots direkt.
 //
 // Wichtig: Diese Register-Offsets sind Teil des Engine-Vertrags und müssen
 // mit den Shader-Layouts (HLSL register(...) / GLSL layout(binding=...))

@@ -61,8 +61,6 @@ int SelectBackend() noexcept
 {
 #if defined(KROM_APP_BACKEND_DX11)
     return Krom::Renderer::DX11;
-#elif defined(KROM_APP_BACKEND_OPENGL)
-    return Krom::Renderer::OpenGL;
 #elif defined(KROM_APP_BACKEND_VULKAN)
     return Krom::Renderer::Vulkan;
 #else

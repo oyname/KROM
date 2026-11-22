@@ -14,7 +14,7 @@
 namespace engine::renderer::addons::editor::theme {
 
 // Farbwert aus 0xRRGGBB (sRGB, wie in der Palette), optional mit Deckkraft.
-// Die UI zeichnet in einen sRGB-Backbuffer (DX11/Vulkan/OpenGL), der beim
+// Die UI zeichnet in einen sRGB-Backbuffer (DX11/Vulkan), der beim
 // Schreiben wieder nach sRGB umrechnet; daher hier nach linear wandeln.
 inline float SrgbToLinear(float c)
 {
