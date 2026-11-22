@@ -17,6 +17,41 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## krom.h wrapper: render options moved to `KromRenderSettings` (Claude, 2026-11-21)
+
+- User request: continue splitting `src/app/KromWrapper.cpp`, starting with the render options.
+  Branch `refactor/krom-render-settings` (from `feature/shadow-tent-filter`), not committed.
+- New `src/app/KromRenderSettings.hpp/.cpp` (`Krom::internal`): `RenderSettingsState` owns the 15
+  former `State` fields (tonemap + effective tonemap, base intensities, auto-exposure status, MSAA,
+  post-AA, GTAO/SSR/contact-shadow resources, shadow quality, player's quality level, shading,
+  probe runtime); `State` keeps one member `render`. Moved without behaviour change:
+  `ApplyProjectRenderSettings`, user-settings.json load/save, the scene values (exposure, grading,
+  probe bake passes -> `ApplySceneRenderSettings`), `KROM_MSAA`/`KROM_POST_AA`, the post-process
+  volume blend of `Run()` (`ApplyPostProcessVolumes`), all render Set*/Get* of krom.h and the script
+  block (`Get/SetScriptRenderSettings`). The functions take `RenderSettingsState&` plus
+  `editorLiveState` / window title where needed, not the wrapper `State`.
+- `KromWrapper.cpp`: krom.h functions are one-line forwards, `WrapperRenderSettingsService` only
+  delegates; feature registration and `BakeReflectionProbe` stay and use `state.render.*`.
+  5565 -> 5161 lines. Only text change: the two warnings "KromWrapper.cpp: unknown tonemap
+  operator / post-AA mode" now start with "krom.h:". krom.h itself is unchanged.
+- New opt-in test `krom_render_settings_tests` (`tests/test_runtime_render_settings.cpp`, DX11,
+  hidden window, `KROM_USER_SETTINGS_DIR` in the temp folder): module without a device (clamping,
+  null add-ons, script block, scene values, player's level saved/read/ignored from the editor,
+  project options with the level on top), then krom.h against the runtime (Low/Medium/High round
+  trip, switches, shading, grading).
+- Checked: full Debug build (`out/claude-rendersettings-build-all.log`, includes the GLFW wrapper
+  and all backends); `krom_render_settings_tests` 25 PASS, `krom_surface_tests` 26 PASS,
+  `krom_scene_lifetime_tests` 11 PASS (scene loads and `Run()` frames on DX11), `krom_tests` all pass
+  (`out/claude-rendersettings-*.log`).
+- Not checked: Release; a run under Vulkan/OpenGL; `LoadProject` with a real user-settings.json in
+  an exported game; editor play (does not use this file).
+- Please review: that the moved bodies match the old ones (order in `ApplySceneEnvironment`:
+  legacy project options first, then scene values), and the `editorLiveState` argument at the four
+  `ApplyProjectRenderSettings` call sites.
+- Still open in the split: RuntimeMaterials, SceneManager, EntityApi, project/user files, `Run()`.
+
+---
+
 ## Shadows: tent PCF and dithered cascade transition (Claude, 2026-11-21)
 
 - User request: stair-stepped shadow edges with PCF 3x3, noise and a

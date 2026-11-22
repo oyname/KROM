@@ -7,7 +7,8 @@
   "environment": {
     "texturePath": "Textures\\autumn_field_puresky_2k.hdr",
     "enableIBL": true,
-    "iblIntensity": 0.5,
+    "removeSunFromLighting": true,
+    "iblIntensity": 0.25,
     "backgroundColor": [
       0,
       0,
@@ -20,7 +21,12 @@
       0.03
     ],
     "ambientIntensity": 1,
-    "exposureEv": 0,
+    "exposureEv": 0.5,
+    "exposureMode": "fixed",
+    "autoExposureMinEv": -4,
+    "autoExposureMaxEv": 4,
+    "autoExposureToBright": 3,
+    "autoExposureToDark": 1,
     "probeBakePasses": 2
   },
   "entities": [
@@ -113,11 +119,11 @@
       "components": [
         {
           "type": "NameComponent",
-          "name": "RaketeB"
+          "name": "RaketeA"
         },
         {
           "type": "GuidComponent",
-          "guid": "e53af0a3-d707-544d-a2b0-a8fae58b240c"
+          "guid": "fee0d18f-6484-558e-97c6-be4304205ad3"
         },
         {
           "type": "ActiveComponent",
@@ -125,7 +131,7 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [1.5, 1, 0],
+          "localPosition": [-1.5, 1, 0],
           "localRotation": [0, 0, 0, 1],
           "localScale": [1, 1, 1],
           "inheritParentScale": true
@@ -156,7 +162,7 @@
           "slots": [
             {
               "submeshIndex": 0,
-              "materialAssetPath": "Materials/Weiss.mat"
+              "materialAssetPath": "Materials/Rot.mat"
             }
           ]
         },
@@ -167,7 +173,7 @@
               "class": "Thruster",
               "fields": {
                 "force": 15,
-                "useFixed": false
+                "useFixed": true
               }
             }
           ]
@@ -207,16 +213,16 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0, 10, 0],
-          "localRotation": [-0.39412, 0.142647, 0.0219532, 0.907656],
-          "localScale": [1.00001, 0.999999, 1.00002],
+          "localPosition": [13.4178, 12.0986, 17.3126],
+          "localRotation": [-0.24127, 0.51407, 0.0357125, 0.822342],
+          "localScale": [1.00002, 1, 1.00003],
           "inheritParentScale": true
         },
         {
           "type": "LightComponent",
           "lightType": 0,
           "color": [1, 0.98, 0.94],
-          "intensity": 1.5,
+          "intensity": 5,
           "range": 100,
           "spotInnerDeg": 18,
           "spotOuterDeg": 35,
@@ -227,51 +233,18 @@
           "shadowResolution": 2048,
           "shadowBias": 0.0005,
           "shadowNormalBias": 0.001,
-          "shadowMaxDistance": 40,
-          "shadowStrength": 0.9,
+          "shadowMaxDistance": 46.5,
+          "shadowStrength": 1,
           "shadowCascadeCount": 2,
           "shadowCascadeLambda": 0.9,
-          "shadowLightSize": 0.1
+          "shadowLightSize": 0.1,
+          "contactShadows": true
         }
       ]
     },
     {
       "entityId": 769,
       "entityIndex": 3,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Zeitsteuerung"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "94427fc3-c650-590e-be63-a5446faceab6"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "ScriptList",
-          "scripts": [
-            {
-              "class": "TimeControl"
-            }
-          ]
-        }
-      ]
-    },
-    {
-      "entityId": 1025,
-      "entityIndex": 4,
       "entityGeneration": 1,
       "components": [
         {
@@ -320,6 +293,77 @@
             {
               "submeshIndex": 0,
               "materialAssetPath": "Materials/Material_Boden.mat"
+            }
+          ]
+        },
+        {
+          "type": "RigidBodyComponent",
+          "bodyType": 0,
+          "enabled": true,
+          "mass": 1,
+          "friction": 0.5,
+          "restitution": 0,
+          "linearDamping": 0,
+          "angularDamping": 0,
+          "gravityScale": 0,
+          "lockRotationX": false,
+          "lockRotationY": false,
+          "lockRotationZ": false
+        }
+      ]
+    },
+    {
+      "entityId": 1025,
+      "entityIndex": 4,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Kamera"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "175b5e54-767c-5361-980e-29bfcf3eec88"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 6, 11.05],
+          "localRotation": [-0.104528, 0, 0, 0.994522],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "CameraComponent",
+          "projection": 0,
+          "fovYDeg": 60,
+          "nearPlane": 0.05,
+          "farPlane": 1000,
+          "orthoSize": 10,
+          "aspectRatio": 1.77778,
+          "renderLayer": 0,
+          "cullingMask": 4294967037,
+          "isMain": true,
+          "backgroundMode": 1,
+          "clearColor": [
+            0,
+            0,
+            0,
+            1
+          ]
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "FollowCamera",
+              "fields": {
+                "target": "7c055339-b142-57de-847b-bac59220f948",
+                "offset": [0, 2, 20]
+              }
             }
           ]
         }
@@ -402,11 +446,11 @@
       "components": [
         {
           "type": "NameComponent",
-          "name": "RaketeA"
+          "name": "RaketeB"
         },
         {
           "type": "GuidComponent",
-          "guid": "fee0d18f-6484-558e-97c6-be4304205ad3"
+          "guid": "e53af0a3-d707-544d-a2b0-a8fae58b240c"
         },
         {
           "type": "ActiveComponent",
@@ -414,7 +458,7 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [-1.5, 1, 0],
+          "localPosition": [1.5, 1, 0],
           "localRotation": [0, 0, 0, 1],
           "localScale": [1, 1, 1],
           "inheritParentScale": true
@@ -445,7 +489,7 @@
           "slots": [
             {
               "submeshIndex": 0,
-              "materialAssetPath": "Materials/Rot.mat"
+              "materialAssetPath": "Materials/Weiss.mat"
             }
           ]
         },
@@ -456,7 +500,7 @@
               "class": "Thruster",
               "fields": {
                 "force": 15,
-                "useFixed": true
+                "useFixed": false
               }
             }
           ]
@@ -484,11 +528,11 @@
       "components": [
         {
           "type": "NameComponent",
-          "name": "Kamera"
+          "name": "Zeitsteuerung"
         },
         {
           "type": "GuidComponent",
-          "guid": "175b5e54-767c-5361-980e-29bfcf3eec88"
+          "guid": "94427fc3-c650-590e-be63-a5446faceab6"
         },
         {
           "type": "ActiveComponent",
@@ -496,39 +540,16 @@
         },
         {
           "type": "TransformComponent",
-          "localPosition": [0, 6, 11.05],
-          "localRotation": [-0.104528, 0, 0, 0.994522],
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
           "localScale": [1, 1, 1],
           "inheritParentScale": true
-        },
-        {
-          "type": "CameraComponent",
-          "projection": 0,
-          "fovYDeg": 60,
-          "nearPlane": 0.05,
-          "farPlane": 1000,
-          "orthoSize": 10,
-          "aspectRatio": 1.77778,
-          "renderLayer": 0,
-          "cullingMask": 4294967037,
-          "isMain": true,
-          "backgroundMode": 1,
-          "clearColor": [
-            0,
-            0,
-            0,
-            1
-          ]
         },
         {
           "type": "ScriptList",
           "scripts": [
             {
-              "class": "FollowCamera",
-              "fields": {
-                "target": "7c055339-b142-57de-847b-bac59220f948",
-                "offset": [0, 2, 20]
-              }
+              "class": "TimeControl"
             }
           ]
         }

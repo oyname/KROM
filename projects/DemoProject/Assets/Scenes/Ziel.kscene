@@ -7,6 +7,7 @@
   "environment": {
     "texturePath": "Textures\\autumn_field_puresky_2k.hdr",
     "enableIBL": true,
+    "removeSunFromLighting": true,
     "iblIntensity": 0.5,
     "backgroundColor": [
       0,
@@ -21,6 +22,11 @@
     ],
     "ambientIntensity": 1,
     "exposureEv": 0,
+    "exposureMode": "fixed",
+    "autoExposureMinEv": -4,
+    "autoExposureMaxEv": 4,
+    "autoExposureToBright": 3,
+    "autoExposureToDark": 1,
     "probeBakePasses": 2
   },
   "entities": [
@@ -73,10 +79,10 @@
             {
               "class": "ThirdPersonCamera",
               "fields": {
-                "pivotHeight": 1.5,
                 "target": "c42e6b59-ee92-5534-a87a-eda935637b41",
-                "turnSpeedDegPerSecond": 90,
+                "pivotHeight": 1.5,
                 "distance": 5,
+                "turnSpeedDegPerSecond": 90,
                 "mouseSensitivity": 0.15
               }
             }
@@ -102,6 +108,10 @@
           "guid": "eda94c6d-e324-5008-9692-d2691960c25a"
         },
         {
+          "type": "ParentComponent",
+          "parentId": 769
+        },
+        {
           "type": "ActiveComponent",
           "active": true
         },
@@ -111,10 +121,6 @@
           "localRotation": [0, 0, 0, 1],
           "localScale": [0.6, 1.8, 0.6],
           "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 769
         },
         {
           "type": "BoundsComponent",
@@ -317,6 +323,10 @@
           "guid": "a2da4c6e-6371-50df-aaa0-046137734f3c"
         },
         {
+          "type": "ParentComponent",
+          "parentId": 769
+        },
+        {
           "type": "ActiveComponent",
           "active": true
         },
@@ -326,10 +336,6 @@
           "localRotation": [0, 0, 0, 1],
           "localScale": [0.3, 0.15, 0.2],
           "inheritParentScale": true
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 769
         },
         {
           "type": "BoundsComponent",
@@ -385,8 +391,8 @@
             {
               "class": "GameControls",
               "fields": {
-                "message": "Glückwunsch, Ziel erreicht!",
-                "restartScene": "Scenes/Room 2.kscene"
+                "restartScene": "Scenes/Room 2.kscene",
+                "message": "Glückwunsch, Ziel erreicht!"
               }
             }
           ]
@@ -492,7 +498,8 @@
           "shadowStrength": 0.85,
           "shadowCascadeCount": 2,
           "shadowCascadeLambda": 0.9,
-          "shadowLightSize": 0.1
+          "shadowLightSize": 0.1,
+          "contactShadows": true
         }
       ]
     },
@@ -656,7 +663,8 @@
           "shadowStrength": 0.8,
           "shadowCascadeCount": 1,
           "shadowCascadeLambda": 0.9,
-          "shadowLightSize": 0.1
+          "shadowLightSize": 0.1,
+          "contactShadows": true
         },
         {
           "type": "MeshComponent",
