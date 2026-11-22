@@ -109,19 +109,8 @@ bool GLFWWindow::Create(const WindowDesc& desc)
 {
     glfwDefaultWindowHints();
 
-    if (desc.openglContext)
-    {
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MAJOR, desc.openglMajor);
-        glfwWindowHint(GLFW_CONTEXT_VERSION_MINOR, desc.openglMinor);
-        glfwWindowHint(GLFW_OPENGL_PROFILE, GLFW_OPENGL_CORE_PROFILE);
-        glfwWindowHint(GLFW_OPENGL_FORWARD_COMPAT, GLFW_TRUE);
-        if (desc.openglDebugContext)
-            glfwWindowHint(GLFW_OPENGL_DEBUG_CONTEXT, GLFW_TRUE);
-    }
-    else
-    {
-        glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    }
+    // The renderer backends (Vulkan) create their own surface; no GL context.
+    glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
     glfwWindowHint(GLFW_VISIBLE, desc.visible ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHint(GLFW_RESIZABLE, desc.resizable ? GLFW_TRUE : GLFW_FALSE);
     glfwWindowHint(GLFW_DECORATED, desc.windowMode == WindowMode::BorderlessWindowed ? GLFW_FALSE : GLFW_TRUE);

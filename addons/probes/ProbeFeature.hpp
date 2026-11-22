@@ -103,7 +103,7 @@ public:
     // --- used by the feature -------------------------------------------------
     // Device for loading baked files and building the GPU data. That happens in
     // the scene extraction step, which runs on the render thread (frame
-    // constants are prepared in a worker job, where OpenGL has no context).
+    // constants are prepared in a worker job, where device calls are not allowed).
     void SetDevice(renderer::IDevice* device) noexcept;
     [[nodiscard]] renderer::IDevice* GetDevice() const noexcept;
 

@@ -161,7 +161,6 @@ const char* RuntimeBackendId(engine::renderer::DeviceFactory::BackendType backen
     {
         case BackendType::DirectX11: return "dx11";
         case BackendType::Vulkan:    return "vulkan";
-        case BackendType::OpenGL:    return "opengl";
         default:                     return "dx11";
     }
 }
@@ -775,8 +774,6 @@ float MouseScrollDelta()
 // Undocumented in imgui_impl_dx11.h; the backend asks callers to declare it.
 // Note: the backend copies only the first template, so pass exactly one.
 void ImGui_ImplDX11_SetSwapChainDescs(const DXGI_SWAP_CHAIN_DESC* desc_templates, int desc_templates_count);
-#elif defined(KROM_APP_BACKEND_OPENGL) && defined(KROM_IMGUI_HAS_OPENGL3)
-#include "imgui_impl_opengl3.h"
 #elif defined(KROM_APP_BACKEND_VULKAN) && defined(KROM_IMGUI_HAS_VULKAN)
 #include "imgui_impl_vulkan.h"
 #include "addons/vulkan/VulkanDevice.hpp"
@@ -1007,7 +1004,6 @@ const char* ProjectBackendId(renderer::DeviceFactory::BackendType backend) noexc
     switch (backend)
     {
     case renderer::DeviceFactory::BackendType::DirectX11: return "dx11";
-    case renderer::DeviceFactory::BackendType::OpenGL: return "opengl";
     case renderer::DeviceFactory::BackendType::Vulkan: return "vulkan";
     default: return "unknown";
     }
@@ -1016,7 +1012,6 @@ const char* ProjectBackendId(renderer::DeviceFactory::BackendType backend) noexc
 renderer::DeviceFactory::BackendType BackendFromProjectId(std::string_view id) noexcept
 {
     if (id == "dx11") return renderer::DeviceFactory::BackendType::DirectX11;
-    if (id == "opengl") return renderer::DeviceFactory::BackendType::OpenGL;
     if (id == "vulkan") return renderer::DeviceFactory::BackendType::Vulkan;
     return renderer::DeviceFactory::BackendType::Vulkan;
 }
@@ -1871,10 +1866,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
     Debug::SetLogObserver(CaptureConsoleLog);
 #endif
     m_config = config;
-    m_forwardPlusActive = config.enableForwardPlus &&
-        config.backend != renderer::DeviceFactory::BackendType::OpenGL;
-    if (config.enableForwardPlus && !m_forwardPlusActive)
-        Debug::LogWarning("KromEditorApp: Forward+ requested, but OpenGL falls back to classic forward because buffer shader resources are not available there yet");
+    m_forwardPlusActive = config.enableForwardPlus;
     m_cameraOptions.ambientColor = config.ambientColor;
     m_cameraOptions.ambientIntensity = config.ambientIntensity;
 #ifdef KROM_EDITOR_HAS_IMGUI
@@ -1916,8 +1908,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             Debug::LogError("KromEditorApp: failed to register engine features");
             return false;
         }
-        if (config.enableGtao &&
-            config.backend != renderer::DeviceFactory::BackendType::OpenGL)
+        if (config.enableGtao)
         {
             if (!renderSystem.RegisterFeature(renderer::addons::gtao::CreateGtaoFeature(&m_gtaoResources)))
             {
@@ -1926,7 +1917,6 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             }
         }
         if (config.enableContactShadows &&
-            config.backend != renderer::DeviceFactory::BackendType::OpenGL &&
             !renderSystem.RegisterFeature(
                 renderer::addons::contact_shadow::CreateContactShadowFeature(&m_contactShadowResources)))
         {
@@ -1934,8 +1924,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             return false;
         }
         // SSR after GTAO: it adds to the scene composite GTAO creates.
-        if (config.backend != renderer::DeviceFactory::BackendType::OpenGL &&
-            !renderSystem.RegisterFeature(renderer::addons::ssr::CreateSsrFeature(&m_ssrResources)))
+        if (!renderSystem.RegisterFeature(renderer::addons::ssr::CreateSsrFeature(&m_ssrResources)))
         {
             Debug::LogError("KromEditorApp: failed to register SSR feature");
             return false;
@@ -2075,72 +2064,6 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             editorCbs.renderDrawData = [this](renderer::ICommandList&) {
                 ImGui::Render();
                 ImGui_ImplDX11_RenderDrawData(ImGui::GetDrawData());
-                m_imguiFrameRendered = true;
-            };
-            editorBackendAvailable = true;
-
-#elif defined(KROM_APP_BACKEND_OPENGL) && defined(KROM_IMGUI_HAS_OPENGL3)
-            editorCbs.init = [this]() -> bool {
-                auto* window = m_renderLoop.GetWindow();
-                if (!window)
-                    return false;
-                ImGui::CreateContext();
-                ImGuiIO& io = ImGui::GetIO();
-                io.IniFilename = m_imguiIniPath.empty() ? nullptr : m_imguiIniPath.c_str();
-                io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
-                io.ConfigDragClickToInputText = true;
-                io.ConfigWindowsMoveFromTitleBarOnly = true; // Klicks ins Viewport verschieben kein Fenster
-                ConfigureEditorUiFont(io);
-                renderer::addons::editor::theme::ApplyEditorTheme();
-#if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
-                ImGui_ImplWin32_Init(window->GetNativeWindowHandle().native);
-                InstallImGuiWin32Hook(window->GetNativeWindowHandle(), [this]() {
-                    if (m_editorFrameCtx)
-                        m_editorFrameCtx->state.closeConfirmOpen = true;
-                });
-#elif defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
-                ImGui_ImplGlfw_InitForOpenGL(
-                    static_cast<GLFWwindow*>(window->GetNativeWindowHandle().toolkit), true);
-                InstallGlfwCloseHook(static_cast<GLFWwindow*>(window->GetNativeWindowHandle().toolkit), [this]() {
-                    if (m_editorFrameCtx)
-                        m_editorFrameCtx->state.closeConfirmOpen = true;
-                });
-#endif
-                ImGui_ImplOpenGL3_Init("#version 410");
-                return true;
-            };
-            editorCbs.shutdown = [this]() {
-                ImGui_ImplOpenGL3_Shutdown();
-#if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
-                if (auto* w = m_renderLoop.GetWindow())
-                    RemoveImGuiWin32Hook(w->GetNativeWindowHandle());
-                ImGui_ImplWin32_Shutdown();
-#elif defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
-                if (auto* w = m_renderLoop.GetWindow())
-                    RemoveGlfwCloseHook(static_cast<GLFWwindow*>(w->GetNativeWindowHandle().toolkit));
-                ImGui_ImplGlfw_Shutdown();
-#endif
-                ImGui::DestroyContext();
-            };
-            editorCbs.newFrame = [this]() {
-#if defined(KROM_APP_USE_WIN32_PLATFORM) && defined(KROM_IMGUI_HAS_WIN32)
-                ImGui_ImplWin32_NewFrame();
-#elif defined(KROM_APP_USE_GLFW_PLATFORM) && defined(KROM_IMGUI_HAS_GLFW)
-                ImGui_ImplGlfw_NewFrame();
-#endif
-                ImGui_ImplOpenGL3_NewFrame();
-                renderer::addons::editor::theme::RefreshEditorTheme();
-                if (m_editorFrameCtx && !m_editorFrameCtx->state.pendingLayoutIni.empty())
-                {
-                    auto& ini = m_editorFrameCtx->state.pendingLayoutIni;
-                    ImGui::LoadIniSettingsFromMemory(ini.data(), ini.size());
-                    ini.clear();
-                }
-                ImGui::NewFrame();
-            };
-            editorCbs.renderDrawData = [this](renderer::ICommandList&) {
-                ImGui::Render();
-                ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
                 m_imguiFrameRendered = true;
             };
             editorBackendAvailable = true;
@@ -2914,9 +2837,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             renderer::RenderTargetDesc previewDesc{};
             previewDesc.width       = kPreviewW;
             previewDesc.height      = kPreviewH;
-            previewDesc.colorFormat = m_config.backend == renderer::DeviceFactory::BackendType::OpenGL
-                ? renderer::Format::BGRA8_UNORM
-                : renderer::Format::BGRA8_UNORM_SRGB;
+            previewDesc.colorFormat = renderer::Format::BGRA8_UNORM_SRGB;
             previewDesc.hasDepth    = true;
             previewDesc.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
             m_previewRT = device->CreateRenderTarget(previewDesc);
@@ -2926,11 +2847,6 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 m_editorFrameCtx->previewRT     = m_previewRT;
                 m_editorFrameCtx->previewWidth  = kPreviewW;
                 m_editorFrameCtx->previewHeight = kPreviewH;
-#if defined(KROM_APP_BACKEND_OPENGL)
-                m_editorFrameCtx->previewFlipY  = true;
-#else
-                m_editorFrameCtx->previewFlipY  = false;
-#endif
 
                 const TextureHandle previewColorTex =
                     device->GetRenderTargetColorTexture(m_previewRT);
@@ -2973,9 +2889,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             renderer::RenderTargetDesc materialPreviewDesc{};
             materialPreviewDesc.width       = kMaterialPreviewW;
             materialPreviewDesc.height      = kMaterialPreviewH;
-            materialPreviewDesc.colorFormat = m_config.backend == renderer::DeviceFactory::BackendType::OpenGL
-                ? renderer::Format::BGRA8_UNORM
-                : renderer::Format::BGRA8_UNORM_SRGB;
+            materialPreviewDesc.colorFormat = renderer::Format::BGRA8_UNORM_SRGB;
             materialPreviewDesc.hasDepth    = true;
             materialPreviewDesc.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
             m_materialPreviewRT = device->CreateRenderTarget(materialPreviewDesc);
@@ -2985,11 +2899,6 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 m_editorFrameCtx->materialPreviewRT     = m_materialPreviewRT;
                 m_editorFrameCtx->materialPreviewWidth  = kMaterialPreviewW;
                 m_editorFrameCtx->materialPreviewHeight = kMaterialPreviewH;
-#if defined(KROM_APP_BACKEND_OPENGL)
-                m_editorFrameCtx->materialPreviewFlipY  = true;
-#else
-                m_editorFrameCtx->materialPreviewFlipY  = false;
-#endif
 
                 const TextureHandle previewColorTex =
                     device->GetRenderTargetColorTexture(m_materialPreviewRT);
@@ -3037,17 +2946,12 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             renderer::RenderTargetDesc animationPreviewDesc{};
             animationPreviewDesc.width       = kAnimationPreviewSize;
             animationPreviewDesc.height      = kAnimationPreviewSize;
-            animationPreviewDesc.colorFormat = m_config.backend == renderer::DeviceFactory::BackendType::OpenGL
-                ? renderer::Format::RGBA8_UNORM_SRGB
-                : renderer::Format::BGRA8_UNORM_SRGB;
+            animationPreviewDesc.colorFormat = renderer::Format::BGRA8_UNORM_SRGB;
             animationPreviewDesc.hasDepth    = true;
             animationPreviewDesc.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
             m_animationPreviewRT = device->CreateRenderTarget(animationPreviewDesc);
             if (m_animationPreviewRT.IsValid())
             {
-#if defined(KROM_APP_BACKEND_OPENGL)
-                m_editorFrameCtx->animationPreviewFlipY = true;
-#endif
                 const TextureHandle previewColorTex = device->GetRenderTargetColorTexture(m_animationPreviewRT);
 #if defined(KROM_APP_BACKEND_VULKAN) && defined(KROM_IMGUI_HAS_VULKAN)
                 if (auto* vkDevice = static_cast<renderer::vulkan::VulkanDevice*>(device))
@@ -3076,9 +2980,7 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             renderer::RenderTargetDesc prefabPreviewDesc{};
             prefabPreviewDesc.width       = kPrefabPreviewW;
             prefabPreviewDesc.height      = kPrefabPreviewH;
-            prefabPreviewDesc.colorFormat = m_config.backend == renderer::DeviceFactory::BackendType::OpenGL
-                ? renderer::Format::RGBA8_UNORM_SRGB
-                : renderer::Format::BGRA8_UNORM_SRGB;
+            prefabPreviewDesc.colorFormat = renderer::Format::BGRA8_UNORM_SRGB;
             prefabPreviewDesc.hasDepth    = true;
             prefabPreviewDesc.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
             m_prefabPreviewRT = device->CreateRenderTarget(prefabPreviewDesc);
@@ -3087,11 +2989,6 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
                 m_editorFrameCtx->prefabPreviewRT     = m_prefabPreviewRT;
                 m_editorFrameCtx->prefabPreviewWidth  = kPrefabPreviewW;
                 m_editorFrameCtx->prefabPreviewHeight = kPrefabPreviewH;
-#if defined(KROM_APP_BACKEND_OPENGL)
-                m_editorFrameCtx->prefabPreviewFlipY  = true;
-#else
-                m_editorFrameCtx->prefabPreviewFlipY  = false;
-#endif
 
                 const TextureHandle prefabColorTex =
                     device->GetRenderTargetColorTexture(m_prefabPreviewRT);
@@ -3399,7 +3296,6 @@ int KromEditorApp::Run(IAppScene& scene)
         if (m_editorFrameCtx)
         {
             renderer::addons::editor::EditorFrameContext& ui = *m_editorFrameCtx;
-            const bool flipY = m_config.backend == renderer::DeviceFactory::BackendType::OpenGL;
             if (ui.sceneViewRequestWidth == 0u || ui.sceneViewRequestHeight == 0u)
                 ReleasePanelTarget(m_sceneView);
             else
@@ -3409,8 +3305,6 @@ int KromEditorApp::Run(IAppScene& scene)
             else
                 UpdatePanelTarget(m_gameView, ui.gameViewRequestWidth, ui.gameViewRequestHeight, "EditorGameView");
             ui.sceneViewTexture = m_sceneView.textureId;
-            ui.sceneViewFlipY = flipY;
-            ui.gameViewFlipY = flipY;
             gameInPanel = !sceneLoading && ui.gameViewVisible && m_gameView.rt.IsValid();
             ui.gameOverlayText.clear();
             if (m_playActive)
@@ -3916,13 +3810,8 @@ int KromEditorApp::Run(IAppScene& scene)
                 probeSettings.bakePasses = m_editorState.probeBakePasses;
                 m_probeRuntime->SetSettings(probeSettings);
             }
-            if (const renderer::IDevice* msaaDevice = m_renderLoop.GetRenderSystem().GetDevice())
-                m_editorFrameCtx->msaaAvailable =
-                    msaaDevice->GetShaderTargetProfile() != assets::ShaderTargetProfile::OpenGL_GLSL450;
             m_editorFrameCtx->gtaoAvailable = m_gtaoResources != nullptr;
-            m_editorFrameCtx->ssrAvailable = m_ssrResources != nullptr;
             m_editorFrameCtx->contactShadowAvailable = m_contactShadowResources != nullptr;
-            m_editorFrameCtx->autoExposureAvailable = m_editorFrameCtx->msaaAvailable;   // same rule: not on OpenGL
             m_editorFrameCtx->autoExposureStatus = m_autoExposureStatus.get();
             m_editorFrameCtx->gpuPassTimings = m_renderLoop.GetRenderSystem().GetGpuPassTimings();
             m_editorFrameCtx->frameData =
@@ -4025,9 +3914,7 @@ void KromEditorApp::UpdatePanelTarget(PanelTarget& target, uint32_t width, uint3
     desc.height      = height;
     // Format wie der Backbuffer, fuer den die Tonemap-Pipeline gebaut ist; nur Farbe,
     // Tonemap schreibt ohne Tiefe (sonst Vulkan-Formatabweichung, VUID 08910/08914).
-    desc.colorFormat = m_config.backend == renderer::DeviceFactory::BackendType::OpenGL
-        ? renderer::Format::BGRA8_UNORM
-        : renderer::Format::RGBA8_UNORM_SRGB;
+    desc.colorFormat = renderer::Format::RGBA8_UNORM_SRGB;
     desc.hasDepth    = false;
     desc.debugName   = debugName;
     target.rt = device->CreateRenderTarget(desc);
@@ -5310,9 +5197,7 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
     // Wartende Vorschaubilder zuerst im Platten-Cache suchen (schnell, mehrere pro Frame).
     if (cacheDevice && !m_projectRoot.empty() && m_editorFrameCtx->editorTextureId)
     {
-        const renderer::Format cacheFormat = m_config.backend == renderer::DeviceFactory::BackendType::OpenGL
-            ? renderer::Format::RGBA8_UNORM
-            : renderer::Format::RGBA8_UNORM_SRGB;
+        const renderer::Format cacheFormat = renderer::Format::RGBA8_UNORM_SRGB;
         uint32_t loadedThisFrame = 0u;
         for (auto& [key, thumb] : browser.assetPreviewThumbnails)
         {
@@ -5383,9 +5268,7 @@ void KromEditorApp::ProcessAssetThumbnailQueue()
         renderer::RenderTargetDesc desc{};
         desc.width = 160u;
         desc.height = 160u;
-        desc.colorFormat = m_config.backend == renderer::DeviceFactory::BackendType::OpenGL
-            ? renderer::Format::BGRA8_UNORM
-            : renderer::Format::BGRA8_UNORM_SRGB;
+        desc.colorFormat = renderer::Format::BGRA8_UNORM_SRGB;
         desc.hasDepth = true;
         desc.depthFormat = renderer::Format::D24_UNORM_S8_UINT;
         thumb.renderTarget = device->CreateRenderTarget(desc);
@@ -8707,13 +8590,6 @@ bool KromEditorApp::InitializeRenderLoop()
     // has a fixed size; opening a project unlocks resizing.
     windowDesc.resizable  = false;
     windowDesc.decorated  = false;
-    if (m_config.backend == renderer::DeviceFactory::BackendType::OpenGL)
-    {
-        windowDesc.openglContext = true;
-        windowDesc.openglMajor = 4;
-        windowDesc.openglMinor = 1;
-        windowDesc.openglDebugContext = m_config.enableDebugLayer;
-    }
 
     renderer::IDevice::DeviceDesc deviceDesc{};
     deviceDesc.enableDebugLayer = m_config.enableDebugLayer;
@@ -8775,20 +8651,6 @@ bool KromEditorApp::InitializeTonemapMaterial()
 {
     const char* tonemapVsPath = "fullscreen.vs.hlsl";
     const char* tonemapPsPath = "passthrough.ps.hlsl";
-    if (m_config.backend == renderer::DeviceFactory::BackendType::OpenGL)
-    {
-        tonemapVsPath = "fullscreen.opengl.vs.glsl";
-        tonemapPsPath = "passthrough.opengl.fs.glsl";
-        // Experiment (Auftrag 13): GLSL generated from the HLSL via SPIR-V and
-        // SPIRV-Cross. Off unless KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP=1.
-        const char* generated = std::getenv("KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP");
-        if (generated && generated[0] == '1')
-        {
-            tonemapVsPath = "generated/fullscreen.opengl.vs.glsl";
-            tonemapPsPath = "generated/passthrough.opengl.fs.glsl";
-            Debug::LogWarning("KromEditorApp.cpp: tonemap pass uses generated GLSL (experiment)");
-        }
-    }
 
     const ShaderHandle tonemapVs = m_assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderRoot() / PathFromUtf8(tonemapVsPath)), assets::ShaderStage::Vertex);
     const ShaderHandle tonemapPs = m_assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderRoot() / PathFromUtf8(tonemapPsPath)), assets::ShaderStage::Fragment);
@@ -8832,8 +8694,6 @@ renderer::DeviceFactory::BackendType SelectAppBackend()
 {
 #if defined(KROM_APP_BACKEND_DX11)
     return renderer::DeviceFactory::BackendType::DirectX11;
-#elif defined(KROM_APP_BACKEND_OPENGL)
-    return renderer::DeviceFactory::BackendType::OpenGL;
 #elif defined(KROM_APP_BACKEND_VULKAN)
     return renderer::DeviceFactory::BackendType::Vulkan;
 #else
@@ -8846,7 +8706,6 @@ const char* BackendDisplayName(renderer::DeviceFactory::BackendType backend) noe
     switch (backend)
     {
     case renderer::DeviceFactory::BackendType::DirectX11: return "DirectX11";
-    case renderer::DeviceFactory::BackendType::OpenGL: return "OpenGL";
     case renderer::DeviceFactory::BackendType::Vulkan: return "Vulkan";
     default: return "Unknown";
     }

@@ -359,41 +359,13 @@ std::filesystem::path ToAbsoluteAssetPath(const EditorFrameContext& ctx, const s
     return path.is_absolute() ? path : (AssetRoot(ctx) / path);
 }
 
-std::string ReplaceSuffix(const std::string& value, const char* suffix, const char* replacement)
-{
-    const size_t suffixLen = std::char_traits<char>::length(suffix);
-    if (value.size() < suffixLen || value.compare(value.size() - suffixLen, suffixLen, suffix) != 0)
-        return {};
-    return value.substr(0u, value.size() - suffixLen) + replacement;
-}
-
-std::string ResolveRuntimeShaderPath(const EditorFrameContext& ctx,
-                                     const std::string& shaderPath,
-                                     assets::ShaderStage stage)
-{
-    if (ctx.shaderTarget != assets::ShaderTargetProfile::OpenGL_GLSL450)
-        return shaderPath;
-
-    std::string candidate;
-    if (stage == assets::ShaderStage::Vertex)
-        candidate = ReplaceSuffix(shaderPath, ".vs.hlsl", ".opengl.vs.glsl");
-    else if (stage == assets::ShaderStage::Fragment)
-        candidate = ReplaceSuffix(shaderPath, ".ps.hlsl", ".opengl.fs.glsl");
-    if (candidate.empty())
-        return shaderPath;
-
-    if (std::filesystem::exists(ToAbsoluteAssetPath(ctx, candidate)))
-        return candidate;
-    return shaderPath;
-}
-
 ShaderHandle LoadRuntimeShader(EditorFrameContext& ctx,
                                const std::string& shaderPath,
                                assets::ShaderStage stage)
 {
     if (!ctx.assetPipeline)
         return ShaderHandle::Invalid();
-    return ctx.assetPipeline->LoadShader(ResolveRuntimeShaderPath(ctx, shaderPath, stage), stage);
+    return ctx.assetPipeline->LoadShader(shaderPath, stage);
 }
 
 std::filesystem::path ResolveEngineShaderPath(const EditorFrameContext& ctx, const char* filename)
@@ -412,12 +384,10 @@ bool LoadLitShaders(EditorFrameContext& ctx,
     if (!ctx.assetPipeline)
         return false;
 
-    const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
-    const char* vsPath       = opengl ? "lit.opengl.vs.glsl" : (skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl");
-    const char* fsPath       = opengl ? "lit.opengl.fs.glsl" : "lit.ps.hlsl";
-    const char* shadowVsPath = opengl ? "shadow.opengl.vs.glsl"
-                             : (skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl");
-    const char* shadowFsPath = opengl ? "shadow.opengl.fs.glsl" : "shadow.ps.hlsl";
+    const char* vsPath       = skinned ? "skinned_lit.vs.hlsl" : "lit.vs.hlsl";
+    const char* fsPath       = "lit.ps.hlsl";
+    const char* shadowVsPath = skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl";
+    const char* shadowFsPath = "shadow.ps.hlsl";
 
     outVS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)), assets::ShaderStage::Vertex);
     outFS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, fsPath)), assets::ShaderStage::Fragment);
@@ -434,13 +404,9 @@ bool LoadPbrShaders(EditorFrameContext& ctx,
     if (!ctx.assetPipeline)
         return false;
 
-    const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
-    const bool forwardPlus = ctx.forwardPlusActive && !opengl;
-    const char* fsPath = opengl ? "pbr_lit.opengl.fs.glsl" : (forwardPlus ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl");
-    const char* vsPath = opengl ? "pbr_lit.opengl.vs.glsl"
-                       : (skinned ? "skinned_pbr_lit.vs.hlsl" : "pbr_lit.vs.hlsl");
-    const char* shadowVsPath = opengl ? "shadow_pbr.opengl.vs.glsl"
-                             : (skinned ? "skinned_shadow_pbr.vs.hlsl" : "shadow_pbr.vs.hlsl");
+    const char* fsPath = ctx.forwardPlusActive ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl";
+    const char* vsPath = skinned ? "skinned_pbr_lit.vs.hlsl" : "pbr_lit.vs.hlsl";
+    const char* shadowVsPath = skinned ? "skinned_shadow_pbr.vs.hlsl" : "shadow_pbr.vs.hlsl";
     outVS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)),
                                               assets::ShaderStage::Vertex);
     outFS     = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, fsPath)),
@@ -448,7 +414,7 @@ bool LoadPbrShaders(EditorFrameContext& ctx,
     outShadow = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, shadowVsPath)),
                                               assets::ShaderStage::Vertex);
     if (outShadowFS)
-        *outShadowFS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "shadow_pbr.opengl.fs.glsl" : "shadow_pbr.ps.hlsl")),
+        *outShadowFS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, "shadow_pbr.ps.hlsl")),
                                                      assets::ShaderStage::Fragment);
     return outVS.IsValid() && outFS.IsValid() && outShadow.IsValid();
 }
@@ -458,12 +424,10 @@ bool LoadUnlitShaders(EditorFrameContext& ctx, ShaderHandle& outVS, ShaderHandle
     if (!ctx.assetPipeline)
         return false;
 
-    const bool opengl = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
-    const char* vsPath = opengl ? "quad_unlit.opengl.vs.glsl"
-                       : (skinned ? "skinned_unlit.vs.hlsl" : "quad_unlit.vs.hlsl");
+    const char* vsPath = skinned ? "skinned_unlit.vs.hlsl" : "quad_unlit.vs.hlsl";
     outVS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, vsPath)),
                                           assets::ShaderStage::Vertex);
-    outFS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, opengl ? "quad_unlit.opengl.fs.glsl" : "quad_unlit.ps.hlsl")),
+    outFS = ctx.assetPipeline->LoadShader(PathToUtf8(ResolveEngineShaderPath(ctx, "quad_unlit.ps.hlsl")),
                                           assets::ShaderStage::Fragment);
     return outVS.IsValid() && outFS.IsValid();
 }
@@ -1202,7 +1166,6 @@ MaterialHandle CreatePbrMaterialFromAsset(EditorFrameContext& ctx,
     config.castShadows    = asset.castShadows;
     config.receiveShadows = true;
     config.materialGraph  = assets::CompileMaterialGraph(asset.graph).Active();
-    config.openGL         = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
 
     renderer::pbr::PbrMasterMaterial master =
         renderer::pbr::PbrMasterMaterial::Create(ctx.materials, config);
@@ -1285,7 +1248,6 @@ MaterialHandle CreateUnlitMaterialFromAsset(EditorFrameContext& ctx,
     info.instanced          = asset.instanced;
     info.cullMode           = asset.doubleSided ? MaterialCullMode::None : MaterialCullMode::Back;
     info.materialGraph      = assets::CompileMaterialGraph(asset.graph).Active();
-    info.openGL             = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
 
     const MaterialHandle handle = renderer::unlit::UnlitMaterial::Register(ctx.materials, info);
     if (!handle.IsValid())
@@ -1342,7 +1304,6 @@ MaterialHandle CreateLegacyLitMaterialFromAsset(EditorFrameContext& ctx,
     info.instanced            = asset.instanced;
     info.cullMode             = asset.doubleSided ? MaterialCullMode::None : MaterialCullMode::Back;
     info.materialGraph        = assets::CompileMaterialGraph(asset.graph).Active();
-    info.openGL               = ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450;
 
     const MaterialHandle handle = renderer::lit::LitMaterial::Register(ctx.materials, info);
     if (!handle.IsValid())
@@ -2498,7 +2459,7 @@ bool DrawCustomShaderSource(EditorFrameContext& ctx, assets::MaterialAsset& asse
         auto& state = ctx.state;
         state.materialShaderDraft.clear();
         state.materialShaderDraftLanguage = path.empty()
-            ? (ctx.shaderTarget == assets::ShaderTargetProfile::OpenGL_GLSL450 ? 1 : 0)
+            ? 0
             : (path.ends_with(".glsl") || path.ends_with(".vert") || path.ends_with(".frag") ? 1 : 0);
         if (!path.empty())
         {
@@ -2638,9 +2599,7 @@ void DrawMaterialPreview(EditorFrameContext& ctx, float previewSize)
     void* texId = ctx.materialPreviewTexture ? ctx.materialPreviewTexture() : nullptr;
     if (texId)
     {
-        const ImVec2 uv0 = ctx.materialPreviewFlipY ? ImVec2(0.f, 1.f) : ImVec2(0.f, 0.f);
-        const ImVec2 uv1 = ctx.materialPreviewFlipY ? ImVec2(1.f, 0.f) : ImVec2(1.f, 1.f);
-        dl->AddImage(reinterpret_cast<ImTextureID>(texId), start, end, uv0, uv1);
+        dl->AddImage(reinterpret_cast<ImTextureID>(texId), start, end);
     }
     else
     {

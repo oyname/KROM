@@ -117,14 +117,6 @@ if(EXISTS "${KROM_IMGUI_DIR}/imgui.h")
         message(STATUS "  Editor: ImGui DX11-Backend eingebunden")
     endif()
 
-    if(KROM_BUILD_OPENGL AND EXISTS "${KROM_IMGUI_BACKEND_DIR}/imgui_impl_opengl3.cpp")
-        target_sources(engine_editor PRIVATE
-            ${KROM_IMGUI_BACKEND_DIR}/imgui_impl_opengl3.cpp
-        )
-        target_compile_definitions(engine_editor PUBLIC KROM_IMGUI_HAS_OPENGL3=1)
-        message(STATUS "  Editor: ImGui OpenGL3-Backend eingebunden")
-    endif()
-
     if(KROM_BUILD_VULKAN AND EXISTS "${KROM_IMGUI_BACKEND_DIR}/imgui_impl_vulkan.cpp")
         target_sources(engine_editor PRIVATE
             ${KROM_IMGUI_BACKEND_DIR}/imgui_impl_vulkan.cpp

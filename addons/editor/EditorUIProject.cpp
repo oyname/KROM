@@ -65,7 +65,6 @@ static const char* EditorProjectBackendLabel(renderer::DeviceFactory::BackendTyp
     switch (backend)
     {
     case renderer::DeviceFactory::BackendType::DirectX11: return "DirectX11";
-    case renderer::DeviceFactory::BackendType::OpenGL: return "OpenGL";
     case renderer::DeviceFactory::BackendType::Vulkan: return "Vulkan";
     default: return "Unknown";
     }
@@ -76,7 +75,6 @@ static renderer::DeviceFactory::BackendType EditorProjectBackendFromSelection(in
     switch (selection)
     {
     case 1: return renderer::DeviceFactory::BackendType::DirectX11;
-    case 2: return renderer::DeviceFactory::BackendType::OpenGL;
     default: return renderer::DeviceFactory::BackendType::Vulkan;
     }
 }
@@ -477,7 +475,7 @@ static void DrawCreateProjectDialog(EditorFrameContext& ctx)
 
 
 
-        const char* backendItems = "Vulkan\0DirectX11\0OpenGL\0";
+        const char* backendItems = "Vulkan\0DirectX11\0";
         ImGui::TextUnformatted("Backend");
         ImGui::SetNextItemWidth(480.f);
         ImGui::Combo("##ProjectBackend", &ctx.state.projectBackendSelection, backendItems);
@@ -1466,12 +1464,11 @@ static void DrawRuntimeWindowSettings(ProjectSettings& settings)
 static void DrawProjectRuntimeSettings(EditorFrameContext& ctx)
 {
     ImGui::TextUnformatted(Translate("settings.runtime_backend"));
-    const char* backendItems[] = { "Vulkan", "DirectX11", "OpenGL" };
+    const char* backendItems[] = { "Vulkan", "DirectX11" };
     int backendSelection = 0;
     switch (ctx.projectBackend)
     {
     case renderer::DeviceFactory::BackendType::DirectX11: backendSelection = 1; break;
-    case renderer::DeviceFactory::BackendType::OpenGL: backendSelection = 2; break;
     case renderer::DeviceFactory::BackendType::Vulkan:
     default: backendSelection = 0; break;
     }
@@ -1568,13 +1565,11 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
     if (ImGui::Combo(TranslateLabel("msaa.post_aa", "Post-AA").c_str(), &postAA, postAAModes, IM_ARRAYSIZE(postAAModes)))
         rendering.postAA = postAANames[std::clamp(postAA, 0, IM_ARRAYSIZE(postAANames) - 1)];
     ImGui::SetItemTooltip("%s", Translate("msaa.post_aa_tip"));
-    if (!ctx.msaaAvailable)
-        ImGui::TextDisabled("%s", Translate("settings.opengl_unavailable"));
 
     ImGui::SeparatorText(Translate("gtao.title"));
     // Own ID scope: "Intensity" also labels the SSR slider below.
     ImGui::PushID("gtao");
-    // Without the add-on (OpenGL) the values stay editable in the file but are greyed out here.
+    // Without the add-on (host started without GTAO) the values stay in the file but are greyed out here.
     if (!ctx.gtaoAvailable) ImGui::BeginDisabled();
     ImGui::Checkbox(TranslateLabel("gtao.enabled", "Enabled").c_str(), &rendering.gtaoEnabled);
     ImGui::SetItemTooltip("%s", Translate("gtao.enabled_tip"));
@@ -1591,7 +1586,7 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
     if (!ctx.gtaoAvailable)
     {
         ImGui::EndDisabled();
-        ImGui::TextDisabled("%s", Translate("settings.opengl_unavailable"));
+        ImGui::TextDisabled("%s", Translate("settings.addon_unavailable"));
     }
     ImGui::PopID();
 
@@ -1619,12 +1614,11 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
     if (!ctx.contactShadowAvailable)
     {
         ImGui::EndDisabled();
-        ImGui::TextDisabled("%s", Translate("settings.opengl_unavailable"));
+        ImGui::TextDisabled("%s", Translate("settings.addon_unavailable"));
     }
     ImGui::PopID();
 
     ImGui::SeparatorText(Translate("ssr.title"));
-    if (!ctx.ssrAvailable) ImGui::BeginDisabled();
     ImGui::Checkbox(TranslateLabel("ssr.enabled", "Enabled").c_str(), &rendering.ssrEnabled);
     ImGui::SetItemTooltip("%s", Translate("ssr.enabled_tip"));
     if (!rendering.ssrEnabled) ImGui::BeginDisabled();
@@ -1639,11 +1633,6 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
                        ImGuiSliderFlags_Logarithmic);
     ImGui::SetItemTooltip("%s", Translate("ssr.thickness_tip"));
     if (!rendering.ssrEnabled) ImGui::EndDisabled();
-    if (!ctx.ssrAvailable)
-    {
-        ImGui::EndDisabled();
-        ImGui::TextDisabled("%s", Translate("settings.opengl_unavailable"));
-    }
 
     ImGui::SeparatorText(Translate("shading.title"));
     ImGui::Checkbox(TranslateLabel("shading.visibility", "Height-correlated visibility").c_str(),

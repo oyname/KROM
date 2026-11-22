@@ -20,88 +20,6 @@ static constexpr std::string_view kResOutlineMask  = "OutlineMask";
 static constexpr std::string_view kExecMask        = "frame.outline_mask";
 static constexpr std::string_view kExecDilate      = "frame.outline_dilate";
 
-// ─── GLSL Shaders (OpenGL fallback) ──────────────────────────────────────────
-
-// Fullscreen triangle: same Y-inversion as kSkyFullscreenVsGlsl in ForwardFeature —
-// OpenGL scene geometry is Y-flipped into the HDR FBO via GetClipSpaceAdjustment,
-// so a fullscreen VS that bypasses the projection matrix must apply the same flip.
-
-// OpenGL (GLSL 410): PerObject als UBO
-static constexpr const char* kMaskVsGlsl = R"(#version 410 core
-
-struct GpuLightData { vec4 positionWS; vec4 directionWS; vec4 colorIntensity; vec4 params; };
-layout(std140) uniform PerFrame {
-    mat4 viewMatrix; mat4 projMatrix; mat4 viewProjMatrix; mat4 invViewProjMatrix;
-    vec4 cameraPositionWS; vec4 cameraForwardWS; vec4 screenSize; vec4 timeData; vec4 ambientColor;
-    uint lightCount; uint shadowCascadeCount; float nearPlane; float farPlane;
-    GpuLightData lights[7];
-    mat4 shadowViewProj;
-    float iblPrefilterLevels; float shadowBias; float shadowNormalBias; float shadowStrength;
-    float shadowTexelSize; uint debugFlags; vec2 _shadowPad;
-};
-layout(std140) uniform PerObject {
-    mat4 worldMatrix;
-    mat4 worldMatrixInvT;
-    vec4 entityId;
-};
-layout(location = 0) in vec3 aPosition;
-void main() { gl_Position = viewProjMatrix * worldMatrix * vec4(aPosition, 1.0); }
-)";
-
-static constexpr const char* kMaskPsGlsl = R"(#version 410 core
-layout(location = 0) out float fragColor;
-void main() { fragColor = 1.0; }
-)";
-
-static constexpr const char* kFullscreenVsGlsl = R"(#version 410 core
-out vec2 vTexCoord;
-void main()
-{
-    const vec2 pos[3] = vec2[3](vec2(-1.0, -1.0), vec2(-1.0, 3.0), vec2( 3.0, -1.0));
-    const vec2 uv[3]  = vec2[3](vec2( 0.0,  0.0), vec2( 0.0, 2.0), vec2( 2.0,  0.0));
-    gl_Position = vec4(pos[gl_VertexID], 0.0, 1.0);
-    vTexCoord   = uv[gl_VertexID];
-}
-)";
-
-static constexpr const char* kDilatePsGlsl = R"(#version 410 core
-
-struct GpuLightData { vec4 positionWS; vec4 directionWS; vec4 colorIntensity; vec4 params; };
-layout(std140) uniform PerFrame {
-    mat4 viewMatrix; mat4 projMatrix; mat4 viewProjMatrix; mat4 invViewProjMatrix;
-    vec4 cameraPositionWS; vec4 cameraForwardWS; vec4 screenSize; vec4 timeData; vec4 ambientColor;
-    uint lightCount; uint shadowCascadeCount; float nearPlane; float farPlane;
-    GpuLightData lights[7];
-    mat4 shadowViewProj;
-    float iblPrefilterLevels; float shadowBias; float shadowNormalBias; float shadowStrength;
-    float shadowTexelSize; uint debugFlags; vec2 _shadowPad;
-};
-
-uniform sampler2D uMask;
-
-in  vec2 vTexCoord;
-layout(location = 0) out vec4 fragColor;
-
-const vec4  kOutlineColor = vec4(1.0, 0.55, 0.0, 1.0);
-const float kThickness    = 2.5;
-
-void main()
-{
-    vec2  texelSize   = screenSize.zw;
-    float center      = texture(uMask, vTexCoord).r;
-    float maxNeighbor = 0.0;
-    for (int dy = -1; dy <= 1; ++dy)
-    for (int dx = -1; dx <= 1; ++dx)
-    {
-        if (dx == 0 && dy == 0) continue;
-        vec2 off = vec2(float(dx), float(dy)) * texelSize * kThickness;
-        maxNeighbor = max(maxNeighbor, texture(uMask, vTexCoord + off).r);
-    }
-    float outline = maxNeighbor * (1.0 - center);
-    fragColor = vec4(kOutlineColor.rgb, kOutlineColor.a * outline);
-}
-)";
-
 // ─── HLSL Shaders ─────────────────────────────────────────────────────────────
 
 static constexpr const char* kMaskVsHlsl = R"(
@@ -232,15 +150,11 @@ static ShaderHandle CompileOutlineShader(IDevice& device,
     assets::ShaderTargetProfile target,
     assets::ShaderStage stage,
     const char* hlslSource,
-    const char* glslSource,       // OpenGL
     const char* debugName)
 {
     const ShaderStageMask stageMask = (stage == assets::ShaderStage::Vertex)
         ? ShaderStageMask::Vertex
         : ShaderStageMask::Fragment;
-
-    if (target == assets::ShaderTargetProfile::OpenGL_GLSL450)
-        return device.CreateShaderFromSource(glslSource, stageMask, "main", debugName);
 
     assets::ShaderAsset asset{};
     asset.debugName      = debugName;
@@ -323,10 +237,10 @@ bool InitializeOutlineResources(IDevice& device, OutlineGpuResources& res)
 {
     const assets::ShaderTargetProfile target = ShaderCompiler::ResolveTargetProfile(device);
 
-    res.vsMask       = CompileOutlineShader(device, target, assets::ShaderStage::Vertex,   kMaskVsHlsl,       kMaskVsGlsl,       "outline_mask.vs");
-    res.psMask       = CompileOutlineShader(device, target, assets::ShaderStage::Fragment, kMaskPsHlsl,       kMaskPsGlsl,       "outline_mask.ps");
-    res.vsFullscreen = CompileOutlineShader(device, target, assets::ShaderStage::Vertex,   kFullscreenVsHlsl, kFullscreenVsGlsl, "outline_fullscreen.vs");
-    res.psDilate     = CompileOutlineShader(device, target, assets::ShaderStage::Fragment, kDilatePsHlsl,     kDilatePsGlsl,     "outline_dilate.ps");
+    res.vsMask       = CompileOutlineShader(device, target, assets::ShaderStage::Vertex,   kMaskVsHlsl,       "outline_mask.vs");
+    res.psMask       = CompileOutlineShader(device, target, assets::ShaderStage::Fragment, kMaskPsHlsl,       "outline_mask.ps");
+    res.vsFullscreen = CompileOutlineShader(device, target, assets::ShaderStage::Vertex,   kFullscreenVsHlsl, "outline_fullscreen.vs");
+    res.psDilate     = CompileOutlineShader(device, target, assets::ShaderStage::Fragment, kDilatePsHlsl,     "outline_dilate.ps");
 
     if (!res.vsMask.IsValid() || !res.psMask.IsValid() ||
         !res.vsFullscreen.IsValid() || !res.psDilate.IsValid())

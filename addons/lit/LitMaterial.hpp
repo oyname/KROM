@@ -46,7 +46,6 @@ struct LitMaterialCreateInfo
     bool castShadows        = true;
     bool instanced          = false;
     bool materialGraph      = false;
-    bool openGL             = false;
 
     MaterialCullMode cullMode  = MaterialCullMode::Back;
     WindingOrder     frontFace = WindingOrder::CCW;

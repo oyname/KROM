@@ -50,31 +50,6 @@ namespace engine::assets {
         return false;
     }
 
-    static std::string ReplaceSuffix(const std::string& value, const char* suffix, const char* replacement)
-    {
-        const size_t suffixLen = std::char_traits<char>::length(suffix);
-        if (value.size() < suffixLen || value.compare(value.size() - suffixLen, suffixLen, suffix) != 0)
-            return {};
-        return value.substr(0u, value.size() - suffixLen) + replacement;
-    }
-
-    static std::string OpenGlShaderVariantPath(const std::string& path, ShaderStage stage)
-    {
-        if (path.empty())
-            return {};
-        if (stage == ShaderStage::Vertex)
-        {
-            if (std::string candidate = ReplaceSuffix(path, ".vs.hlsl", ".opengl.vs.glsl"); !candidate.empty())
-                return candidate;
-        }
-        if (stage == ShaderStage::Fragment)
-        {
-            if (std::string candidate = ReplaceSuffix(path, ".ps.hlsl", ".opengl.fs.glsl"); !candidate.empty())
-                return candidate;
-        }
-        return {};
-    }
-
     static ShaderStage InferShaderStage(const fs::path& path, ShaderStage fallback)
     {
         const std::string filename = PathToUtf8(path.filename());
@@ -680,17 +655,6 @@ namespace engine::assets {
         std::string line;
         auto loadMaterialShader = [&](const std::string& shaderPath, ShaderStage stage) -> ShaderHandle
         {
-            if (m_device && m_device->GetShaderTargetProfile() == ShaderTargetProfile::OpenGL_GLSL450)
-            {
-                const std::string variant = OpenGlShaderVariantPath(shaderPath, stage);
-                if (!variant.empty())
-                {
-                    const fs::path resolvedVariant = Resolve(variant);
-                    const auto variantStats = m_fs->GetFileStats(PathToUtf8(resolvedVariant).c_str());
-                    if (variantStats.exists)
-                        return LoadShader(variant, stage);
-                }
-            }
             return LoadShader(shaderPath, stage);
         };
         while (std::getline(in, line))

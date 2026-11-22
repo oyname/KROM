@@ -126,7 +126,6 @@ struct MeshData
 
 namespace Renderer {
 constexpr int DX11 = 0;
-constexpr int OpenGL = 1;
 constexpr int DX12 = 2;
 constexpr int Vulkan = 3;
 } // namespace Renderer
@@ -157,7 +156,7 @@ struct GraphicsConfig
     bool enableDebugLayer = false;
     bool enableForwardPlus = true;
     bool enableGtao = true;
-    // Screen-space contact shadows of the main directional light (not under OpenGL).
+    // Screen-space contact shadows of the main directional light.
     bool enableContactShadows = true;
     uint32_t maxShadowLights = 16u;
     uint32_t maxShadowViews = 64u;
@@ -372,24 +371,22 @@ void SetColorGrading(const engine::renderer::addons::forward::ColorGradingSettin
 [[nodiscard]] engine::renderer::addons::forward::ColorGradingSettings GetColorGrading();
 
 // MSAA for the scene: 1 = off, 2 or 4 samples (rounded down to these). Takes
-// effect on the next frame. No effect under OpenGL.
+// effect on the next frame.
 void SetMsaa(uint32_t sampleCount);
 [[nodiscard]] uint32_t GetMsaa();
 
 // Screen-space AO (GTAO add-on), switchable at runtime; the project setting
 // gtaoEnabled gives the start value. Off also drops the depth prepass. No effect
-// without GTAO (OpenGL, enableGtao off); GetGtaoEnabled then returns false.
+// without GTAO (enableGtao off); GetGtaoEnabled then returns false.
 void SetGtaoEnabled(bool enabled);
 [[nodiscard]] bool GetGtaoEnabled();
 // Screen-space reflections (SSR add-on), switchable at runtime; the project
 // setting ssrEnabled gives the start value. Off = probe/IBL reflections only.
-// No effect under OpenGL; GetSsrEnabled then returns false.
 void SetSsrEnabled(bool enabled);
 [[nodiscard]] bool GetSsrEnabled();
 
 // Screen-space contact shadows of the main directional light, switchable at
 // runtime; the project setting contactShadowsEnabled gives the start value.
-// No effect under OpenGL; GetContactShadowsEnabled then returns false.
 void SetContactShadowsEnabled(bool enabled);
 [[nodiscard]] bool GetContactShadowsEnabled();
 // Shadow-map quality for all lights (as in Unreal/Unity, not per light): tile
@@ -401,7 +398,7 @@ void SetContactShadowsEnabled(bool enabled);
 void SetShadowQuality(uint32_t sunResolution, uint32_t localResolution, uint8_t filter);
 void GetShadowQuality(uint32_t& sunResolution, uint32_t& localResolution, uint8_t& filter);
 // Post-process anti-aliasing after tonemapping (off, FXAA, SMAA), in addition
-// to MSAA; the project setting postAA gives the start value. No effect under OpenGL.
+// to MSAA; the project setting postAA gives the start value.
 void SetPostAA(engine::RenderPostAA mode);
 [[nodiscard]] engine::RenderPostAA GetPostAA();
 

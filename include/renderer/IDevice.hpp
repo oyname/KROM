@@ -6,7 +6,7 @@
 // diesen Header includen. Backend-spezifisches lebt in addons/<name>/.
 //
 // Designprinzip: DX12/Vulkan-artiges explizites Modell als Schnittstelle,
-// DX11 und OpenGL werden über kompatible Adapter angebunden.
+// DX11 wird über einen kompatiblen Adapter angebunden.
 // =============================================================================
 #include "assets/AssetRegistry.hpp"
 #include "platform/IWindow.hpp"
@@ -62,9 +62,9 @@ struct AdapterInfo
 {
     uint32_t    index         = 0u;
     std::string name;
-    size_t      dedicatedVRAM = 0u;   // Bytes; 0 = unbekannt (z.B. iGPU oder GL ohne Kontext)
+    size_t      dedicatedVRAM = 0u;   // Bytes; 0 = unbekannt (z.B. iGPU)
     bool        isDiscrete    = true; // false = integrierte GPU
-    int         featureLevel  = 0;    // DX11: 100/101/110/111/120/121; OpenGL: major*10+minor
+    int         featureLevel  = 0;    // DX11: 100/101/110/111/120/121
 };
 
 // =============================================================================
@@ -83,11 +83,6 @@ public:
         bool        enableGpuValidation  = false;
         uint32_t    adapterIndex         = 0u;
         std::string appName;
-
-        // OpenGL-Kontextversion — wird von nicht-OpenGL-Backends ignoriert.
-        int  openglMajor         = 4;
-        int  openglMinor         = 1;
-        bool openglDebugContext  = false;
     };
 
     virtual bool Initialize(const DeviceDesc& desc) = 0;
@@ -213,8 +208,8 @@ public:
 
     // --- Diagnostics ---------------------------------------------------------
     // Gibt die Clipspace-Korrekturmatrix zurück, die vor die Projektionsmatrix
-    // multipliziert werden muss. DX11/DX12/Vulkan/Null geben Identity zurück.
-    // OpenGL überschreibt dies mit Y-Flip + Z-Remap.
+    // multipliziert werden muss. Alle heutigen Backends geben Identity zurück;
+    // ein Backend mit anderem Clipspace überschreibt dies.
     [[nodiscard]] virtual math::Mat4 GetClipSpaceAdjustment() const
     {
         return math::Mat4::Identity();
@@ -395,7 +390,7 @@ public:
 
     // Range-Binding für Constant/Uniform-Buffer (Suballokation aus einem Arena-Buffer).
     // Default-Implementierung fällt auf SetConstantBuffer zurück (ignoriert Offset/Size).
-    // Backends mit nativer Range-Unterstützung (DX11.1, OpenGL glBindBufferRange) überschreiben dies.
+    // Backends mit nativer Range-Unterstützung (DX11.1) überschreiben dies.
     virtual void SetConstantBufferRange(uint32_t slot, BufferBinding binding, ShaderStageMask stages)
     {
         if (binding.IsValid())
@@ -535,7 +530,7 @@ public:
 class DeviceFactory
 {
 public:
-    enum class BackendType { Null, DirectX11, DirectX12, OpenGL, Vulkan };
+    enum class BackendType { Null, DirectX11, DirectX12, Vulkan };
     using FactoryFn   = std::unique_ptr<IDevice>(*)();
     using EnumerateFn = std::vector<AdapterInfo>(*)();   // Kein Device nötig
 

@@ -370,7 +370,7 @@ namespace engine::renderer::vulkan {
             // Vulkan-native command recording cache. Descriptor sets are valid until the
             // materialized set, pipeline layout, bind point, or dynamic offsets change.
             // This keeps Draw/DrawIndexed from re-binding the same full descriptor state
-            // as if Vulkan were an immediate-mode API. DX11/OpenGL backends are untouched.
+            // as if Vulkan were an immediate-mode API. The DX11 backend is untouched.
             VkDescriptorSet lastBoundDescriptorSet = VK_NULL_HANDLE;
             VkPipelineLayout lastBoundPipelineLayout = VK_NULL_HANDLE;
             VkPipelineBindPoint lastBoundDescriptorBindPoint = VK_PIPELINE_BIND_POINT_GRAPHICS;

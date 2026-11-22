@@ -10,7 +10,7 @@ Main page: https://krom-engine.com/
 
 KROM Engine is a modern C++20 engine focused on render architecture and extensibility, built around proven game development patterns such as ECS, RenderGraph, and a plugin-based backend system. Its architecture is designed to keep the core clean and backend-agnostic, while platform-, renderer-, and feature-specific logic is moved into dedicated AddOns.
 
-This AddOn model makes it possible to integrate and evolve backends such as DX11, DX12, OpenGL, Vulkan, or Metal without polluting the engine core with API-specific code. In addition, rendering features such as Forward, PBR, or Post-Processing can also be implemented as modular AddOns. Post-Processing is treated not as API-specific logic, but as a rendering feature built on top of the engine’s abstractions, while the actual execution is still handled by the respective graphics backends.
+This AddOn model makes it possible to integrate and evolve backends such as DX11, DX12, Vulkan, or Metal without polluting the engine core with API-specific code. In addition, rendering features such as Forward, PBR, or Post-Processing can also be implemented as modular AddOns. Post-Processing is treated not as API-specific logic, but as a rendering feature built on top of the engine’s abstractions, while the actual execution is still handled by the respective graphics backends.
 
 This keeps the engine more flexible, easier to maintain, and significantly better suited for long-term growth.
 
@@ -39,14 +39,14 @@ The included **DemoProject** provides a playable scene to explore the editor and
 
 ### Editor and demo project
 
-Start `krom_editor_vulkan` (or `krom_editor_dx11` / `krom_editor_opengl`). On the start screen open `projects/DemoProject`.
+Start `krom_editor_vulkan` (or `krom_editor_dx11`). On the start screen open `projects/DemoProject`.
 The demo project contains all textures, models, sounds and scripts it needs. The scene **Testraum** is a small playable level (character controller, physics, trigger, sounds, particles, custom shaders); press **Start** in the toolbar to play it directly in the editor.
 
 ## Code-only examples
 
 ![KROM Engine code-only examples](doc/example.png)
 
-These examples use the engine from plain C++ without the editor. Each one is built for every enabled backend (`_dx11`, `_vulkan`, `_opengl`); their assets live in `assets/` and are copied next to the executables. The engine shaders live in `shaders/` (copied to `bin/shaders`, shipped with exported games); editor-only files live in `editor/`.
+These examples use the engine from plain C++ without the editor. Each one is built for every enabled backend (`_dx11`, `_vulkan`); their assets live in `assets/` and are copied next to the executables. The engine shaders live in `shaders/` (copied to `bin/shaders`, shipped with exported games); editor-only files live in `editor/`.
 
 | Example | Source | What it shows |
 | --- | --- | --- |

@@ -158,14 +158,6 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(const RuntimeMaterialC
     const char* fsPath = "lit.ps.hlsl";
     const char* shadowPath = skinned ? "skinned_shadow.vs.hlsl" : "shadow.vs.hlsl";
     const char* shadowFsPath = "shadow.ps.hlsl";
-    const bool opengl = ctx.openGL;
-    if (opengl)
-    {
-        vsPath = "lit.opengl.vs.glsl";
-        fsPath = "lit.opengl.fs.glsl";
-        shadowPath = "shadow.opengl.vs.glsl";
-        shadowFsPath = "shadow.opengl.fs.glsl";
-    }
 
     const engine::ShaderHandle vs = LoadEngineShader(ctx, vsPath, engine::assets::ShaderStage::Vertex);
     const engine::ShaderHandle fs = LoadEngineShader(ctx, fsPath, engine::assets::ShaderStage::Fragment);
@@ -230,7 +222,6 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(const RuntimeMaterialC
     const engine::assets::CompiledMaterialGraph graph =
         asset ? engine::assets::CompileMaterialGraph(asset->graph) : engine::assets::CompiledMaterialGraph{};
     info.materialGraph = graph.Active();
-    info.openGL = opengl;
     info.opacityFactor = asset ? asset->baseColorFactor.w : 1.0f;
     info.alphaCutoff = asset ? asset->alphaCutoff : 0.5f;
     info.enableBaseColorMap = albedoTexture.IsValid();
@@ -356,47 +347,13 @@ static engine::renderer::MaterialParam ToRuntimeParam(const engine::assets::Mate
     return dst;
 }
 
-static std::string ResolveRuntimeShaderPath(const RuntimeMaterialContext& ctx,
-                                            const std::string& shaderPath,
-                                            engine::assets::ShaderStage stage)
-{
-    if (!ctx.openGL)
-        return shaderPath;
-
-    std::filesystem::path candidate = PathFromUtf8(shaderPath);
-    const std::string filename = PathToUtf8(candidate.filename());
-    std::string variantName;
-    if (stage == engine::assets::ShaderStage::Vertex)
-    {
-        constexpr std::string_view suffix = ".vs.hlsl";
-        if (filename.size() > suffix.size() &&
-            filename.compare(filename.size() - suffix.size(), suffix.size(), suffix.data(), suffix.size()) == 0)
-            variantName = filename.substr(0, filename.size() - suffix.size()) + ".opengl.vs.glsl";
-    }
-    else if (stage == engine::assets::ShaderStage::Fragment)
-    {
-        constexpr std::string_view suffix = ".ps.hlsl";
-        if (filename.size() > suffix.size() &&
-            filename.compare(filename.size() - suffix.size(), suffix.size(), suffix.data(), suffix.size()) == 0)
-            variantName = filename.substr(0, filename.size() - suffix.size()) + ".opengl.fs.glsl";
-    }
-    if (variantName.empty())
-        return shaderPath;
-
-    candidate.replace_filename(PathFromUtf8(variantName));
-    const std::string variantPath = PathToGenericUtf8(candidate);
-    const std::string resolved = ResolveEngineAssetPath(ctx, variantPath.c_str());
-    return std::filesystem::exists(PathFromUtf8(resolved)) ? variantPath : shaderPath;
-}
-
 static engine::ShaderHandle LoadRuntimeShader(const RuntimeMaterialContext& ctx,
                                               const std::string& shaderPath,
                                               engine::assets::ShaderStage stage)
 {
     if (!ctx.assetPipeline)
         return engine::ShaderHandle::Invalid();
-    const std::string resolvedShaderPath = ResolveRuntimeShaderPath(ctx, shaderPath, stage);
-    return ctx.assetPipeline->LoadShader(ResolveEngineAssetPath(ctx, resolvedShaderPath.c_str()), stage);
+    return ctx.assetPipeline->LoadShader(ResolveEngineAssetPath(ctx, shaderPath.c_str()), stage);
 }
 
 // Custom-Shader: Textur-Register und PerMaterial-Offsets aus dem kompilierten
@@ -453,11 +410,9 @@ static engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(const Runtime
     ShaderHandle fs = customFS;
     if (!vs.IsValid() || !fs.IsValid())
     {
-        const bool opengl = ctx.openGL;
-        vs = LoadEngineShader(ctx, opengl ? "quad_unlit.opengl.vs.glsl"
-                                          : (skinned ? "skinned_unlit.vs.hlsl" : "quad_unlit.vs.hlsl"),
+        vs = LoadEngineShader(ctx, skinned ? "skinned_unlit.vs.hlsl" : "quad_unlit.vs.hlsl",
                               assets::ShaderStage::Vertex);
-        fs = LoadEngineShader(ctx, opengl ? "quad_unlit.opengl.fs.glsl" : "quad_unlit.ps.hlsl", assets::ShaderStage::Fragment);
+        fs = LoadEngineShader(ctx, "quad_unlit.ps.hlsl", assets::ShaderStage::Fragment);
     }
     if (!vs.IsValid() || !fs.IsValid())
     {
@@ -488,7 +443,6 @@ static engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(const Runtime
     const assets::CompiledMaterialGraph graph =
         customVS.IsValid() ? assets::CompiledMaterialGraph{} : assets::CompileMaterialGraph(asset.graph);
     info.materialGraph = graph.Active();
-    info.openGL = ctx.openGL;
 
     info.extraParameters.reserve(asset.params.size() + 1u);
     for (const assets::MaterialParam& param : asset.params)
@@ -572,7 +526,6 @@ static engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(const RuntimeMa
         return MaterialHandle::Invalid();
     }
 
-    const bool opengl = ctx.openGL;
     const bool skinned = mesh.HasSkinning();
 
     std::string layoutError;
@@ -585,13 +538,11 @@ static engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(const RuntimeMa
         return MaterialHandle::Invalid();
     }
 
-    const bool forwardPlus = ctx.enableForwardPlus && !opengl;
-    const char* vsPath = opengl ? "pbr_lit.opengl.vs.glsl"
-                       : (skinned ? "skinned_pbr_lit.vs.hlsl" : "pbr_lit.vs.hlsl");
-    const char* fsPath = opengl ? "pbr_lit.opengl.fs.glsl" : (forwardPlus ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl");
-    const char* shadowPath = opengl ? "shadow_pbr.opengl.vs.glsl"
-                           : (skinned ? "skinned_shadow_pbr.vs.hlsl" : "shadow_pbr.vs.hlsl");
-    const char* shadowFsPath = opengl ? "shadow_pbr.opengl.fs.glsl" : "shadow_pbr.ps.hlsl";
+    const bool forwardPlus = ctx.enableForwardPlus;
+    const char* vsPath = skinned ? "skinned_pbr_lit.vs.hlsl" : "pbr_lit.vs.hlsl";
+    const char* fsPath = forwardPlus ? "pbr_forward_plus.ps.hlsl" : "pbr_lit.ps.hlsl";
+    const char* shadowPath = skinned ? "skinned_shadow_pbr.vs.hlsl" : "shadow_pbr.vs.hlsl";
+    const char* shadowFsPath = "shadow_pbr.ps.hlsl";
 
     const ShaderHandle vs = LoadEngineShader(ctx, vsPath, assets::ShaderStage::Vertex);
     const ShaderHandle fs = LoadEngineShader(ctx, fsPath, assets::ShaderStage::Fragment);
@@ -615,7 +566,6 @@ static engine::MaterialHandle CreateRuntimePbrMaterialFromAssets(const RuntimeMa
     config.receiveShadows = true;
     const auto graph = assets::CompileMaterialGraph(asset.graph);
     config.materialGraph = graph.Active();
-    config.openGL = opengl;
 
     renderer::pbr::PbrMasterMaterial master =
         renderer::pbr::PbrMasterMaterial::Create(ctx.materialSystem, config);

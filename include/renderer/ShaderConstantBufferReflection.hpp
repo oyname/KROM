@@ -13,9 +13,7 @@ namespace engine::renderer {
 // aktiven Backend-Addon und ohne GPU:
 //   DXBC   (DX11)   ueber D3DReflect aus d3dcompiler_47.dll
 //   SPIR-V (Vulkan) ueber die OpMemberDecorate-Offsets
-//   GLSL   (OpenGL) ueber die std140-Regeln des Blocks; std140 legt die Offsets
-//                   eindeutig fest, der Treiber meldet dieselben Werte.
-// Gesucht wird der Cbuffer per Name (DXBC, GLSL) bzw. per Name oder logischem
+// Gesucht wird der Cbuffer per Name (DXBC) bzw. per Name oder logischem
 // Slot (SPIR-V, DXC benennt den Typ "type.<Name>").
 
 [[nodiscard]] bool ReflectDxbcConstantBuffer(const void* bytecode, size_t byteSize,
@@ -28,11 +26,6 @@ namespace engine::renderer {
                                               uint32_t logicalSlot,
                                               ReflectedConstantBuffer& out,
                                               std::string* outError = nullptr);
-
-[[nodiscard]] bool ReflectGlslStd140Block(std::string_view source,
-                                          std::string_view blockName,
-                                          ReflectedConstantBuffer& out,
-                                          std::string* outError = nullptr);
 
 // Waehlt den passenden Weg nach artifact.target.
 [[nodiscard]] bool ReflectConstantBuffer(const assets::CompiledShaderArtifact& artifact,
@@ -61,8 +54,6 @@ namespace engine::renderer {
 // Register landen, das der Shader deklariert:
 //   DXBC   ueber die Resource-Bindings aus D3DReflect (BindPoint)
 //   SPIR-V ueber die Binding-Decoration minus ShaderResourceBase (DXC-Shift)
-//   GLSL   ueber layout(binding = N) an der Sampler-Deklaration; Sampler ohne
-//          binding fehlen im Ergebnis (die Engine ordnet sie per Name zu).
 // Nur Slots < TexSlots::COUNT werden gemeldet.
 using ReflectedTextureBindings = std::unordered_map<std::string, uint32_t>;
 
@@ -73,10 +64,6 @@ using ReflectedTextureBindings = std::unordered_map<std::string, uint32_t>;
 [[nodiscard]] bool ReflectSpirvTextureBindings(const void* bytecode, size_t byteSize,
                                                ReflectedTextureBindings& out,
                                                std::string* outError = nullptr);
-
-[[nodiscard]] bool ReflectGlslTextureBindings(std::string_view source,
-                                              ReflectedTextureBindings& out,
-                                              std::string* outError = nullptr);
 
 // Waehlt den passenden Weg nach artifact.target.
 [[nodiscard]] bool ReflectTextureBindings(const assets::CompiledShaderArtifact& artifact,

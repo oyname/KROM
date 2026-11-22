@@ -79,7 +79,6 @@ bool FrameUploadStage::CommitUploads(const FrameUploadStageContext& context,
 
     const IDevice* device = context.shaderRuntime.GetDevice();
     const bool supportsStructuredPerObject = device &&
-        device->GetShaderTargetProfile() != assets::ShaderTargetProfile::OpenGL_GLSL450 &&
         device->GetShaderTargetProfile() != assets::ShaderTargetProfile::Null;
 
     assets::AssetRegistry* assetReg = context.shaderRuntime.GetAssetRegistry();

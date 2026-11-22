@@ -204,7 +204,6 @@ enum class ShaderTargetProfile : uint8_t
     DirectX11_SM5,
     DirectX12_SM6,
     Vulkan_SPIRV,
-    OpenGL_GLSL450,
 };
 
 struct ShaderDependencyRecord

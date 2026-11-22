@@ -543,7 +543,6 @@ static std::string GetBinaryFormatString(ShaderBinaryFormat format)
     case ShaderBinaryFormat::Spirv:      return "spirv";
     case ShaderBinaryFormat::Dxbc:       return "dxbc";
     case ShaderBinaryFormat::Dxil:       return "dxil";
-    case ShaderBinaryFormat::GlslSource: return "glsl";
     default:                             return "none";
     }
 }
@@ -904,7 +903,7 @@ static bool CompileBackendArtifact(const assets::ShaderAsset& asset,
     {
     case assets::ShaderTargetProfile::Vulkan_SPIRV:
         // HLSL primary path: DXC -spirv, register shifts match BindingRegisterRanges.
-        // GLSL fallback path: shaderc/glslangValidator for OpenGL-authored GLSL assets.
+        // GLSL fallback path: shaderc/glslangValidator for shaders written in GLSL.
         if (asset.sourceLanguage == assets::ShaderSourceLanguage::HLSL)
             return CompileHlslToSpirvWithDxc(asset, bundle, defines, outCompiled, outError);
 #if KROM_HAS_SHADERC
@@ -916,10 +915,6 @@ static bool CompileBackendArtifact(const assets::ShaderAsset& asset,
         return CompileToD3DBytecode(asset, target, bundle, defines, outCompiled, outError);
     case assets::ShaderTargetProfile::DirectX12_SM6:
         return CompileToDxilWithTool(asset, bundle, defines, outCompiled, outError);
-    case assets::ShaderTargetProfile::OpenGL_GLSL450:
-        outCompiled.sourceText = BuildShaderSource(bundle, defines);
-        outCompiled.bytecode.clear();
-        return true;
     case assets::ShaderTargetProfile::Null:
     case assets::ShaderTargetProfile::Generic:
     default:

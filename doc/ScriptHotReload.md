@@ -110,8 +110,8 @@ Pfad mit Leerzeichen und Umlaut mit den wirklich gefundenen Werkzeugen.
 `krom_tests` enthaelt Resolver-, Lifecycle-, ABI-, Zeitstempel- und echte DLL-Tests.
 Es prueft auch, dass DLLs mit falscher oder fehlender Projektkennung die
 bereits geladene passende DLL nicht ersetzen.
-Die optionalen Ziele `krom_editor_loading_tests`,
-`krom_editor_loading_tests_dx11` und `krom_editor_loading_tests_opengl` pruefen mit
+Die optionalen Ziele `krom_editor_loading_tests` und
+`krom_editor_loading_tests_dx11` pruefen mit
 `--script-reload <krom-project.json>` eine temporaere Kopie der Projekt-Scripts:
 mehrfache Code-Aenderungen, Felder, Auswahl, Undo, Compilerfehler, Abbruch,
 sofortigen Start ohne Aenderungen und Projektwechsel. Das erste Ziel nutzt Vulkan

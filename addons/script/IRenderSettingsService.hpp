@@ -48,20 +48,19 @@ struct RenderSettings
 {
     TonemapMode tonemap = TonemapMode::AgX;
     float       exposureEv = 0.f;        // EV stops; HDR colour *= 2^EV. With autoExposure: correction
-    // Automatic exposure (limits and speeds are set per scene in the Inspector);
-    // no effect under OpenGL, which keeps the fixed exposure.
+    // Automatic exposure (limits and speeds are set per scene in the Inspector).
     bool        autoExposure = false;
-    uint32_t    msaaSamples = 1u;        // 1 = off, 2, 4; no effect under OpenGL
+    uint32_t    msaaSamples = 1u;        // 1 = off, 2, 4
     bool        heightCorrelatedVisibility = true;
     bool        perLightDiffuseFresnel = true;
     bool        multiScatterCompensation = true;
-    bool        specularAntiAliasing = true;  // geometric specular AA; OpenGL keeps its own variant
-    bool        burleyDiffuse = true;         // Burley diffuse for direct light; no effect under OpenGL
+    bool        specularAntiAliasing = true;  // geometric specular AA
+    bool        burleyDiffuse = true;         // Burley diffuse for direct light
     bool        specularOcclusion = true;
-    bool        gtaoEnabled = true;          // GTAO add-on; no effect under OpenGL
-    bool        ssrEnabled = true;           // SSR add-on; no effect under OpenGL
-    bool        contactShadowsEnabled = true; // contact shadow add-on; no effect under OpenGL
-    PostAAMode  postAA = PostAAMode::Off;    // after tonemapping; no effect under OpenGL
+    bool        gtaoEnabled = true;          // GTAO add-on
+    bool        ssrEnabled = true;           // SSR add-on
+    bool        contactShadowsEnabled = true; // contact shadow add-on
+    PostAAMode  postAA = PostAAMode::Off;    // after tonemapping
     // Shadow maps: tile edge of each sun cascade / point-spot view (256..4096,
     // power of two) and filter (0 none, 1 PCF 3x3, 2 PCF 5x5, 3 Poisson, 4 PCSS, 5 PCF 7x7).
     uint32_t    sunShadowResolution = 2048u;

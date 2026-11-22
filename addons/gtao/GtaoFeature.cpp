@@ -66,12 +66,6 @@ public:
 
     bool Initialize(const FeatureInitializationContext& context) override
     {
-        if (context.device.GetShaderTargetProfile() ==
-            assets::ShaderTargetProfile::OpenGL_GLSL450)
-        {
-            Debug::LogWarning("GtaoFeature: GTAO not supported on OpenGL, disabled");
-            return true;  // Not a fatal error; pass stays as no-op
-        }
         m_device = &context.device;
         return InitializeGtaoResources(context.device, *m_resources);
     }

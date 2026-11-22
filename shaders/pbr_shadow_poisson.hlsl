@@ -6,7 +6,6 @@
 // CompareShadowManualBilinear; that function clamps every tap to the atlas
 // rect of the shadow view, so the kernel never reads a neighbouring view.
 // Mode 4 (ShadowFilter::PCSS) follows below.
-// GLSL twin: pbr_shadow_poisson.opengl.glsl.
 // =============================================================================
 
 // Pixel position (SV_Position.xy) of the fragment; main() sets it first.

@@ -130,7 +130,7 @@ MaterialDesc UnlitMaterial::BuildDesc(const UnlitMaterialCreateInfo& info)
     desc.perMaterialReflection = info.perMaterialReflection;
 
     if (info.materialGraph)
-        AddMaterialGraphParameters(desc, info.openGL);
+        AddMaterialGraphParameters(desc);
 
     return desc;
 }

@@ -1744,7 +1744,7 @@ struct EditorLoadingSmokeTest final : IAppScene
         {
             if (app.m_runtimeBuildJob) return true;
             const std::string backend = app.m_projectBackend == renderer::DeviceFactory::BackendType::DirectX11
-                ? "dx11" : app.m_projectBackend == renderer::DeviceFactory::BackendType::OpenGL ? "opengl" : "vulkan";
+                ? "dx11" : "vulkan";
             if (reloadStage == 7)
             {
                 Check(externalStepOk, "testbuild of external project succeeds");

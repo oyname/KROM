@@ -4035,8 +4035,7 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
         int mode = tonemap.exposureMode == ExposureMode::Auto ? 1 : 0;
         if (value_ui::Combo(TranslateLabel("exposure.mode", "Mode").c_str(), &mode, modeNames, 2))
             tonemap.exposureMode = mode == 1 ? ExposureMode::Auto : ExposureMode::Fixed;
-        ImGui::SetItemTooltip("%s", Translate(ctx.autoExposureAvailable ? "exposure.mode_tooltip"
-                                                                        : "exposure.mode_unavailable"));
+        ImGui::SetItemTooltip("%s", Translate("exposure.mode_tooltip"));
         const bool automatic = tonemap.exposureMode == ExposureMode::Auto;
 
         value_ui::RowLabel(Translate(automatic ? "exposure.correction" : "tonemap.exposure"));
@@ -4074,8 +4073,7 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
             if (ctx.autoExposureStatus && ctx.autoExposureStatus->valid.load(std::memory_order_relaxed))
                 ImGui::Text("%+.2f EV", ctx.autoExposureStatus->currentEv.load(std::memory_order_relaxed));
             else
-                ImGui::TextDisabled("%s", Translate(ctx.autoExposureAvailable ? "exposure.current_none"
-                                                                              : "exposure.current_unavailable"));
+                ImGui::TextDisabled("%s", Translate("exposure.current_none"));
         }
     }
     card::End(tonemapCard);

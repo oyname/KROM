@@ -278,7 +278,7 @@ public:
         }
 
         fc.shadowCascadeCount = 1u;
-        // Global filter of the first light: OpenGL and legacy lit still use it.
+        // Global filter of the first light: legacy lit still uses it.
         fc.shadowFilterMode   = static_cast<uint32_t>(request->settings.filter);
         filterParams.lightSize = request->settings.lightSize;
         renderer::WriteFrameParameterBlock(fc, kShadowFilterFrameParameterBlock, filterParams);

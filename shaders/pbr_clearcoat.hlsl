@@ -5,7 +5,7 @@
 // dielectric coat (IOR 1.5, F0 = 0.04) with its own GGX lobe on top of the
 // base. The coat uses the geometric normal (no coat normal map yet), so it
 // stays smooth over a normal-mapped base. The base is attenuated by 1 - Fc.
-// Include after D_GGX and SafeNormalize. HLSL only (OpenGL frozen).
+// Include after D_GGX and SafeNormalize.
 // =============================================================================
 
 // Coat Fresnel for F0 = 0.04, scaled by the coat strength.

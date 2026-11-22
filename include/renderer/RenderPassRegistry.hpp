@@ -15,7 +15,7 @@ enum class RenderPassSortMode : uint8_t
 };
 
 // Beschreibt States die ein Pass absolut erzwingt — kein Material darf diese überschreiben.
-// Fullscreen/Postprocess: DepthTest=OFF, DepthWrite=OFF, Cull=OFF (sonst schwarzes Bild auf OpenGL).
+// Fullscreen/Postprocess: DepthTest=OFF, DepthWrite=OFF, Cull=OFF (sonst schwarzes Bild).
 // Shadow: DepthTest=ON, DepthWrite=ON (zwingend für korrekte Shadow Maps).
 struct PassLocks
 {

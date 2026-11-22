@@ -99,7 +99,7 @@ Code inventory against archive 2026-11-06, point 4:
 | `app/editor/EnginePaths.cpp` | Executable location, known folders | Central path resolver retains OS-specific directory discovery. Package paths and writable paths remain distinct. |
 | `src/platform/NativeFileDialog_Win32.cpp` | COM and native file/folder dialogs | Existing interface retained; non-Windows implementation still required. |
 | `src/platform/win32/*`, `app/editor/EditorWin32Hook.cpp` | HWND, messages, input, ImGui Win32 hook | Remain in existing platform/window integration. GLFW is the later alternative. |
-| `addons/dx11/*`, `addons/opengl/OpenGLWin32Loader.*`, editor Vulkan surface setup | D3D/COM, WGL, Win32 Vulkan surface | Remain backend/window-specific; no new SDK-wide graphics abstraction. |
+| `addons/dx11/*`, editor Vulkan surface setup | D3D/COM, Win32 Vulkan surface | Remain backend/window-specific; no new SDK-wide graphics abstraction. |
 | `src/renderer/ShaderToolPaths.cpp`, `ShaderCompilerShared.cpp`, `ShaderCompilerD3D.cpp` | Executable/tool discovery, wide file APIs, D3D compiler | Existing renderer helper boundaries retained; tools and redistributables bundled. |
 | `addons/editor/EditorAssetBrowser.cpp` | ShellExecute / shell opening of external editors and folders | Deferred to a future platform shell/open interface; independent of SDK compilation and loading. |
 | `src/app/KromWrapper.cpp`, `app/KromEditorApp.cpp`, `include/core/PathUtf8.hpp` | User/font directories, Win32 integration, UTF-16 file APIs | Keep current guarded implementations; directory/font portability belongs to later OS support. |

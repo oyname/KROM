@@ -287,7 +287,6 @@ engine::renderer::DeviceFactory::BackendType ToBackend(int backend) noexcept
     switch (backend)
     {
     case Renderer::DX11: return BackendType::DirectX11;
-    case Renderer::OpenGL: return BackendType::OpenGL;
     case Renderer::DX12: return BackendType::DirectX12;
     case Renderer::Vulkan: return BackendType::Vulkan;
     default: return BackendType::Vulkan;
@@ -301,7 +300,6 @@ const char* BackendName(engine::renderer::DeviceFactory::BackendType backend) no
     {
     case BackendType::DirectX11: return "DirectX11";
     case BackendType::DirectX12: return "DirectX12";
-    case BackendType::OpenGL: return "OpenGL";
     case BackendType::Vulkan: return "Vulkan";
     default: return "Unknown";
     }
@@ -366,7 +364,6 @@ internal::RuntimeMaterialContext MakeMaterialContext(State& state)
         state.assetRegistry, state.assetPipeline.get(), state.materialSystem,
         state.renderLoop.GetRenderSystem(), state.world.get(), state.assetRoot, state.engineAssetRoot,
         state.runtimeMaterialCache, state.texturePaths,
-        ToBackend(state.config.backend) == engine::renderer::DeviceFactory::BackendType::OpenGL,
         state.config.enableForwardPlus};
 }
 
@@ -869,10 +866,8 @@ bool RegisterEngineFeatures(State& state)
         return true;
 
     using namespace engine;
-    using BackendType = renderer::DeviceFactory::BackendType;
 
-    state.forwardPlusActive = state.config.enableForwardPlus &&
-        ToBackend(state.config.backend) != BackendType::OpenGL;
+    state.forwardPlusActive = state.config.enableForwardPlus;
 
     renderer::addons::forward::ForwardFeatureConfig forwardConfig{};
     forwardConfig.clearColorValue = state.config.clearColor;
@@ -905,7 +900,7 @@ bool RegisterEngineFeatures(State& state)
         return false;
     }
 
-    if (state.config.enableGtao && ToBackend(state.config.backend) != BackendType::OpenGL)
+    if (state.config.enableGtao)
     {
         if (!renderSystem.RegisterFeature(renderer::addons::gtao::CreateGtaoFeature(&state.render.gtaoResources)))
         {
@@ -914,7 +909,7 @@ bool RegisterEngineFeatures(State& state)
         }
     }
 
-    if (state.config.enableContactShadows && ToBackend(state.config.backend) != BackendType::OpenGL &&
+    if (state.config.enableContactShadows &&
         !renderSystem.RegisterFeature(renderer::addons::contact_shadow::CreateContactShadowFeature(
             &state.render.contactShadowResources)))
     {
@@ -923,8 +918,7 @@ bool RegisterEngineFeatures(State& state)
     }
 
     // SSR after GTAO: it adds to the scene composite GTAO creates.
-    if (ToBackend(state.config.backend) != BackendType::OpenGL &&
-        !renderSystem.RegisterFeature(renderer::addons::ssr::CreateSsrFeature(&state.render.ssrResources)))
+    if (!renderSystem.RegisterFeature(renderer::addons::ssr::CreateSsrFeature(&state.render.ssrResources)))
     {
         Debug::LogError("krom.h: failed to register SSR feature");
         return false;
@@ -998,13 +992,6 @@ bool InitializeRenderLoop(State& state)
     windowDesc.resizable = state.config.resizable;
     windowDesc.visible = state.config.visible;
     windowDesc.vsync = state.config.vsync;
-    if (backend == BackendType::OpenGL)
-    {
-        windowDesc.openglContext = true;
-        windowDesc.openglMajor = 4;
-        windowDesc.openglMinor = 1;
-        windowDesc.openglDebugContext = state.config.enableDebugLayer;
-    }
 
     // Diagnostics without code changes: KROM_DEBUG_LAYER=1 turns on the backend
     // validation (Vulkan layers, DX11 debug device); KROM_MSAA=<n> sets the start MSAA.
@@ -1055,20 +1042,6 @@ bool InitializeTonemapMaterial(State& state)
 
     const char* tonemapVsPath = "fullscreen.vs.hlsl";
     const char* tonemapPsPath = "passthrough.ps.hlsl";
-    if (ToBackend(state.config.backend) == engine::renderer::DeviceFactory::BackendType::OpenGL)
-    {
-        tonemapVsPath = "fullscreen.opengl.vs.glsl";
-        tonemapPsPath = "passthrough.opengl.fs.glsl";
-        // Experiment (Auftrag 13): GLSL generated from the HLSL via SPIR-V and
-        // SPIRV-Cross. Off unless KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP=1.
-        const char* generated = std::getenv("KROM_GLSL_EXPERIMENT_GENERATED_TONEMAP");
-        if (generated && generated[0] == '1')
-        {
-            tonemapVsPath = "generated/fullscreen.opengl.vs.glsl";
-            tonemapPsPath = "generated/passthrough.opengl.fs.glsl";
-            engine::Debug::LogWarning("KromWrapper.cpp: tonemap pass uses generated GLSL (experiment)");
-        }
-    }
 
     const engine::ShaderHandle tonemapVs =
         internal::LoadEngineShader(MakeMaterialContext(state), tonemapVsPath, engine::assets::ShaderStage::Vertex);
@@ -1301,8 +1274,6 @@ int DefaultRenderer() noexcept
 {
 #if defined(KROM_APP_BACKEND_DX11)
     return Renderer::DX11;
-#elif defined(KROM_APP_BACKEND_OPENGL)
-    return Renderer::OpenGL;
 #elif defined(KROM_APP_BACKEND_VULKAN)
     return Renderer::Vulkan;
 #else
@@ -1315,7 +1286,6 @@ const char* RendererName(int backend) noexcept
     switch (backend)
     {
     case Renderer::DX11: return "DX11";
-    case Renderer::OpenGL: return "OpenGL";
     case Renderer::DX12: return "DX12";
     case Renderer::Vulkan: return "Vulkan";
     default: return "Unknown";

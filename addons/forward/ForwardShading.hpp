@@ -1,8 +1,8 @@
 #pragma once
 // =============================================================================
 // KROM Engine - addons/forward/ForwardShading.hpp
-// BRDF options of the PBR shaders (pbr_forward_plus.ps.hlsl, pbr_lit.ps.hlsl,
-// pbr_lit.opengl.fs.glsl). Owned by the forward add-on; the shaders read them
+// BRDF options of the PBR shaders (pbr_forward_plus.ps.hlsl, pbr_lit.ps.hlsl).
+// Owned by the forward add-on; the shaders read them
 // from the add-on's frame parameter block (assets/pbr_shading_options.*).
 // All options off = the shading before these options existed, except
 // specularAntiAliasing: on by default, off = no specular AA at all.
@@ -24,12 +24,11 @@ struct ShadingSettings
     // BRDF LUT. Only in shaders built with IBL (the LUT is bound there).
     bool multiScatterCompensation = false;
     // Geometric specular AA (Tokuyoshi/Kaplanyan): roughness widened by the
-    // screen-space variance of the shading normal. HLSL shaders only; the
-    // frozen OpenGL shader keeps its older normal-map-only variant. On by
+    // screen-space variance of the shading normal. On by
     // default: an older variant (normal maps only) was always on before.
     bool specularAntiAliasing = true;
     // Direct diffuse: Burley (Disney) shape instead of Lambert; indirect diffuse
-    // stays Lambert. HLSL shaders only (OpenGL frozen).
+    // stays Lambert.
     bool burleyDiffuse = false;
 
     [[nodiscard]] friend constexpr bool operator==(const ShadingSettings&, const ShadingSettings&) noexcept = default;

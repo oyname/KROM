@@ -64,38 +64,6 @@ float4 main(PSIn input) : SV_TARGET
 }
 )";
 
-constexpr const char* kParticleVsGlsl = R"(#version 450 core
-layout(std140, binding = 0) uniform ParticleFrame
-{
-    mat4 uViewProjection;
-};
-layout(location = 0) in vec3 inPosition;
-layout(location = 4) in vec2 inUv;
-layout(location = 6) in vec4 inColor;
-layout(location = 0) out vec2 vUv;
-layout(location = 1) out vec4 vColor;
-
-void main()
-{
-    gl_Position = uViewProjection * vec4(inPosition, 1.0);
-    vUv = inUv;
-    vColor = inColor;
-}
-)";
-
-constexpr const char* kParticleFsGlsl = R"(#version 450 core
-layout(binding = 8) uniform sampler2D uParticleTex;
-layout(location = 0) in vec2 vUv;
-layout(location = 1) in vec4 vColor;
-layout(location = 0) out vec4 fragColor;
-
-void main()
-{
-    vec4 tex = texture(uParticleTex, vUv);
-    fragColor = vec4(vColor.rgb * tex.rgb, vColor.a * tex.a);
-}
-)";
-
 constexpr uint32_t kInitialVertexCapacity = 6u * 256u;
 constexpr uint32_t kDefaultTextureSize = 64u;
 
@@ -110,14 +78,13 @@ constexpr uint32_t kDefaultTextureSize = 64u;
 [[nodiscard]] ShaderHandle CreateParticleShader(renderer::IDevice& device,
                                                 assets::ShaderTargetProfile target,
                                                 assets::ShaderStage stage,
-                                                assets::ShaderSourceLanguage language,
                                                 const char* source,
                                                 const char* debugName)
 {
     assets::ShaderAsset shader{};
     shader.debugName = debugName;
     shader.stage = stage;
-    shader.sourceLanguage = language;
+    shader.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
     shader.entryPoint = "main";
     shader.sourceCode = source;
 
@@ -125,37 +92,32 @@ constexpr uint32_t kDefaultTextureSize = 64u;
         ? renderer::ShaderStageMask::Vertex
         : renderer::ShaderStageMask::Fragment;
 
-    if (target != assets::ShaderTargetProfile::OpenGL_GLSL450)
+    assets::CompiledShaderArtifact compiled{};
+    std::string error;
+    if (!renderer::ShaderCompiler::CompileForTarget(shader, target, compiled, &error))
     {
-        assets::CompiledShaderArtifact compiled{};
-        std::string error;
-        if (!renderer::ShaderCompiler::CompileForTarget(shader, target, compiled, &error))
-        {
-            Debug::LogError("Particles: failed to compile shader '%s': %s", debugName, error.c_str());
-            return ShaderHandle::Invalid();
-        }
-
-        if (!compiled.bytecode.empty())
-        {
-            return device.CreateShaderFromBytecode(compiled.bytecode.data(),
-                                                   compiled.bytecode.size(),
-                                                   stageMask,
-                                                   debugName);
-        }
-
-        if (target == assets::ShaderTargetProfile::Vulkan_SPIRV)
-        {
-            Debug::LogError("Particles: shader '%s' produced no SPIR-V bytecode", debugName);
-            return ShaderHandle::Invalid();
-        }
-
-        return device.CreateShaderFromSource(compiled.sourceText.empty() ? source : compiled.sourceText,
-                                             stageMask,
-                                             compiled.entryPoint.empty() ? "main" : compiled.entryPoint,
-                                             debugName);
+        Debug::LogError("Particles: failed to compile shader '%s': %s", debugName, error.c_str());
+        return ShaderHandle::Invalid();
     }
 
-    return device.CreateShaderFromSource(source, stageMask, "main", debugName);
+    if (!compiled.bytecode.empty())
+    {
+        return device.CreateShaderFromBytecode(compiled.bytecode.data(),
+                                               compiled.bytecode.size(),
+                                               stageMask,
+                                               debugName);
+    }
+
+    if (target == assets::ShaderTargetProfile::Vulkan_SPIRV)
+    {
+        Debug::LogError("Particles: shader '%s' produced no SPIR-V bytecode", debugName);
+        return ShaderHandle::Invalid();
+    }
+
+    return device.CreateShaderFromSource(compiled.sourceText.empty() ? source : compiled.sourceText,
+                                         stageMask,
+                                         compiled.entryPoint.empty() ? "main" : compiled.entryPoint,
+                                         debugName);
 }
 
 [[nodiscard]] TextureHandle CreateParticleTexture(renderer::IDevice& device, const ParticleImage& image,
@@ -475,14 +437,10 @@ bool ParticleRenderer::EnsureGpuResources(renderer::IDevice& device, uint32_t re
         return false;
 
     const assets::ShaderTargetProfile target = renderer::ShaderCompiler::ResolveTargetProfile(device);
-    const bool useOpenGlShaders = target == assets::ShaderTargetProfile::OpenGL_GLSL450;
-    const auto language = useOpenGlShaders ? assets::ShaderSourceLanguage::GLSL : assets::ShaderSourceLanguage::HLSL;
-    m_gpu.vertexShader = CreateParticleShader(device, target, assets::ShaderStage::Vertex, language,
-                                              useOpenGlShaders ? kParticleVsGlsl : kParticleVsHlsl,
-                                              useOpenGlShaders ? "ParticleVS_GL" : "ParticleVS");
-    m_gpu.fragmentShader = CreateParticleShader(device, target, assets::ShaderStage::Fragment, language,
-                                                useOpenGlShaders ? kParticleFsGlsl : kParticlePsHlsl,
-                                                useOpenGlShaders ? "ParticleFS_GL" : "ParticlePS");
+    m_gpu.vertexShader = CreateParticleShader(device, target, assets::ShaderStage::Vertex,
+                                              kParticleVsHlsl, "ParticleVS");
+    m_gpu.fragmentShader = CreateParticleShader(device, target, assets::ShaderStage::Fragment,
+                                                kParticlePsHlsl, "ParticlePS");
     if (!m_gpu.vertexShader.IsValid() || !m_gpu.fragmentShader.IsValid())
     {
         // Nicht jeden Frame neu versuchen (und neu loggen).

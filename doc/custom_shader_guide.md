@@ -66,27 +66,15 @@ cbuffer PerMaterial : register(b2)
 };
 ```
 
-GLSL (OpenGL) deklariert denselben Block als `layout(std140) uniform PerMaterial`
-mit `vec4` statt `float4`. HLSL- und GLSL-Variante eines Shaders werden je für
-sich ausgewertet und dürfen unterschiedlich angeordnet sein; die Feldnamen
-müssen aber übereinstimmen, sonst fehlen unter einem Backend die Werte.
-
 ### Wie die Offsets ermittelt werden
 
 | Backend | Quelle |
 |---------|--------|
 | DX11 | `D3DReflect` auf dem kompilierten DXBC |
 | Vulkan | Member-Offsets im kompilierten SPIR-V (`-fvk-use-dx-layout`, also HLSL-Packing) |
-| OpenGL | `std140`-Regeln, angewendet auf die Deklaration im GLSL-Quelltext |
-
-Unter OpenGL wertet die Engine die Deklaration selbst aus. Unterstützt sind
-`float`, `int`, `uint`, `bool`, `vec2`–`vec4` (auch `ivec`/`uvec`/`bvec`),
-`mat2`–`mat4` und Arrays mit Zahlenlänge (`float w[4]`). Präprozessorzeilen im
-Block werden ignoriert, also keine Felder per `#ifdef` ein- oder ausblenden.
 
 **Fallback:** Lässt sich der Block nicht auswerten (Shader kompiliert nicht,
-nicht unterstützter Typ wie ein `struct` im GLSL-Block, Backend ohne
-Reflection), schreibt der Editor bzw. die Runtime eine Warnung ins Log und
+Backend ohne Reflection), schreibt der Editor bzw. die Runtime eine Warnung ins Log und
 packt die Werte wie früher in fester Reihenfolge: die neun Felder
 `baseColorFactor` … `materialModel` aus der Tabelle oben (ohne `normalScale`)
 ab Offset 0, eigene Parameter danach in `.mat`-Reihenfolge ab Offset 60. Ein
@@ -128,10 +116,6 @@ Mehr als 16 Textur-Slots (`t0`–`t15`) gibt es nicht.
 aus dem kompilierten Shader und binden die Textur genau dort:
 
 - **DX11 / Vulkan (HLSL):** das `register(tN)` der Deklaration.
-- **OpenGL (GLSL):** `layout(binding = N) uniform sampler2D rauschen;`. Das
-  braucht GLSL 4.20 oder `GL_ARB_shading_language_420pack`. Ohne `binding`
-  bleibt eine eigene Textur unter OpenGL auf Unit 0 (Albedo), weil die Engine
-  nur die Standardnamen per Name zuordnet.
 
 Lässt sich der Shader nicht auswerten (kompiliert nicht, Backend ohne
 Reflection), steht eine Warnung im Log. Eigene Texturen werden dann wie früher
@@ -198,7 +182,7 @@ float3 KromObjectNormalWS(float3 n) {
                   dot(g_kromPerObjectPush.worldInvTRow2, ln));
 }
 #else
-// DX11 / OpenGL: Constant Buffer
+// DX11: Constant Buffer
 cbuffer PerObject : register(b1) {
     float4x4 worldMatrix;
     float4x4 worldMatrixInvT;

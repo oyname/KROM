@@ -21,7 +21,7 @@ struct ShadowFeatureConfig
 // The PBR shaders read them (shaders/pbr_shadow_poisson.*); keep both in sync.
 //   featureParams[5]   = lightSizes: ShadowSettings::lightSize per shadow light 0..3
 //                        (constant-buffer order, shadowLightMeta)
-//   featureParams[6].x = lightSize of the first shadow-casting light (OpenGL, legacy lit)
+//   featureParams[6].x = lightSize of the first shadow-casting light (legacy lit)
 //   featureParams[6].y = filterModes: ShadowFilter per shadow light 0..3, 4 bits each
 // Forward+ reads filter and light size per light from GpuShadowLightData::params.
 struct ShadowFilterFrameParams

@@ -18,7 +18,6 @@ const char* BackendName(DeviceFactory::BackendType backend)
     case DeviceFactory::BackendType::Null:      return "Null";
     case DeviceFactory::BackendType::DirectX11: return "DirectX11";
     case DeviceFactory::BackendType::DirectX12: return "DirectX12";
-    case DeviceFactory::BackendType::OpenGL:    return "OpenGL";
     case DeviceFactory::BackendType::Vulkan:    return "Vulkan";
     default:                                    return "Unknown";
     }
