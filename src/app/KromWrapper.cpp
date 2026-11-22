@@ -1,4 +1,5 @@
 #include "krom.h"
+#include "KromAssetApi.hpp"
 #include "KromEntityApi.hpp"
 #include "KromRenderSettings.hpp"
 #include "KromRuntimeMaterials.hpp"
@@ -281,61 +282,6 @@ const char* BackendName(engine::renderer::DeviceFactory::BackendType backend) no
     }
 }
 
-engine::math::Vec3 ComputeImportedModelCenter(const engine::assets::ImportedAssetBundle& bundle) noexcept
-{
-    using namespace engine;
-    math::Vec3 boundsMin{FLT_MAX, FLT_MAX, FLT_MAX};
-    math::Vec3 boundsMax{-FLT_MAX, -FLT_MAX, -FLT_MAX};
-    bool hasPosition = false;
-
-    std::vector<math::Mat4> nodeWorld(bundle.nodes.size(), math::Mat4::Identity());
-    std::vector<uint8_t> nodeWorldReady(bundle.nodes.size(), 0u);
-    auto resolveNodeWorld = [&](auto&& self, size_t i) -> const math::Mat4& {
-        if (nodeWorldReady[i] != 0u)
-            return nodeWorld[i];
-        const assets::ImportedSceneNode& node = bundle.nodes[i];
-        const math::Mat4 local = math::Mat4::TRS(node.translation, node.rotation, node.scale);
-        if (node.parentIndex >= 0 && static_cast<size_t>(node.parentIndex) < nodeWorld.size())
-            nodeWorld[i] = self(self, static_cast<size_t>(node.parentIndex)) * local;
-        else
-            nodeWorld[i] = local;
-        nodeWorldReady[i] = 1u;
-        return nodeWorld[i];
-    };
-    for (size_t i = 0; i < bundle.nodes.size(); ++i)
-        resolveNodeWorld(resolveNodeWorld, i);
-
-    auto include = [&](const math::Vec3& p) {
-        boundsMin.x = std::min(boundsMin.x, p.x); boundsMax.x = std::max(boundsMax.x, p.x);
-        boundsMin.y = std::min(boundsMin.y, p.y); boundsMax.y = std::max(boundsMax.y, p.y);
-        boundsMin.z = std::min(boundsMin.z, p.z); boundsMax.z = std::max(boundsMax.z, p.z);
-        hasPosition = true;
-    };
-
-    if (!bundle.nodes.empty())
-    {
-        for (size_t ni = 0; ni < bundle.nodes.size(); ++ni)
-        {
-            const assets::ImportedSceneNode& node = bundle.nodes[ni];
-            if (node.meshIndex < 0 || static_cast<size_t>(node.meshIndex) >= bundle.meshes.size())
-                continue;
-            const assets::MeshAsset& mesh = bundle.meshes[static_cast<size_t>(node.meshIndex)];
-            for (const assets::SubMeshData& sm : mesh.submeshes)
-                for (size_t pi = 0; pi + 2 < sm.positions.size(); pi += 3)
-                    include(nodeWorld[ni].TransformPoint({sm.positions[pi], sm.positions[pi + 1], sm.positions[pi + 2]}));
-        }
-    }
-    else
-    {
-        for (const assets::MeshAsset& mesh : bundle.meshes)
-            for (const assets::SubMeshData& sm : mesh.submeshes)
-                for (size_t pi = 0; pi + 2 < sm.positions.size(); pi += 3)
-                    include({sm.positions[pi], sm.positions[pi + 1], sm.positions[pi + 2]});
-    }
-
-    return hasPosition ? (boundsMin + boundsMax) * 0.5f : math::Vec3::Zero();
-}
-
 float ComputeImportedModelRadius(const engine::assets::ImportedAssetBundle& bundle,
                                  const engine::math::Vec3& center) noexcept
 {
@@ -389,14 +335,6 @@ float ComputeImportedModelRadius(const engine::assets::ImportedAssetBundle& bund
     return hasPosition ? std::max(std::sqrt(radiusSq), 0.1f) : 1.0f;
 }
 
-void AddVertex(engine::assets::SubMeshData& submesh, const MeshVertex& vertex)
-{
-    submesh.positions.insert(submesh.positions.end(), {vertex.position.x, vertex.position.y, vertex.position.z});
-    submesh.normals.insert(submesh.normals.end(), {vertex.normal.x, vertex.normal.y, vertex.normal.z});
-    submesh.uvs.insert(submesh.uvs.end(), {vertex.uv.x, vertex.uv.y});
-    submesh.colors.insert(submesh.colors.end(), {vertex.color.x, vertex.color.y, vertex.color.z, vertex.color.w});
-}
-
 internal::RuntimeMaterialContext MakeMaterialContext(State& state)
 {
     return internal::RuntimeMaterialContext{
@@ -425,47 +363,6 @@ internal::SceneContext MakeSceneContext(State& state)
 internal::EntityContext MakeEntityContext(State& state)
 {
     return internal::EntityContext{state.world.get(), state.transformSystem, state.boundsSystem};
-}
-
-LPMESH RegisterProceduralMesh(State& state, engine::assets::SubMeshData submesh, const char* name, bool generateTangents)
-{
-    if (submesh.positions.empty())
-        return NULL_MESH;
-
-    GenerateMissingNormals(submesh);
-    if (submesh.uvs.empty())
-        submesh.uvs.assign((submesh.positions.size() / 3u) * 2u, 0.0f);
-    if (submesh.colors.empty())
-        submesh.colors.assign((submesh.positions.size() / 3u) * 4u, 1.0f);
-    if (generateTangents)
-        (void)engine::assets::EnsureTangents(submesh);
-
-    auto mesh = std::make_unique<engine::assets::MeshAsset>();
-    mesh->debugName = (name && name[0] != '\0') ? name : "KromProceduralMesh";
-    mesh->path = mesh->debugName;
-    mesh->state = engine::assets::AssetState::Loaded;
-    mesh->submeshes.push_back(std::move(submesh));
-    mesh->gpuStatus.dirty = true;
-    return state.assetRegistry.meshes.Add(std::move(mesh));
-}
-
-LPENTITY CreateProceduralEntity(State& state, LPMESH mesh, const char* name)
-{
-    if (!mesh.IsValid())
-        return NULL_LPENTITY;
-
-    LPENTITY entity = CreateEntity((name && name[0] != '\0') ? name : "ProceduralEntity");
-    if (!entity.IsValid() || !SetMesh(entity, mesh))
-        return NULL_LPENTITY;
-
-    const LPMATERIAL material = internal::BuildCodeMaterial(MakeMaterialContext(state),
-        nullptr,
-        engine::math::Vec4{0.82f, 0.82f, 0.78f, 1.0f},
-        0.8f,
-        0.0f);
-    if (material.IsValid())
-        (void)SetMaterial(entity, material);
-    return entity;
 }
 
 static LPENTITY InstantiatePrefabForScript(State& state,
@@ -793,39 +690,6 @@ static bool ReadProjectFile(State& state, const char* projectFilePath)
 
 // =============================================================================
 
-void ApplyMaterialRecursive(State& state, engine::ecs::World& world, LPENTITY entity, LPMATERIAL material)
-{
-    if (!world.IsAlive(entity))
-        return;
-
-    if (world.Has<engine::MeshComponent>(entity))
-    {
-        const LPMATERIAL runtimeMat = internal::RealizeMaterialForEntity(MakeMaterialContext(state), entity, material);
-        if (!world.Has<engine::MaterialComponent>(entity))
-            world.Add<engine::MaterialComponent>(entity, engine::MaterialComponent{runtimeMat});
-        else
-            world.Get<engine::MaterialComponent>(entity)->material = runtimeMat;
-    }
-
-    if (const auto* children = world.Get<engine::ChildrenComponent>(entity))
-    {
-        for (const LPENTITY child : children->children)
-            ApplyMaterialRecursive(state, world, child, material);
-    }
-}
-
-bool BundleHasSkeletonsOrAnimations(const engine::assets::ImportedAssetBundle& bundle) noexcept
-{
-    if (!bundle.skeletons.empty() || !bundle.animations.empty())
-        return true;
-    for (const auto& mesh : bundle.meshes)
-    {
-        if (mesh.HasSkinning())
-            return true;
-    }
-    return false;
-}
-
 void EnsureAnimationSystems(State& state)
 {
     if (!state.animationSystem)
@@ -841,6 +705,15 @@ void EnsureAnimationSystems(State& state)
             state.skinningSystem = std::make_unique<engine::addons::animation::SkinningSystem>(
                 *device, &state.assetRegistry);
     }
+}
+
+internal::AssetContext MakeAssetContext(State& state)
+{
+    return internal::AssetContext{
+        state.initialized, state.world.get(), state.assetPipeline.get(), state.assetRegistry,
+        state.transformSystem, state.boundsSystem, state.scriptAddonRegistry,
+        [] { EnsureAnimationSystems(Get()); },
+        MakeMaterialContext(state)};
 }
 
 void RegisterEngineComponents(State& state)
@@ -1638,211 +1511,30 @@ LPENTITY CreateSpotLight(const char* name,
     return internal::CreateSpotLight(Get().world.get(), name, position, eulerDeg, color, intensity, range, innerDeg, outerDeg);
 }
 
+// =============================================================================
+// Assets: model import, loading, materials, assignment, procedural meshes
+// (KromAssetApi.cpp)
+// =============================================================================
+
 LPENTITY CreateEntityFromAsset(const char* path, const char* name)
 {
-    State& state = Get();
-    if (!state.world || !state.assetPipeline || !path || path[0] == '\0')
-        return NULL_LPENTITY;
-
-    // Format-agnostisch: AssetPipeline wählt den passenden registrierten Importer.
-    // Ob GLB, FBX, OBJ oder ein anderes Format — der Wrapper muss es nicht wissen.
-    engine::assets::ImportedAssetBundle bundle = state.assetPipeline->ImportBundle(path);
-
-    if (bundle.Ok())
-    {
-        const std::filesystem::path logicalPath = PathFromUtf8(path);
-
-        const engine::math::Vec3 modelCenter = ComputeImportedModelCenter(bundle);
-        const bool needsAnimationSystems = BundleHasSkeletonsOrAnimations(bundle);
-        if (needsAnimationSystems)
-            EnsureAnimationSystems(state);
-
-        engine::assets::MeshAsset* sharedFallbackMesh =
-            !bundle.meshes.empty() ? &bundle.meshes[0] : nullptr;
-        const engine::assets::MaterialAsset* sharedFallbackAsset =
-            !bundle.materials.empty() ? &bundle.materials[0] : nullptr;
-        const std::string sharedFallbackName =
-            ((name && name[0] != '\0') ? std::string(name) : PathToUtf8(logicalPath.stem())) + "_SharedRuntimeMaterial";
-        const engine::MaterialHandle sharedFallbackMaterial =
-            sharedFallbackMesh
-                ? internal::CreateRuntimeLitMaterialFromAssets(
-                    MakeMaterialContext(state), *sharedFallbackMesh, sharedFallbackAsset, sharedFallbackName.c_str())
-                : engine::MaterialHandle::Invalid();
-
-        engine::addons::prefab::PrefabBuildOptions buildOptions;
-        buildOptions.name = (name && name[0] != '\0') ? name : PathToUtf8(logicalPath.stem());
-        buildOptions.createSyntheticRoot = true;
-        buildOptions.playFirstAnimation = true;
-        buildOptions.loopAnimations = true;
-
-        engine::addons::prefab::PrefabAsset prefab =
-            engine::addons::prefab::BuildPrefabFromImportedBundle(
-                std::move(bundle), state.assetRegistry, buildOptions);
-
-        for (engine::addons::prefab::PrefabEntityRecord& record : prefab.records)
-        {
-            if (record.parentIndex == static_cast<int32_t>(prefab.rootIndex))
-                record.localPosition -= modelCenter;
-
-            if (record.mesh.IsValid())
-            {
-                auto* meshAsset = state.assetRegistry.meshes.Get(record.mesh);
-                const auto* materialAsset = record.material.IsValid()
-                    ? state.assetRegistry.materials.Get(record.material)
-                    : nullptr;
-                if (meshAsset)
-                {
-                    const std::string runtimeName = !record.name.empty()
-                        ? record.name + "_RuntimeMaterial"
-                        : buildOptions.name + "_RuntimeMaterial";
-                    const engine::MaterialHandle runtimeMaterial =
-                        internal::CreateRuntimeLitMaterialFromAssets(MakeMaterialContext(state), *meshAsset, materialAsset, runtimeName.c_str());
-                    record.material = runtimeMaterial.IsValid() ? runtimeMaterial : sharedFallbackMaterial;
-                    if (!record.material.IsValid())
-                        engine::Debug::LogError("krom.h: kein Material für Node '%s' in '%s'",
-                            record.name.c_str(), path);
-                }
-            }
-        }
-
-        engine::addons::prefab::PrefabInstantiateOptions options{};
-        options.scriptRegistry = &state.scriptAddonRegistry;
-        const engine::addons::prefab::PrefabInstance instance =
-            engine::addons::prefab::InstantiatePrefab(*state.world, prefab, options);
-        if (!instance.IsValid())
-        {
-            engine::Debug::LogError("krom.h: Instantiierung fehlgeschlagen: '%s'", path);
-            return NULL_LPENTITY;
-        }
-        for (const LPENTITY instantiatedEntity : instance.entities)
-        {
-            if (instantiatedEntity.IsValid() && state.world->Has<engine::MeshComponent>(instantiatedEntity))
-                engine::mesh_renderer::UpdateLocalBoundsForEntity(*state.world, instantiatedEntity, state.assetRegistry);
-        }
-        state.transformSystem.Update(*state.world);
-        state.boundsSystem.Update(*state.world);
-        return instance.root;
-    }
-
-    // Fallback: kein Importer registriert → einfaches Single-Mesh-Entity
-    engine::Debug::Log("krom.h: kein Bundle-Importer für '%s', lade als einfaches Mesh", path);
-    const LPENTITY entity = CreateEntity(name ? name : path);
-    if (!entity.IsValid())
-        return NULL_LPENTITY;
-    return SetMeshFromAsset(entity, path) ? entity : NULL_LPENTITY;
+    return internal::CreateEntityFromAsset(MakeAssetContext(Get()), path, name);
 }
 
 bool PrintAssetTree(const char* path)
 {
-    State& state = Get();
-    if (!state.assetPipeline || !path || path[0] == '\0')
-    {
-        engine::Debug::LogError("krom.h: PrintAssetTree requires Graphics3D/Graphics and a valid path");
-        return false;
-    }
-
-    const engine::assets::ImportedAssetBundle bundle = state.assetPipeline->ImportBundle(path);
-    if (!bundle.Ok())
-    {
-        engine::Debug::LogError("krom.h: PrintAssetTree import failed for '%s': %s",
-            path, bundle.error.c_str());
-        return false;
-    }
-
-    engine::Debug::Log("Asset tree: %s", path);
-    engine::Debug::Log("  nodes=%zu meshes=%zu materials=%zu skeletons=%zu animations=%zu",
-        bundle.nodes.size(),
-        bundle.meshes.size(),
-        bundle.materials.size(),
-        bundle.skeletons.size(),
-        bundle.animations.size());
-
-    std::vector<std::vector<size_t>> children(bundle.nodes.size());
-    std::vector<size_t> roots;
-    for (size_t i = 0; i < bundle.nodes.size(); ++i)
-    {
-        const int32_t parent = bundle.nodes[i].parentIndex;
-        if (parent >= 0 && static_cast<size_t>(parent) < bundle.nodes.size())
-            children[static_cast<size_t>(parent)].push_back(i);
-        else
-            roots.push_back(i);
-    }
-
-    const auto printMesh = [&](int32_t meshIndex, const std::string& indent)
-    {
-        if (meshIndex < 0 || static_cast<size_t>(meshIndex) >= bundle.meshes.size())
-            return;
-
-        const engine::assets::MeshAsset& mesh = bundle.meshes[static_cast<size_t>(meshIndex)];
-        engine::Debug::Log("%s  mesh[%d] submeshes=%zu materials=%zu",
-            indent.c_str(), meshIndex, mesh.submeshes.size(), mesh.materialHandles.size());
-        for (size_t si = 0; si < mesh.submeshes.size(); ++si)
-        {
-            const engine::assets::SubMeshData& submesh = mesh.submeshes[si];
-            engine::Debug::Log("%s    submesh[%zu] vertices=%zu indices=%zu materialIndex=%u",
-                indent.c_str(),
-                si,
-                submesh.positions.size() / 3u,
-                submesh.indices.size(),
-                submesh.materialIndex);
-        }
-    };
-
-    std::function<void(size_t, std::string)> printNode =
-        [&](size_t nodeIndex, std::string indent)
-    {
-        const engine::assets::ImportedSceneNode& node = bundle.nodes[nodeIndex];
-        const char* nodeName = node.name.empty() ? "<unnamed>" : node.name.c_str();
-        engine::Debug::Log("%snode[%zu] '%s' parent=%d mesh=%d skin=%d",
-            indent.c_str(),
-            nodeIndex,
-            nodeName,
-            node.parentIndex,
-            node.meshIndex,
-            node.skinIndex);
-        printMesh(node.meshIndex, indent);
-        for (const size_t child : children[nodeIndex])
-            printNode(child, indent + "  ");
-    };
-
-    if (bundle.nodes.empty())
-    {
-        for (size_t meshIndex = 0; meshIndex < bundle.meshes.size(); ++meshIndex)
-            printMesh(static_cast<int32_t>(meshIndex), "  ");
-    }
-    else
-    {
-        for (const size_t root : roots)
-            printNode(root, "  ");
-    }
-
-    for (size_t i = 0; i < bundle.materials.size(); ++i)
-    {
-        const engine::assets::MaterialAsset& material = bundle.materials[i];
-        engine::Debug::Log("  material[%zu] name='%s' template='%s' baseColor='%s' normal='%s' orm='%s'",
-            i,
-            material.debugName.empty() ? "<unnamed>" : material.debugName.c_str(),
-            material.templateName.c_str(),
-            material.baseColorTexture.path.c_str(),
-            material.normalTexture.path.c_str(),
-            material.metallicRoughnessTexture.path.c_str());
-    }
-
-    return true;
+    return internal::PrintAssetTree(Get().assetPipeline.get(), path);
 }
 
 LPMESH LoadMesh(const char* path)
 {
-    return (Get().assetPipeline && path) ? Get().assetPipeline->LoadMesh(path) : NULL_MESH;
+    return internal::LoadMesh(Get().assetPipeline.get(), path);
 }
 
 LPTEXTURE LoadTexture(const char* path)
 {
     State& state = Get();
-    const LPTEXTURE texture = (state.assetPipeline && path) ? state.assetPipeline->LoadTexture(path) : NULL_TEXTURE;
-    if (texture.IsValid() && path && path[0] != '\0')
-        state.texturePaths[texture.value] = path;
-    return texture;
+    return internal::LoadTexture(state.assetPipeline.get(), state.texturePaths, path);
 }
 
 LPMATERIAL CreateTextureMaterial(const char* albedoTexturePath,
@@ -1851,17 +1543,8 @@ LPMATERIAL CreateTextureMaterial(const char* albedoTexturePath,
                                  float roughness,
                                  float metallic)
 {
-    State& state = Get();
-    if (!state.initialized)
-        return NULL_MATERIAL;
-
-    if (materialModel != MaterialModel::Lit)
-    {
-        engine::Debug::LogWarning(
-            "krom.h: CreateTextureMaterial currently supports Lit for EntityTexture; use .mat/PBR workflow for advanced materials");
-    }
-
-    return internal::BuildCodeMaterial(MakeMaterialContext(state), albedoTexturePath, baseColorFactor, roughness, metallic);
+    return internal::CreateTextureMaterial(MakeAssetContext(Get()),
+        albedoTexturePath, materialModel, baseColorFactor, roughness, metallic);
 }
 
 LPMATERIAL CreateTextureMaterial(LPTEXTURE texture,
@@ -1870,172 +1553,68 @@ LPMATERIAL CreateTextureMaterial(LPTEXTURE texture,
                                  float roughness,
                                  float metallic)
 {
-    State& state = Get();
-    const auto it = state.texturePaths.find(texture.value);
-    if (it == state.texturePaths.end())
-    {
-        engine::Debug::LogError("krom.h: texture handle has no known path; load it through Krom::LoadTexture/LoadTexture first");
-        return NULL_MATERIAL;
-    }
-    return CreateTextureMaterial(it->second.c_str(), materialModel, baseColorFactor, roughness, metallic);
+    return internal::CreateTextureMaterial(MakeAssetContext(Get()),
+        texture, materialModel, baseColorFactor, roughness, metallic);
 }
 
 LPMATERIAL LoadMaterial(const char* path)
 {
-    return (Get().assetPipeline && path) ? Get().assetPipeline->LoadMaterial(path) : NULL_MATERIAL;
+    return internal::LoadMaterial(Get().assetPipeline.get(), path);
 }
 
 bool SetMesh(LPENTITY entity, LPMESH mesh)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity) || !mesh.IsValid())
-        return false;
-
-    if (!state.world->Has<engine::MeshComponent>(entity))
-        state.world->Add<engine::MeshComponent>(entity, engine::MeshComponent{mesh});
-    else
-        state.world->Get<engine::MeshComponent>(entity)->mesh = mesh;
-
-    if (!state.world->Has<engine::BoundsComponent>(entity))
-        state.world->Add<engine::BoundsComponent>(entity);
-    engine::mesh_renderer::UpdateLocalBoundsForEntity(*state.world, entity, state.assetRegistry);
-
-    // Objekt ohne Material → Default-Lit (matt, weiß) zuweisen, damit es
-    // sichtbar gerendert wird statt im Renderer übersprungen zu werden.
-    internal::EnsureDefaultMaterialForEntity(MakeMaterialContext(state), entity);
-    return true;
+    return internal::SetMesh(MakeAssetContext(Get()), entity, mesh);
 }
 
 bool SetMaterial(LPENTITY entity, LPMATERIAL material)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity) || !material.IsValid())
-        return false;
-
-    const LPMATERIAL runtimeMat = internal::RealizeMaterialForEntity(MakeMaterialContext(state), entity, material);
-    if (!state.world->Has<engine::MaterialComponent>(entity))
-        state.world->Add<engine::MaterialComponent>(entity, engine::MaterialComponent{runtimeMat});
-    else
-        state.world->Get<engine::MaterialComponent>(entity)->material = runtimeMat;
-    return true;
+    return internal::SetMaterial(MakeAssetContext(Get()), entity, material);
 }
 
 bool SetMaterialRecursive(LPENTITY rootEntity, LPMATERIAL material)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(rootEntity) || !material.IsValid())
-        return false;
-
-    ApplyMaterialRecursive(state, *state.world, rootEntity, material);
-    return true;
+    return internal::SetMaterialRecursive(MakeAssetContext(Get()), rootEntity, material);
 }
 
 bool SetTexture(LPENTITY entity, const char* albedoTexturePath, int materialModel, bool recursive)
 {
-    if (!albedoTexturePath || albedoTexturePath[0] == '\0')
-        return false;
-
-    const LPMATERIAL material = CreateTextureMaterial(albedoTexturePath, materialModel);
-    if (!material.IsValid())
-        return false;
-
-    return recursive ? SetMaterialRecursive(entity, material) : SetMaterial(entity, material);
+    return internal::SetTexture(MakeAssetContext(Get()), entity, albedoTexturePath, materialModel, recursive);
 }
 
 bool SetTexture(LPENTITY entity, LPTEXTURE texture, int materialModel, bool recursive)
 {
-    const LPMATERIAL material = CreateTextureMaterial(texture, materialModel);
-    if (!material.IsValid())
-        return false;
-
-    return recursive ? SetMaterialRecursive(entity, material) : SetMaterial(entity, material);
+    return internal::SetTexture(MakeAssetContext(Get()), entity, texture, materialModel, recursive);
 }
 
 bool SetPBR(LPENTITY entity, const PBR& materialDesc, bool recursive)
 {
-    State& state = Get();
-    if (!state.initialized || !state.world || !state.world->IsAlive(entity))
-        return false;
-
-    const LPMATERIAL material = internal::BuildPbrCodeMaterial(MakeMaterialContext(state), materialDesc);
-    if (!material.IsValid())
-        return false;
-
-    return recursive ? SetMaterialRecursive(entity, material) : SetMaterial(entity, material);
+    return internal::SetPBR(MakeAssetContext(Get()), entity, materialDesc, recursive);
 }
 
 bool SetMeshFromAsset(LPENTITY entity, const char* path)
 {
-    const LPMESH mesh = LoadMesh(path);
-    return mesh.IsValid() && SetMesh(entity, mesh);
+    return internal::SetMeshFromAsset(MakeAssetContext(Get()), entity, path);
 }
 
 bool SetMaterialFromAsset(LPENTITY entity, const char* path)
 {
-    State& state = Get();
-    const LPMATERIAL material = LoadMaterial(path);
-    if (!material.IsValid())
-        return false;
-
-    const bool ok = SetMaterial(entity, material);
-    if (ok && state.world->Has<engine::MaterialComponent>(entity))
-        state.world->Get<engine::MaterialComponent>(entity)->materialAssetPath = path ? path : "";
-    return ok;
+    return internal::SetMaterialFromAsset(MakeAssetContext(Get()), entity, path);
 }
 
 LPMESH CreateMeshAsset(const MeshData& meshData)
 {
-    State& state = Get();
-    if (!state.initialized || !meshData.vertices || meshData.vertexCount == 0u)
-        return NULL_MESH;
-
-    engine::assets::SubMeshData submesh;
-    submesh.positions.reserve(static_cast<size_t>(meshData.vertexCount) * 3u);
-    submesh.normals.reserve(static_cast<size_t>(meshData.vertexCount) * 3u);
-    submesh.uvs.reserve(static_cast<size_t>(meshData.vertexCount) * 2u);
-    submesh.colors.reserve(static_cast<size_t>(meshData.vertexCount) * 4u);
-
-    for (uint32_t i = 0u; i < meshData.vertexCount; ++i)
-        AddVertex(submesh, meshData.vertices[i]);
-
-    if (meshData.indices && meshData.indexCount > 0u)
-        submesh.indices.assign(meshData.indices, meshData.indices + meshData.indexCount);
-    else
-    {
-        submesh.indices.reserve(meshData.vertexCount);
-        for (uint32_t i = 0u; i < meshData.vertexCount; ++i)
-            submesh.indices.push_back(i);
-    }
-
-    if (meshData.generateNormals)
-        GenerateMissingNormals(submesh);
-    return RegisterProceduralMesh(state, std::move(submesh), meshData.name, meshData.generateTangents);
+    return internal::CreateMeshAsset(MakeAssetContext(Get()), meshData);
 }
 
 LPENTITY CreateMeshEntity(const MeshData& meshData)
 {
-    State& state = Get();
-    const LPMESH mesh = CreateMeshAsset(meshData);
-    return CreateProceduralEntity(state, mesh, meshData.name);
+    return internal::CreateMeshEntity(MakeAssetContext(Get()), meshData);
 }
 
 LPENTITY CreateMesh(const char* name)
 {
-    State& state = Get();
-    if (!state.initialized || !state.world)
-        return NULL_LPENTITY;
-
-    auto meshAsset = std::make_unique<engine::assets::MeshAsset>();
-    meshAsset->debugName = (name && name[0] != '\0') ? name : "Mesh";
-    meshAsset->path = meshAsset->debugName;
-    meshAsset->state = engine::assets::AssetState::Loaded;
-    meshAsset->gpuStatus.dirty = true;
-
-    const LPMESH mesh = state.assetRegistry.meshes.Add(std::move(meshAsset));
-    LPENTITY entity = CreateEntity((name && name[0] != '\0') ? name : "Mesh");
-    if (!entity.IsValid() || !SetMesh(entity, mesh))
-        return NULL_LPENTITY;
-    return entity;
+    return internal::CreateMesh(MakeAssetContext(Get()), name);
 }
 
 LPSURFACE CreateSurface(LPENTITY meshEntity)
@@ -2095,10 +1674,7 @@ LPMATERIAL CreateLitMaterial(const char* albedoTexturePath,
                               float roughness,
                               float metallic)
 {
-    State& state = Get();
-    if (!state.initialized)
-        return NULL_MATERIAL;
-    return internal::BuildCodeMaterial(MakeMaterialContext(state), albedoTexturePath, baseColorFactor, roughness, metallic);
+    return internal::CreateLitMaterial(MakeAssetContext(Get()), albedoTexturePath, baseColorFactor, roughness, metallic);
 }
 
 engine::renderer::EnvironmentHandle CreateEnvironmentFromHDR(const char* path,
@@ -2410,7 +1986,7 @@ int SpawnShaderWarmupAssets()
             const LPMATERIAL material = LoadMaterial(path.c_str());
             if (!material.IsValid())
                 continue;
-            const LPENTITY entity = CreateProceduralEntity(state, cube, "__WarmupMaterial");
+            const LPENTITY entity = internal::CreateProceduralEntity(MakeAssetContext(state), cube, "__WarmupMaterial");
             if (!entity.IsValid())
                 continue;
             (void)SetMaterial(entity, material);
