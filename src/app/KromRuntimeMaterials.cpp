@@ -20,6 +20,7 @@
 #include <array>
 #include <memory>
 #include <string_view>
+#include <system_error>
 #include <vector>
 
 using engine::PathFromUtf8;
@@ -749,25 +750,29 @@ LPMATERIAL RealizeMaterialForEntity(const RuntimeMaterialContext& ctx, LPENTITY 
     return realized.IsValid() ? realized : material;
 }
 
-static bool ParseImportedMeshAssetPath(const std::string& assetPath,
-                                       std::string& basePath,
-                                       size_t& meshIndex)
+// Parses a sub-asset key "<file>#<kind>/<n>" (kind e.g. "mesh/" or "material/").
+static bool ParseSubAssetKey(const std::string& assetPath,
+                             std::string_view kindPrefix,
+                             std::string& basePath,
+                             size_t& index)
 {
     const size_t hashPos = assetPath.rfind('#');
-    if (hashPos == std::string::npos)
+    if (hashPos == std::string::npos || hashPos == 0u)
         return false;
 
-    constexpr std::string_view meshPrefix = "mesh/";
     const std::string_view fragment(assetPath.data() + hashPos + 1u,
                                     assetPath.size() - hashPos - 1u);
-    if (fragment.size() <= meshPrefix.size() ||
-        fragment.compare(0u, meshPrefix.size(), meshPrefix) != 0)
+    if (fragment.size() <= kindPrefix.size() ||
+        fragment.compare(0u, kindPrefix.size(), kindPrefix) != 0)
+        return false;
+
+    const std::string_view digits = fragment.substr(kindPrefix.size());
+    if (!std::all_of(digits.begin(), digits.end(), [](char c) { return c >= '0' && c <= '9'; }))
         return false;
 
     try
     {
-        meshIndex = static_cast<size_t>(std::stoul(
-            std::string(fragment.substr(meshPrefix.size()))));
+        index = static_cast<size_t>(std::stoul(std::string(digits)));
     }
     catch (const std::exception&)
     {
@@ -815,11 +820,73 @@ static bool MaterialComponentHasExplicitAssignment(const engine::MaterialCompone
     return false;
 }
 
-void ApplyImportedMeshMaterialsForEntity(
-                                         const RuntimeMaterialContext& ctx,
+// Model path as used for cache keys: relative to the asset root, like the
+// mesh paths after ResolveMeshAssetBindings (older scenes store absolute paths).
+static std::string NormalizedModelPath(const RuntimeMaterialContext& ctx, const std::string& basePath)
+{
+    return ctx.assetPipeline ? ctx.assetPipeline->ToAssetRelative(PathFromUtf8(basePath)) : basePath;
+}
+
+// The imported model, imported once per scene load. A missing file or a failed
+// import is cached too (bundle with error); returns null then.
+static const engine::assets::ImportedAssetBundle* GetImportedBundle(const RuntimeMaterialContext& ctx,
+                                                                    ImportedMaterialCache& cache,
+                                                                    const std::string& modelPath)
+{
+    if (auto cached = cache.bundles.find(modelPath); cached != cache.bundles.end())
+        return cached->second.Ok() ? &cached->second : nullptr;
+
+    engine::assets::ImportedAssetBundle imported;
+    std::filesystem::path resolved = PathFromUtf8(modelPath);
+    if (!resolved.is_absolute() && !ctx.assetPipeline->GetAssetRoot().empty())
+        resolved = ctx.assetPipeline->GetAssetRoot() / resolved;
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(resolved, ec))
+        imported.error = "model file not found: '" + PathToGenericUtf8(resolved) + "'";
+    else
+    {
+        imported = ctx.assetPipeline->ImportBundle(modelPath);
+        if (imported.Ok() && imported.meshes.empty() && imported.materials.empty())
+            imported.error = "the import has no meshes and no materials";
+    }
+
+    auto [it, inserted] = cache.bundles.emplace(modelPath, std::move(imported));
+    (void)inserted;
+    return it->second.Ok() ? &it->second : nullptr;
+}
+
+// Runtime material of material materialIndex of the model for the vertex layout
+// of runtimeMesh; built once per (mesh, model material) and scene load.
+static LPMATERIAL GetOrCreateImportedRuntimeMaterial(const RuntimeMaterialContext& ctx,
+                                                     ImportedMaterialCache& cache,
+                                                     const std::string& meshAssetPath,
+                                                     engine::assets::MeshAsset& runtimeMesh,
+                                                     const std::string& modelPath,
+                                                     const engine::assets::ImportedAssetBundle& bundle,
+                                                     size_t materialIndex)
+{
+    if (materialIndex >= bundle.materials.size())
+        return LPMATERIAL::Invalid();
+
+    const std::string cacheKey =
+        meshAssetPath + "|" + modelPath + "#material/" + std::to_string(materialIndex);
+    if (const auto cached = cache.runtimeMaterials.find(cacheKey); cached != cache.runtimeMaterials.end())
+        return cached->second;
+
+    const engine::assets::MaterialAsset& importedMaterial = bundle.materials[materialIndex];
+    const std::string runtimeName = importedMaterial.debugName.empty()
+        ? (PathToUtf8(PathFromUtf8(modelPath).stem()) + "_mat" + std::to_string(materialIndex))
+        : importedMaterial.debugName;
+    const LPMATERIAL runtimeMaterial = CreateRuntimeMaterialFromImportedAsset(
+        ctx, runtimeMesh, importedMaterial, runtimeName.c_str());
+    if (runtimeMaterial.IsValid())
+        cache.runtimeMaterials[cacheKey] = runtimeMaterial;
+    return runtimeMaterial;
+}
+
+void ApplyImportedMeshMaterialsForEntity(const RuntimeMaterialContext& ctx,
                                          LPENTITY entity,
-                                         std::unordered_map<std::string, engine::assets::ImportedAssetBundle>& bundleCache,
-                                         std::unordered_map<std::string, LPMATERIAL>& runtimeMaterialCache)
+                                         ImportedMaterialCache& cache)
 {
     if (!ctx.world || !ctx.assetPipeline || !ctx.world->IsAlive(entity))
         return;
@@ -834,24 +901,11 @@ void ApplyImportedMeshMaterialsForEntity(
 
     std::string basePath;
     size_t meshIndex = 0u;
-    if (!ParseImportedMeshAssetPath(meshComp->meshAssetPath, basePath, meshIndex))
+    if (!ParseSubAssetKey(meshComp->meshAssetPath, "mesh/", basePath, meshIndex))
         return;
 
-    engine::assets::ImportedAssetBundle* bundle = nullptr;
-    if (auto cached = bundleCache.find(basePath); cached != bundleCache.end())
-    {
-        bundle = &cached->second;
-    }
-    else
-    {
-        engine::assets::ImportedAssetBundle imported = ctx.assetPipeline->ImportBundle(basePath);
-        if (!imported.Ok())
-            return;
-        auto [it, inserted] = bundleCache.emplace(basePath, std::move(imported));
-        (void)inserted;
-        bundle = &it->second;
-    }
-
+    const std::string modelPath = NormalizedModelPath(ctx, basePath);
+    const engine::assets::ImportedAssetBundle* bundle = GetImportedBundle(ctx, cache, modelPath);
     if (!bundle || meshIndex >= bundle->meshes.size())
         return;
 
@@ -866,31 +920,8 @@ void ApplyImportedMeshMaterialsForEntity(
 
     std::vector<LPMATERIAL> runtimeMaterials(requiredSlots, LPMATERIAL::Invalid());
     for (uint32_t slotIndex = 0u; slotIndex < requiredSlots; ++slotIndex)
-    {
-        if (slotIndex >= bundle->materials.size())
-            continue;
-
-        const engine::assets::MaterialAsset& importedMaterial = bundle->materials[slotIndex];
-        const std::string cacheKey =
-            meshComp->meshAssetPath + "#mat/" + std::to_string(slotIndex);
-        if (const auto cached = runtimeMaterialCache.find(cacheKey);
-            cached != runtimeMaterialCache.end())
-        {
-            runtimeMaterials[slotIndex] = cached->second;
-            continue;
-        }
-
-        const std::string runtimeName = importedMaterial.debugName.empty()
-            ? (PathToUtf8(PathFromUtf8(basePath).stem()) + "_mat" + std::to_string(slotIndex))
-            : importedMaterial.debugName;
-        const LPMATERIAL runtimeMaterial = CreateRuntimeMaterialFromImportedAsset(
-            ctx, *runtimeMesh, importedMaterial, runtimeName.c_str());
-        if (runtimeMaterial.IsValid())
-        {
-            runtimeMaterialCache[cacheKey] = runtimeMaterial;
-            runtimeMaterials[slotIndex] = runtimeMaterial;
-        }
-    }
+        runtimeMaterials[slotIndex] = GetOrCreateImportedRuntimeMaterial(
+            ctx, cache, meshComp->meshAssetPath, *runtimeMesh, modelPath, *bundle, slotIndex);
 
     if (!material)
     {
@@ -927,6 +958,121 @@ void ApplyImportedMeshMaterialsForEntity(
         }
         if (!slot->material.IsValid() && slot->materialAssetPath.empty())
             slot->material = runtimeMaterials[materialIndex];
+    }
+}
+
+bool IsImportedMaterialKey(const std::string& materialAssetPath, const std::string& materialOverrideSource)
+{
+    std::string basePath;
+    size_t index = 0u;
+    return materialOverrideSource.empty() &&
+           ParseSubAssetKey(materialAssetPath, "material/", basePath, index);
+}
+
+void ApplyImportedMaterialKeysForEntity(const RuntimeMaterialContext& ctx,
+                                        LPENTITY entity,
+                                        ImportedMaterialCache& cache)
+{
+    if (!ctx.world || !ctx.assetPipeline || !ctx.world->IsAlive(entity))
+        return;
+
+    const auto* meshComp = ctx.world->Get<engine::MeshComponent>(entity);
+    auto* material = ctx.world->Get<engine::MaterialComponent>(entity);
+    if (!meshComp || !meshComp->mesh.IsValid() || !material)
+        return;
+
+    engine::assets::MeshAsset* runtimeMesh = ctx.assetRegistry.meshes.Get(meshComp->mesh);
+    if (!runtimeMesh || runtimeMesh->submeshes.empty())
+        return;
+
+    // One error per unresolvable key and scene load.
+    const auto report = [&](const std::string& key, const std::string& reason) {
+        if (cache.reportedKeys.insert(key).second)
+            engine::Debug::LogError("krom.h: scene material '%s' could not be resolved: %s; "
+                                    "the default material is used", key.c_str(), reason.c_str());
+    };
+
+    // Runtime material for a "<model>#material/<n>" key; Invalid if unresolvable.
+    const auto resolve = [&](const std::string& key, std::string* outModelPath,
+                             const engine::assets::ImportedAssetBundle** outBundle) -> LPMATERIAL {
+        std::string basePath;
+        size_t materialIndex = 0u;
+        if (!ParseSubAssetKey(key, "material/", basePath, materialIndex))
+            return LPMATERIAL::Invalid();
+        const std::string modelPath = NormalizedModelPath(ctx, basePath);
+        const engine::assets::ImportedAssetBundle* bundle = GetImportedBundle(ctx, cache, modelPath);
+        if (!bundle)
+        {
+            const auto failed = cache.bundles.find(modelPath);
+            report(key, failed != cache.bundles.end() ? failed->second.error : std::string("model import failed"));
+            return LPMATERIAL::Invalid();
+        }
+        if (materialIndex >= bundle->materials.size())
+        {
+            report(key, bundle->materials.empty()
+                ? "the model '" + modelPath + "' has no materials"
+                : "the model '" + modelPath + "' has " + std::to_string(bundle->materials.size()) +
+                  " materials, index " + std::to_string(materialIndex) + " is out of range");
+            return LPMATERIAL::Invalid();
+        }
+        const LPMATERIAL runtimeMaterial = GetOrCreateImportedRuntimeMaterial(
+            ctx, cache, meshComp->meshAssetPath, *runtimeMesh, modelPath, *bundle, materialIndex);
+        if (!runtimeMaterial.IsValid())
+        {
+            report(key, "the runtime material could not be built");
+            return LPMATERIAL::Invalid();
+        }
+        if (outModelPath) *outModelPath = modelPath;
+        if (outBundle) *outBundle = bundle;
+        return runtimeMaterial;
+    };
+
+    if (IsImportedMaterialKey(material->materialAssetPath, material->materialOverrideSource))
+    {
+        std::string modelPath;
+        const engine::assets::ImportedAssetBundle* bundle = nullptr;
+        const LPMATERIAL resolved = resolve(material->materialAssetPath, &modelPath, &bundle);
+        if (resolved.IsValid())
+        {
+            material->material = resolved;
+
+            // A component key of the mesh's own model stands for "the model's
+            // materials": on a mesh with several submeshes, submeshes without a
+            // slot path get the model material of their materialIndex.
+            std::string meshBasePath;
+            size_t meshIndex = 0u;
+            const bool sameModel = runtimeMesh->submeshes.size() > 1u && bundle &&
+                ParseSubAssetKey(meshComp->meshAssetPath, "mesh/", meshBasePath, meshIndex) &&
+                NormalizedModelPath(ctx, meshBasePath) == modelPath;
+            for (uint32_t submeshIndex = 0u; sameModel && submeshIndex < runtimeMesh->submeshes.size(); ++submeshIndex)
+            {
+                engine::MaterialComponent::SlotOverride* slot = material->FindSlotOverride(submeshIndex);
+                if (slot && (slot->material.IsValid() || !slot->materialAssetPath.empty()))
+                    continue;
+                const LPMATERIAL submeshMaterial = GetOrCreateImportedRuntimeMaterial(
+                    ctx, cache, meshComp->meshAssetPath, *runtimeMesh, modelPath, *bundle,
+                    runtimeMesh->submeshes[submeshIndex].materialIndex);
+                if (!submeshMaterial.IsValid())
+                    continue;
+                if (!slot)
+                {
+                    engine::MaterialComponent::SlotOverride newSlot{};
+                    newSlot.submeshIndex = submeshIndex;
+                    material->slotOverrides.push_back(newSlot);
+                    slot = &material->slotOverrides.back();
+                }
+                slot->material = submeshMaterial;
+            }
+        }
+    }
+
+    for (engine::MaterialComponent::SlotOverride& slot : material->slotOverrides)
+    {
+        if (!IsImportedMaterialKey(slot.materialAssetPath, slot.materialOverrideSource))
+            continue;
+        const LPMATERIAL resolved = resolve(slot.materialAssetPath, nullptr, nullptr);
+        if (resolved.IsValid())
+            slot.material = resolved;
     }
 }
 
