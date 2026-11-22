@@ -1,4 +1,5 @@
 #include "KromSceneManager.hpp"
+#include "KromEntityApi.hpp"
 
 #include "addons/camera/CameraComponents.hpp"
 #include "addons/camera/CameraSerialization.hpp"
@@ -129,31 +130,6 @@ static KromSceneData ParseKscene(const std::string& json)
 // =============================================================================
 // Scene Entity-Instantiierung
 // =============================================================================
-
-void DestroyEntityRecursive(engine::ecs::World& world, LPENTITY entity)
-{
-    if (!world.IsAlive(entity))
-        return;
-    if (const auto* children = world.Get<engine::ChildrenComponent>(entity))
-    {
-        const auto copy = children->children;
-        for (const LPENTITY child : copy)
-            DestroyEntityRecursive(world, child);
-    }
-    DetachEntityFromParent(world, entity);
-    world.DestroyEntity(entity);
-}
-
-void DetachEntityFromParent(engine::ecs::World& world, LPENTITY entity)
-{
-    if (!world.IsAlive(entity) || !world.Has<engine::ParentComponent>(entity))
-        return;
-
-    const LPENTITY parent = world.Get<engine::ParentComponent>(entity)->parent;
-    if (world.IsAlive(parent) && world.Has<engine::ChildrenComponent>(parent))
-        world.Get<engine::ChildrenComponent>(parent)->Remove(entity);
-    world.Remove<engine::ParentComponent>(entity);
-}
 
 static void MarkPersistentRecursive(const SceneContext& ctx, LPENTITY entity)
 {

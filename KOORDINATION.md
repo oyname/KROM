@@ -17,6 +17,81 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## krom.h wrapper: entity functions moved to `KromEntityApi` (Claude Opus 5.5, 2026-11-21)
+
+- User request: next step of the `src/app/KromWrapper.cpp` split, on branch `refactor/krom-entity-api`
+  (from `refactor/krom-runtime-materials`), not committed.
+- New `src/app/KromEntityApi.hpp/.cpp` (`Krom::internal`), bodies of: `CreateEntity`, `IsAlive`,
+  `SetName`, `GetName`, `FindEntity`, `GetMainCamera`, `SetLayer`, `GetLayer`, `SetCameraLayers`,
+  `GetCameraLayers`, `SetTag`, `GetTag`, `FindEntityByTag`, `FindChild`, `CountChildren`, `GetChild`,
+  `SetVisible`, `SetActive`, `SetParent`, `Detach`, `SetPosition(Vec3)`, `SetRotationEulerDeg`,
+  `GetRotationEulerDeg`, `SetScale(Vec3)`, `MoveEntity`, `TurnEntity`, `GetWorldBounds`, both `LookAt`,
+  `CreateCamera`, `CreateDirectionalLight`, `CreatePointLight`, `CreateSpotLight`; the helpers
+  `QuatFromRotationMatrix`, `ResolveEntityPosition`, `CollectWorldBoundsRecursive`, `CapturedTransform`,
+  `CaptureWorldTransform`, `IsDescendantOf`, `ApplyLocalFromWorld` (all `static` now, their only users
+  moved); and `DestroyEntityRecursive` / `DetachEntityFromParent` moved unchanged from
+  `KromSceneManager.cpp` (the scene manager now includes `KromEntityApi.hpp`, so it depends on the
+  entity module and not the other way round). Moved by script (`State& state = Get();` dropped,
+  `state.world` -> `world` / `ctx.world`, `state.transformSystem`/`boundsSystem` -> `ctx.`, calls between
+  moved functions get the `world` argument, e.g. `CreateEntity(name)` -> `CreateEntity(world, name)` in
+  the camera/light creators); a line check against `git show HEAD` (`out/claude-entityapi-bodydiff.log`)
+  shows only signature lines and these renames.
+- Cut: the module owns no fields. Almost every function takes only `engine::ecs::World*` (may be null
+  before `Graphics()`); the wrapper forwards pass `Get().world.get()`. Only `SetParent` / `Detach` (and
+  their transform helpers) need more and take `EntityContext {world, transformSystem, boundsSystem}`,
+  built per call by `MakeEntityContext(state)`. The krom.h entity functions had no `EnsureInitialized()`
+  at the top, so the forwards are plain one-liners. Public in the header: the krom.h bodies plus the two
+  hierarchy helpers (users: scene manager, `DestroyEntity`, script destroy hook in `Run()`).
+- `DestroyEntity` stays in the wrapper unchanged: three of its steps touch scene-manager
+  (`persistentEntityIds`) and surface state (`surfaces`); moving it would either put those into the
+  context for one function or split the body and repeat the alive check. Its entity part already is
+  `internal::DestroyEntityRecursive`, which now lives in the entity module.
+- Stayed in the wrapper: `DestroyEntity` (above); the thin overloads `SetPosition(x,y,z)`,
+  `SetScale(x,y,z)`, `SetScale(uniform)` (they only call the krom.h `Vec3` overloads);
+  `ComputeImportedModelCenter` (user `CreateEntityFromAsset`, a later step); `ComputeImportedModelRadius`
+  (no user at all - unused already before this step, left as is). Nothing was left behind because of
+  entanglement.
+- `KromWrapper.cpp` 3439 -> 2856 lines; `KromSceneManager.cpp` 762 -> 738; module 806 .cpp + 102 .hpp.
+  krom.h is unchanged. `src/app/KromEntityApi.cpp` added to both wrapper libraries in `CMakeLists.txt`.
+- New opt-in test `krom_entity_api_tests` (`tests/test_runtime_entity_api.cpp`, DX11, hidden window,
+  139 checks): null-world behaviour before `Graphics()`, create/`IsAlive`/destroy (parent with children,
+  setters/getters rejecting a destroyed entity), names and `FindEntity`, `SetParent` with/without
+  `keepWorldTransform` (world position and scale under a rotated, scaled parent), cycle/self/null
+  rejection, re-parenting, `Detach`, `FindChild`/`CountChildren`/`GetChild` incl. out of range,
+  position/scale setters, `MoveEntity`, `TurnEntity`, Euler round trip for five angles, `LookAt` to a
+  point and to an entity (forward = local -Z), `GetWorldBounds` of a mesh hierarchy, `SetVisible` /
+  `SetActive` recursive and not, layers, camera layers, tags, `CreateCamera` + `GetMainCamera`, the three
+  light creators (component values), 5 rendered frames with a `DestroyEntity` during `Run()`.
+  Documented current behaviour worth knowing: `GetRotationEulerDeg` and `LookAt` read the world
+  transform, which is stale right after a setter until a transform update (`SetParent`/`Detach`/
+  `DestroyEntity` or a frame); `FindChild` also matches the root itself; `SetVisible` adds a
+  `VisibilityComponent`, `SetActive` adds a missing `ActiveComponent`; `SetLayer` is not recursive.
+- Checked: before/after - the new test was written, built and run against the pre-step wrapper
+  (139 PASS) and after the move (139 PASS); PASS lines identical for all six runtime tests, krom.h /
+  warning / error log lines identical apart from the random temp directory names in
+  `krom_scene_api_tests` (`out/claude-entityapi-test-<test>-before.log` / `-after.log`). After the move:
+  `krom_entity_api_tests` 139 PASS, `krom_scene_api_tests` 53, `krom_scene_lifetime_tests` 11,
+  `krom_runtime_material_tests` 21, `krom_render_settings_tests` 25, `krom_surface_tests` 26 (all 0 FAIL),
+  `krom_tests` 507 passed / 0 failed (`out/claude-entityapi-build.log`; only the known C4834 warning
+  from `MaterialRuntimeBridge.hpp`).
+  Full Debug build (`out/claude-entityapi-build-all.log`, exit 0, no errors, no new warnings;
+  DX11/Vulkan/OpenGL runtimes, examples and DemoProject relinked), then the test targets rebuilt (up to
+  date) and all seven test programs run again with the same counts and identical PASS lines
+  (`out/claude-entityapi-test-<test>-final.log`). `krom_tests` does not link the wrapper (exe not
+  rebuilt by this step).
+- Not checked: Release; runs under Vulkan/OpenGL (only linked by the full build); the GLFW wrapper
+  `engine_krom_wrapper_glfw` (not configured in `out/build/x64-Debug`, so `KromEntityApi.cpp` was never
+  compiled into it); editor play path (does not use these wrapper functions); script hooks that call
+  the entity functions indirectly were only exercised through the existing scene tests.
+- Please review: that `SetParent`/`Detach` are the only functions needing more than the world;
+  `MakeEntityContext` (field order); the camera/light creators calling `internal::CreateEntity` /
+  `SetPosition` / `SetRotationEulerDeg` with the same world instead of going back through krom.h (same
+  pointer, same checks); the include of `KromEntityApi.hpp` in `KromSceneManager.cpp`.
+- Still open in the split: mesh/material/texture functions and `CreateEntityFromAsset` /
+  `PrintAssetTree`, project/user files, `Run()`.
+
+---
+
 ## krom.h wrapper: scene management moved to `KromSceneManager` (Claude Opus 5.5, 2026-11-21)
 
 - User request: next step of the `src/app/KromWrapper.cpp` split, on branch
