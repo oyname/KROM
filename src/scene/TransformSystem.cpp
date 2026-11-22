@@ -102,6 +102,65 @@ void TransformSystem::RebuildSortedList(ecs::World& world)
         "in topological order", m_sortedEntities.size());
 }
 
+WorldTransformComponent TransformSystem::ComputeCurrentWorldTransform(const ecs::World& world, EntityID entity)
+{
+    WorldTransformComponent result{};
+    const TransformComponent* local = world.Get<TransformComponent>(entity);   // null when dead
+    if (!local)
+        return result;
+
+    // Same parent rules as RebuildSortedList() plus Update()'s "parent has a
+    // WorldTransformComponent" (otherwise Update() computes the child as a root).
+    const auto parentOf = [&world](EntityID id) -> EntityID {
+        const auto* parent = world.Get<ParentComponent>(id);
+        if (!parent || parent->parent == id || !world.IsAlive(parent->parent) ||
+            !world.Has<TransformComponent>(parent->parent) ||
+            !world.Has<WorldTransformComponent>(parent->parent))
+            return NULL_ENTITY;
+        return parent->parent;
+    };
+
+    // Collect the chain entity -> root. Short in practice; the inline buffer
+    // avoids an allocation per call (LookAt per object per frame).
+    constexpr size_t kInline = 32u;
+    constexpr size_t kMaxDepth = 1024u;   // longer only with a parent cycle
+    EntityID inlineChain[kInline];
+    std::vector<EntityID> heapChain;
+    size_t count = 0u;
+    for (EntityID cursor = entity; cursor.IsValid(); cursor = parentOf(cursor))
+    {
+        if (count == kMaxDepth)
+        {
+            // Parent cycle: Update() never reaches these entities (no root in
+            // RebuildSortedList), so the stored value is what the engine has.
+            if (const auto* stored = world.Get<WorldTransformComponent>(entity))
+                return *stored;
+            ComputeWorldTransform(*local, nullptr, result);
+            return result;
+        }
+        if (count < kInline)
+            inlineChain[count] = cursor;
+        else
+        {
+            if (heapChain.empty())
+                heapChain.assign(inlineChain, inlineChain + kInline);
+            heapChain.push_back(cursor);
+        }
+        ++count;
+    }
+    const EntityID* chain = heapChain.empty() ? inlineChain : heapChain.data();
+
+    // Compose root -> entity with the same math as Update().
+    WorldTransformComponent parentWorld{};
+    for (size_t i = count; i-- > 0u;)
+    {
+        const TransformComponent* level = world.Get<TransformComponent>(chain[i]);
+        ComputeWorldTransform(*level, i + 1u < count ? &parentWorld : nullptr, result);
+        parentWorld = result;
+    }
+    return result;
+}
+
 void TransformSystem::ComputeWorldTransform(
     const TransformComponent&      local,
     const WorldTransformComponent* parentWorld,

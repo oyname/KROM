@@ -583,6 +583,168 @@ static void TestParentScaleReachesAllParentLinkedChildren(test::TestContext& ctx
     CHECK_EQ(ctx, world.Get<WorldTransformComponent>(detail)->scale.x, 2.f);
 }
 
+static bool NearV(const math::Vec3& a, const math::Vec3& b, float eps = 1e-4f)
+{
+    return std::fabs(a.x - b.x) <= eps && std::fabs(a.y - b.y) <= eps && std::fabs(a.z - b.z) <= eps;
+}
+
+static bool SameRot(const math::Quat& a, const math::Quat& b)
+{
+    const float dot = a.x * b.x + a.y * b.y + a.z * b.z + a.w * b.w;
+    return std::fabs(std::fabs(dot) - 1.f) <= 1e-4f;
+}
+
+static bool NearMat(const math::Mat4& a, const math::Mat4& b, float eps = 1e-4f)
+{
+    for (int c = 0; c < 4; ++c)
+        for (int r = 0; r < 4; ++r)
+            if (std::fabs(a.m[c][r] - b.m[c][r]) > eps)
+                return false;
+    return true;
+}
+
+static bool SameWorld(const WorldTransformComponent& a, const WorldTransformComponent& b)
+{
+    return NearV(a.position, b.position) && SameRot(a.rotation, b.rotation) && NearV(a.scale, b.scale) &&
+           NearMat(a.matrix, b.matrix) && NearMat(a.inverse, b.inverse);
+}
+
+static bool SameTransformState(const TransformComponent& a, const TransformComponent& b)
+{
+    return a.dirty == b.dirty && a.localVersion == b.localVersion &&
+           a.worldVersion == b.worldVersion && a.parentWorldVersion == b.parentWorldVersion;
+}
+
+// ComputeCurrentWorldTransform gives what Update() writes, also while the chain is
+// still dirty, and leaves every component untouched.
+static void TestComputeCurrentWorldTransformMatchesUpdate(test::TestContext& ctx)
+{
+    auto registry = CreateEcsTestRegistry(); World world(registry);
+    const auto root = world.CreateEntity();
+    auto& rootT = world.Add<TransformComponent>(root);
+    rootT.localPosition = {1.f, 2.f, 3.f};
+    rootT.localRotation = math::Quat::FromEulerDeg(10.f, 30.f, 5.f);
+    rootT.localScale = {2.f, 1.f, 0.5f};
+    world.Add<WorldTransformComponent>(root);
+    const auto mid = world.CreateEntity();
+    auto& midT = world.Add<TransformComponent>(mid);
+    midT.localPosition = {0.5f, -1.f, 2.f};
+    midT.localRotation = math::Quat::FromEulerDeg(0.f, -45.f, 20.f);
+    midT.localScale = {1.f, 3.f, 1.f};
+    midT.inheritParentScale = false;
+    world.Add<WorldTransformComponent>(mid);
+    world.Add<ParentComponent>(mid, ParentComponent{root});
+    const auto leaf = world.CreateEntity();
+    auto& leafT = world.Add<TransformComponent>(leaf);
+    leafT.localPosition = {1.f, 1.f, -1.f};
+    leafT.localRotation = math::Quat::FromEulerDeg(30.f, 0.f, 0.f);
+    leafT.localScale = {0.5f, 2.f, 1.f};
+    world.Add<WorldTransformComponent>(leaf);
+    world.Add<ParentComponent>(leaf, ParentComponent{mid});
+    const EntityID ids[3] = {root, mid, leaf};
+
+    const auto snapshot = [&](TransformComponent (&t)[3], WorldTransformComponent (&w)[3]) {
+        for (int i = 0; i < 3; ++i) { t[i] = *world.Get<TransformComponent>(ids[i]); w[i] = *world.Get<WorldTransformComponent>(ids[i]); }
+    };
+    const auto unchanged = [&](const TransformComponent (&t)[3], const WorldTransformComponent (&w)[3]) {
+        bool same = true;
+        for (int i = 0; i < 3; ++i)
+            same = same && SameTransformState(*world.Get<TransformComponent>(ids[i]), t[i]) &&
+                   SameWorld(*world.Get<WorldTransformComponent>(ids[i]), w[i]);
+        return same;
+    };
+
+    TransformSystem transforms;
+    for (int pass = 0; pass < 2; ++pass)
+    {
+        // pass 0: never updated; pass 1: updated once, then the middle level changed.
+        TransformComponent tBefore[3]; WorldTransformComponent wBefore[3];
+        snapshot(tBefore, wBefore);
+        WorldTransformComponent computed[3];
+        for (int i = 0; i < 3; ++i)
+            computed[i] = TransformSystem::ComputeCurrentWorldTransform(world, ids[i]);
+        CHECK(ctx, unchanged(tBefore, wBefore));   // no dirty flag, version or world value written
+        CHECK(ctx, world.Get<TransformComponent>(leaf)->dirty || world.Get<TransformComponent>(mid)->dirty);
+        CHECK(ctx, !SameWorld(computed[2], *world.Get<WorldTransformComponent>(leaf)));   // stored is stale
+
+        transforms.Update(world);
+        for (int i = 0; i < 3; ++i)
+            CHECK(ctx, SameWorld(computed[i], *world.Get<WorldTransformComponent>(ids[i])));
+        // Up to date: computes the stored value again.
+        CHECK(ctx, SameWorld(TransformSystem::ComputeCurrentWorldTransform(world, leaf),
+                             *world.Get<WorldTransformComponent>(leaf)));
+
+        auto* m = world.Get<TransformComponent>(mid);
+        m->localRotation = math::Quat::FromEulerDeg(-15.f, 70.f, 0.f);
+        m->localPosition = {-2.f, 0.f, 1.f};
+        m->dirty = true;
+    }
+    // inheritParentScale = false on the middle level: its world scale is its local one.
+    CHECK(ctx, NearV(TransformSystem::ComputeCurrentWorldTransform(world, mid).scale, {1.f, 3.f, 1.f}));
+    CHECK(ctx, NearV(TransformSystem::ComputeCurrentWorldTransform(world, leaf).scale, {0.5f, 6.f, 1.f}));
+}
+
+static void TestComputeCurrentWorldTransformBrokenData(test::TestContext& ctx)
+{
+    auto registry = CreateEcsTestRegistry(); World world(registry);
+    const WorldTransformComponent identity{};
+
+    // No TransformComponent / dead entity / null: identity.
+    const auto bare = world.CreateEntity();
+    world.Add<WorldTransformComponent>(bare).position = {7.f, 7.f, 7.f};
+    CHECK(ctx, SameWorld(TransformSystem::ComputeCurrentWorldTransform(world, bare), identity));
+    const auto dead = world.CreateEntity();
+    world.Add<TransformComponent>(dead).localPosition = {1.f, 0.f, 0.f};
+    world.DestroyEntity(dead);
+    CHECK(ctx, SameWorld(TransformSystem::ComputeCurrentWorldTransform(world, dead), identity));
+    CHECK(ctx, SameWorld(TransformSystem::ComputeCurrentWorldTransform(world, NULL_ENTITY), identity));
+
+    // Self parent: a root, like RebuildSortedList treats it.
+    const auto self = world.CreateEntity();
+    world.Add<TransformComponent>(self).localPosition = {1.f, 2.f, 3.f};
+    world.Add<WorldTransformComponent>(self);
+    world.Add<ParentComponent>(self, ParentComponent{self});
+    CHECK(ctx, NearV(TransformSystem::ComputeCurrentWorldTransform(world, self).position, {1.f, 2.f, 3.f}));
+
+    // Parent without TransformComponent / dead parent: a root.
+    const auto child = world.CreateEntity();
+    world.Add<TransformComponent>(child).localPosition = {4.f, 0.f, 0.f};
+    world.Add<WorldTransformComponent>(child);
+    world.Add<ParentComponent>(child, ParentComponent{bare});
+    CHECK(ctx, NearV(TransformSystem::ComputeCurrentWorldTransform(world, child).position, {4.f, 0.f, 0.f}));
+    world.Get<ParentComponent>(child)->parent = dead;
+    CHECK(ctx, NearV(TransformSystem::ComputeCurrentWorldTransform(world, child).position, {4.f, 0.f, 0.f}));
+
+    // Cycle a <-> b (Update() never reaches it): terminates, returns the stored value.
+    const auto a = world.CreateEntity();
+    const auto b = world.CreateEntity();
+    world.Add<TransformComponent>(a).localPosition = {1.f, 0.f, 0.f};
+    world.Add<WorldTransformComponent>(a).position = {9.f, 8.f, 7.f};
+    world.Add<ParentComponent>(a, ParentComponent{b});
+    world.Add<TransformComponent>(b).localPosition = {0.f, 1.f, 0.f};
+    world.Add<WorldTransformComponent>(b);
+    world.Add<ParentComponent>(b, ParentComponent{a});
+    CHECK(ctx, NearV(TransformSystem::ComputeCurrentWorldTransform(world, a).position, {9.f, 8.f, 7.f}));
+    TransformSystem transforms; transforms.Update(world);
+    CHECK(ctx, NearV(world.Get<WorldTransformComponent>(a)->position, {9.f, 8.f, 7.f}));   // as documented
+
+    // A chain deeper than the inline buffer (40 levels, each +1 on X).
+    EntityID parent = NULL_ENTITY;
+    EntityID last = NULL_ENTITY;
+    for (int i = 0; i < 40; ++i)
+    {
+        const auto e = world.CreateEntity();
+        world.Add<TransformComponent>(e).localPosition = {1.f, 0.f, 0.f};
+        world.Add<WorldTransformComponent>(e);
+        if (parent.IsValid())
+            world.Add<ParentComponent>(e, ParentComponent{parent});
+        parent = last = e;
+    }
+    CHECK(ctx, NearV(TransformSystem::ComputeCurrentWorldTransform(world, last).position, {40.f, 0.f, 0.f}));
+    transforms.Update(world);
+    CHECK(ctx, NearV(world.Get<WorldTransformComponent>(last)->position, {40.f, 0.f, 0.f}));
+}
+
 static void TestTransformEulerSetVsRotate(test::TestContext& ctx)
 {
     TransformComponent transform;
@@ -725,7 +887,9 @@ int RunECSTests()
         .Add("InverseAffine rotated non-uniform scale", TestInverseAffineRotatedNonUniformScale)
         .Add("Transform parent rotation propagates", TestTransformParentRotationPropagates)
         .Add("Parent scale reaches all parent-linked children", TestParentScaleReachesAllParentLinkedChildren)
-        .Add("Transform Euler set vs rotate", TestTransformEulerSetVsRotate);
+        .Add("Transform Euler set vs rotate", TestTransformEulerSetVsRotate)
+        .Add("ComputeCurrentWorldTransform matches Update", TestComputeCurrentWorldTransformMatchesUpdate)
+        .Add("ComputeCurrentWorldTransform broken data", TestComputeCurrentWorldTransformBrokenData);
 
     return suite.Run();
 }

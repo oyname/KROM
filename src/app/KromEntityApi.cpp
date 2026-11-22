@@ -81,15 +81,44 @@ static engine::math::Quat QuatFromRotationMatrix(const engine::math::Mat4& m) no
             (m.m[0][1] - m.m[1][0]) / s};
 }
 
-static engine::math::Vec3 ResolveEntityPosition(engine::ecs::World* world, LPENTITY entity) noexcept
+// Current world rotation and position of an entity, also right after a setter
+// (before the next TransformSystem::Update()). Fallbacks as before: world
+// transform only -> stored value; local transform only -> local value.
+static bool ResolveCurrentWorld(const engine::ecs::World* world, LPENTITY entity,
+                                engine::math::Vec3& outPosition, engine::math::Quat& outRotation)
 {
     if (!world || !world->IsAlive(entity))
-        return {};
-    if (const auto* wt = world->Get<engine::WorldTransformComponent>(entity))
-        return wt->position;
-    if (const auto* tr = world->Get<engine::TransformComponent>(entity))
-        return tr->localPosition;
-    return {};
+        return false;
+    const auto* wt = world->Get<engine::WorldTransformComponent>(entity);
+    const auto* tr = world->Get<engine::TransformComponent>(entity);
+    if (wt && tr)
+    {
+        const engine::WorldTransformComponent current =
+            engine::TransformSystem::ComputeCurrentWorldTransform(*world, entity);
+        outPosition = current.position;
+        outRotation = current.rotation;
+        return true;
+    }
+    if (wt)
+    {
+        outPosition = wt->position;
+        outRotation = wt->rotation;
+        return true;
+    }
+    if (tr)
+    {
+        outPosition = tr->localPosition;
+        outRotation = tr->localRotation;
+        return true;
+    }
+    return false;
+}
+
+static engine::math::Vec3 ResolveEntityPosition(engine::ecs::World* world, LPENTITY entity)
+{
+    engine::math::Vec3 position{};
+    engine::math::Quat rotation = engine::math::Quat::Identity();
+    return ResolveCurrentWorld(world, entity, position, rotation) ? position : engine::math::Vec3{};
 }
 
 static bool CollectWorldBoundsRecursive(const engine::ecs::World& world,
@@ -528,15 +557,13 @@ engine::math::Vec3 GetRotationEulerDeg(engine::ecs::World* world, LPENTITY entit
     if (!world || !world->IsAlive(entity))
         return {};
 
-    // WorldTransform bevorzugen (nach TransformSystem.Update() immer aktuell).
-    // Quaternion → Euler (Reihenfolge YXZ = Yaw→Pitch→Roll = typisch für Kameras).
-    const engine::math::Quat* q = nullptr;
-    if (const auto* wt = world->Get<engine::WorldTransformComponent>(entity))
-        q = &wt->rotation;
-    else if (const auto* tr = world->Get<engine::TransformComponent>(entity))
-        q = &tr->localRotation;
-    if (!q)
+    // Current world rotation (also right after a setter, before the frame's
+    // transform update). Quaternion -> Euler (order YXZ = yaw -> pitch -> roll).
+    engine::math::Vec3 position{};
+    engine::math::Quat rotation = engine::math::Quat::Identity();
+    if (!ResolveCurrentWorld(world, entity, position, rotation))
         return {};
+    const engine::math::Quat* q = &rotation;
 
     const float sinP = 2.0f * (q->w * q->x - q->z * q->y);
     const float pitch = std::abs(sinP) >= 0.9999f
@@ -648,7 +675,25 @@ bool LookAt(engine::ecs::World* world, LPENTITY entity, const engine::math::Vec3
     rotation.m[2][1] = back.y;
     rotation.m[2][2] = back.z;
 
-    transform->localRotation = QuatFromRotationMatrix(rotation).Normalized();
+    // The look rotation is a WORLD rotation; localRotation is relative to the parent
+    // (world = parentWorld * local, see TransformSystem::ComputeWorldTransform), so
+    // local = inverse(parentWorld) * desiredWorld. The parent's current world rotation
+    // is taken from the entity's own current world transform (parentWorld =
+    // world * inverse(local)); that applies exactly the parent rules of
+    // ComputeCurrentWorldTransform without repeating them here. Unit quaternions:
+    // inverse = conjugate.
+    const engine::math::Quat desiredWorld = QuatFromRotationMatrix(rotation).Normalized();
+    if (world->Has<engine::ParentComponent>(entity) && world->Has<engine::WorldTransformComponent>(entity))
+    {
+        const engine::WorldTransformComponent current =
+            engine::TransformSystem::ComputeCurrentWorldTransform(*world, entity);
+        const engine::math::Quat parentWorld = (current.rotation * transform->localRotation.Conjugate()).Normalized();
+        transform->localRotation = (parentWorld.Conjugate() * desiredWorld).Normalized();
+    }
+    else
+    {
+        transform->localRotation = desiredWorld;
+    }
     transform->dirty = true;
     return true;
 }

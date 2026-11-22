@@ -17,6 +17,73 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
 
 ---
 
+## krom.h: world transform read right after a setter was stale; LookAt ignored the parent rotation (Claude Opus 5.5, 2026-11-22)
+
+- User request: behaviour fix on branch `fix/krom-world-transform-read` (from `refactor/krom-entity-api`),
+  not committed. Changes behaviour on purpose; krom.h signatures, setters and `TransformSystem::Update`
+  are unchanged.
+- Bug: the setters write `TransformComponent` and set `dirty`; `WorldTransformComponent` is only
+  recomputed by `TransformSystem::Update` (per frame after the user tick, and in `SetParent` / `Detach` /
+  `DestroyEntity`). (1) `GetRotationEulerDeg` returned the old rotation right after
+  `SetRotationEulerDeg` / `TurnEntity`. (2) `LookAt(entity, point)` used the entity's old position after
+  `SetPosition` / `MoveEntity` in the same tick (follow camera lagged one frame). (3) `LookAt(entity,
+  target)` saw a target moved in the same tick at its old position. (4) `LookAt` wrote the WORLD look
+  rotation into `localRotation`, so a child of a rotated parent looked in the wrong direction
+  (reproduced in the test below).
+- Fix: new `static WorldTransformComponent TransformSystem::ComputeCurrentWorldTransform(const
+  ecs::World&, EntityID)`: collects the chain entity -> root (inline buffer of 32, vector beyond,
+  bounded at 1024) and composes root -> entity with the existing private `ComputeWorldTransform`, so the
+  math (incl. `inheritParentScale`, matrix/inverse) exists once. Parent rules as `RebuildSortedList`
+  plus Update's "parent has a `WorldTransformComponent`" (alive, has TC and WTC, not itself). Reads only.
+  No TC / dead -> identity; a parent cycle (which Update never processes) -> the stored WTC (or the local
+  transform as root). No dirty shortcut: always recomputes (chain is short; equivalence with Update's
+  version logic was not worth arguing).
+- Users: `KromEntityApi.cpp` `ResolveCurrentWorld` (new, used by `ResolveEntityPosition` -> both
+  `LookAt`, and by `GetRotationEulerDeg`). Fallbacks kept: WTC only -> stored value, TC only -> local
+  value, neither -> zero. `LookAt` converts the desired world rotation to parent space:
+  `local = conj(parentWorld) * desiredWorld` (world = parentWorld * local, as in `ComputeWorldTransform`).
+  `parentWorld` is derived from the entity's own current world transform (`world * conj(local)`) so the
+  helper's parent rules are not repeated; only done when the entity has a `ParentComponent` and a WTC,
+  otherwise the rotation is written as before.
+- Script API (`IScriptContext`, compiled into each script module through `engine_script`):
+  `GetPosition` / `GetRotation` / `GetScale` / `Forward` / `Right` / `Up` read the LOCAL
+  `TransformComponent` (documented as local) - current, no staleness, not changed. There is no `LookAt`.
+  `GetWorldPosition` read the stored WTC (header comment said "one frame old") - same staleness; fixed
+  with the helper (body only, non-virtual, no signature/layout/vtable change; old script DLLs keep the old
+  behaviour until rebuilt). Header comment updated. Not a getter, noted only: `ScriptTriggerSystem` runs
+  after the scripts and before the transform update, so triggers see last frame's world transforms.
+- Other readers: `CaptureWorldTransform` / `ApplyLocalFromWorld` (`SetParent`/`Detach`) and the wrapper's
+  `BakeReflectionProbe` and the prefab warm-up call `Update()` first - fine. `GetWorldBounds` reads
+  `BoundsComponent::centerWorld/extentsWorld` from `BoundsSystem` (per frame and in `SetParent`/`Detach`):
+  stale right after a setter as well, but the helper does not solve it (needs the bounds recomputed from
+  mesh local bounds). Recommendation: separate step - either document "as of the last frame" in krom.h or
+  have `GetWorldBounds` run `transformSystem.Update` + `boundsSystem.Update` first (needs the
+  `EntityContext`). Not changed.
+- Tests: `krom_tests` new "ComputeCurrentWorldTransform matches Update" (3 levels, rotations, non-uniform
+  scale, one `inheritParentScale = false`; dirty chain, no component changed, equal to Update afterwards,
+  also after a change of the middle level) and "... broken data" (no TC, dead, null, self parent, parent
+  without TC, dead parent, cycle, 40-level chain) in `tests/test_ecs.cpp`; "Context: world position after
+  setter" in `tests/test_script.cpp`. `tests/test_runtime_entity_api.cpp`: the check that documented the
+  stale `GetRotationEulerDeg` now expects the new rotation; new checks for `TurnEntity`, child under a
+  rotated parent, `LookAt` after `SetPosition` / `MoveEntity`, `LookAt(entity)` to a target moved in the
+  same frame, `LookAt` of a child of a rotated and of a rotated + non-uniformly scaled parent (world
+  forward at the target, no roll), and frame-update consistency. 139 -> 156 checks.
+- Before the fix (`out/claude-worldtransform-test-entity-api-before.log`, `...-unit-before.log`): 13 new
+  entity-API checks FAILED (all getter/LookAt checks above), 3 checks of the script test failed; all 138
+  old PASS lines passed. After the fix: `krom_entity_api_tests` 156 PASS / 0 FAIL, `krom_scene_api_tests`
+  53, `krom_scene_lifetime_tests` 11, `krom_runtime_material_tests` 21, `krom_render_settings_tests` 25,
+  `krom_surface_tests` 26, `krom_tests` 510 passed / 0 failed (507 + 3 new); logs
+  `out/claude-worldtransform-test-*-after.log`, build `out/claude-worldtransform-build.log`. Full Debug
+  build (`cmake --build out/build/x64-Debug`, all editors and runtimes incl. Vulkan/OpenGL targets) exit 0,
+  no errors (`out/claude-worldtransform-build-full.log`); afterwards test targets rebuilt and all seven
+  programs run again with the same counts (`out/claude-worldtransform-test-*-final.log`).
+- Not checked: Release, Vulkan/OpenGL runs, the GLFW wrapper, the editor and Play at runtime, rebuilt
+  project script modules.
+- Reviewer: the derived parent rotation in `LookAt`; the helper's parent rules vs. Update in broken data
+  (Update uses a parent's stored WTC even when the parent has no TC or is the entity itself; the helper
+  treats those as roots); the cycle fallback; that `GetWorldPosition` change reaches scripts only after
+  they are rebuilt.
+
 ## krom.h wrapper: entity functions moved to `KromEntityApi` (Claude Opus 5.5, 2026-11-21)
 
 - User request: next step of the `src/app/KromWrapper.cpp` split, on branch `refactor/krom-entity-api`
