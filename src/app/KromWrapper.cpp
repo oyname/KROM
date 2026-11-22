@@ -142,6 +142,7 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
 #include <thread>
 #include <memory>
 #include <optional>
+#include <span>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -169,6 +170,27 @@ using internal::GenerateMissingNormals;
 // =============================================================================
 
 using internal::kRuntimeBloomIntensity;
+
+// Asset counts of the registry stores a parsed prefab resolves its handles from.
+struct PrefabRegistryCounts
+{
+    size_t meshes = 0u, materials = 0u, skeletons = 0u, animations = 0u;
+    bool operator==(const PrefabRegistryCounts&) const = default;
+};
+
+// Parsed prefab file of a script spawn (InstantiatePrefabForScript). Reused while
+// the file's write time and size stay the same.
+struct PrefabCacheEntry
+{
+    // Shared: an instantiation in progress keeps its prefab when the entry is replaced.
+    std::shared_ptr<const engine::addons::prefab::PrefabAsset> prefab;
+    std::filesystem::file_time_type     writeTime{};
+    std::uintmax_t                      fileSize = 0u;
+    // Parsing looks the handles up in the registry by path. A path without a
+    // registered asset (model not imported yet) is resolved again by parsing
+    // anew once the registry has gained or lost assets since.
+    PrefabRegistryCounts                registryCounts{};
+};
 
 struct State
 {
@@ -214,6 +236,9 @@ struct State
     std::unordered_map<uint64_t, LPMATERIAL>  runtimeMaterialCache;
     std::unordered_map<uint32_t, SurfaceRecord> surfaces;
     uint32_t                                  nextSurfaceId = 1u;
+    // Script prefab spawns, keyed by the resolved file path (UTF-8). Holds registry
+    // handles: cleared with the registry contents (Shutdown) and on SetAssetRoot.
+    std::unordered_map<std::string, PrefabCacheEntry> prefabCache;
     std::filesystem::path                     projectRoot;
     std::filesystem::path                     runtimeStatePath;
     float                                     runtimeStateWriteTimer = 0.0f;
@@ -365,6 +390,112 @@ internal::EntityContext MakeEntityContext(State& state)
     return internal::EntityContext{state.world.get(), state.transformSystem, state.boundsSystem};
 }
 
+static PrefabRegistryCounts CountPrefabRegistryAssets(const engine::assets::AssetRegistry& registry) noexcept
+{
+    return {registry.meshes.Count(), registry.materials.Count(),
+            registry.skeletons.Count(), registry.animations.Count()};
+}
+
+// A handle that parsing found must still name the asset registered under the
+// record's path; a path without handle counts as unresolved.
+template<typename Store, typename HandleT>
+static bool PrefabReferenceStillValid(const Store& store, HandleT handle, const std::string& path,
+                                      bool& unresolved) noexcept
+{
+    if (!handle.IsValid())
+    {
+        unresolved = unresolved || !path.empty();
+        return true;
+    }
+    const auto* asset = store.Get(handle);
+    return asset && asset->path == path;
+}
+
+// False when a registry handle of the parsed prefab no longer matches the registry.
+static bool PrefabReferencesStillValid(const engine::addons::prefab::PrefabAsset& prefab,
+                                       const engine::assets::AssetRegistry& registry,
+                                       bool& outUnresolved) noexcept
+{
+    outUnresolved = false;
+    for (const engine::addons::prefab::PrefabEntityRecord& record : prefab.records)
+    {
+        if (!PrefabReferenceStillValid(registry.meshes, record.mesh, record.meshAssetPath, outUnresolved) ||
+            !PrefabReferenceStillValid(registry.materials, record.material, record.materialAssetPath, outUnresolved) ||
+            !PrefabReferenceStillValid(registry.skeletons, record.skeleton, record.skeletonAssetPath, outUnresolved) ||
+            !PrefabReferenceStillValid(registry.animations, record.animation, record.animationAssetPath, outUnresolved))
+            return false;
+        for (const auto& slot : record.slotOverrides)
+            if (!PrefabReferenceStillValid(registry.materials, slot.material, slot.materialAssetPath, outUnresolved))
+                return false;
+    }
+    return true;
+}
+
+// The parsed prefab file, from the cache while the file (write time, size) and the
+// registry handles it holds are unchanged, otherwise parsed anew. Null on failure
+// (not cached). A prefab file reads no other files: nested prefabs are embedded
+// in its records.
+static std::shared_ptr<const engine::addons::prefab::PrefabAsset> AcquireScriptPrefab(
+    State& state, const std::filesystem::path& path)
+{
+    const std::string key = PathToUtf8(path);
+    std::error_code ec;
+    const std::filesystem::file_time_type writeTime = std::filesystem::last_write_time(path, ec);
+    const std::uintmax_t fileSize = ec ? 0u : std::filesystem::file_size(path, ec);
+    if (ec)
+    {
+        state.prefabCache.erase(key);
+        engine::Debug::LogError("krom.h: Prefab konnte nicht geladen werden '%s': %s",
+            key.c_str(), ec.message().c_str());
+        return nullptr;
+    }
+
+    if (const auto it = state.prefabCache.find(key);
+        it != state.prefabCache.end() && it->second.writeTime == writeTime && it->second.fileSize == fileSize)
+    {
+        PrefabCacheEntry& entry = it->second;
+        bool unresolved = false;
+        if (PrefabReferencesStillValid(*entry.prefab, state.assetRegistry, unresolved) &&
+            (!unresolved || entry.registryCounts == CountPrefabRegistryAssets(state.assetRegistry)))
+            return entry.prefab;
+    }
+
+    auto prefab = std::make_shared<engine::addons::prefab::PrefabAsset>();
+    std::string error;
+    if (!engine::addons::prefab::LoadPrefabFromFile(path, state.assetRegistry, *prefab, &error))
+    {
+        state.prefabCache.erase(key);
+        engine::Debug::LogError("krom.h: Prefab konnte nicht geladen werden '%s': %s",
+            key.c_str(), error.c_str());
+        return nullptr;
+    }
+    PrefabCacheEntry entry;
+    entry.prefab = prefab;
+    entry.writeTime = writeTime;
+    entry.fileSize = fileSize;
+    // Counted after parsing: parsing itself may import skeletons and animations.
+    entry.registryCounts = CountPrefabRegistryAssets(state.assetRegistry);
+    state.prefabCache[key] = std::move(entry);
+    return prefab;
+}
+
+// World transform and bounds of freshly instantiated entities, computed per
+// entity instead of a whole-world update. The transforms stay dirty, so the
+// frame's TransformSystem::Update still processes them and bumps their versions
+// (which makes BoundsSystem::Update recompute the bounds afterwards).
+static void UpdateSpawnedTransforms(engine::ecs::World& world, std::span<const LPENTITY> entities)
+{
+    for (const LPENTITY entity : entities)
+    {
+        if (!world.IsAlive(entity) || !world.Has<engine::TransformComponent>(entity))
+            continue;
+        if (auto* worldTransform = world.Get<engine::WorldTransformComponent>(entity))
+            *worldTransform = engine::TransformSystem::ComputeCurrentWorldTransform(world, entity);
+        if (world.Has<engine::BoundsComponent>(entity))
+            engine::BoundsSystem::ComputeBoundsForEntity(world, entity);
+    }
+}
+
 static LPENTITY InstantiatePrefabForScript(State& state,
                                            std::string_view prefabAssetPath,
                                            const engine::math::Vec3& position,
@@ -379,15 +510,9 @@ static LPENTITY InstantiatePrefabForScript(State& state,
     if (path.is_relative() && !state.assetRoot.empty())
         path = state.assetRoot / path;
 
-    engine::addons::prefab::PrefabAsset prefab;
-    std::string error;
-    if (!engine::addons::prefab::LoadPrefabFromFile(path, state.assetRegistry, prefab, &error))
-    {
-        engine::Debug::LogError("krom.h: Prefab konnte nicht geladen werden '%s': %s",
-            PathToUtf8(path).c_str(),
-            error.c_str());
+    const std::shared_ptr<const engine::addons::prefab::PrefabAsset> prefab = AcquireScriptPrefab(state, path);
+    if (!prefab)
         return NULL_LPENTITY;
-    }
 
     engine::addons::prefab::PrefabInstantiateOptions options{};
     options.position = position;
@@ -397,7 +522,7 @@ static LPENTITY InstantiatePrefabForScript(State& state,
     options.scriptRegistry = attachScripts ? &state.scriptAddonRegistry : nullptr;
 
     const engine::addons::prefab::PrefabInstance instance =
-        engine::addons::prefab::InstantiatePrefab(*state.world, prefab, options);
+        engine::addons::prefab::InstantiatePrefab(*state.world, *prefab, options);
     if (!instance.IsValid())
     {
         engine::Debug::LogError("krom.h: Prefab konnte nicht instanziiert werden '%s'",
@@ -405,12 +530,14 @@ static LPENTITY InstantiatePrefabForScript(State& state,
         return NULL_LPENTITY;
     }
 
+    // Only the new entities (a valid instance is never empty; an empty span would mean the whole world).
     if (state.assetPipeline)
     {
         engine::addons::mesh_renderer::ResolveMeshAssetBindings(
             *state.assetPipeline,
             state.assetRegistry,
-            *state.world);
+            *state.world,
+            std::span<const LPENTITY>(instance.entities));
     }
 
     for (const LPENTITY entity : instance.entities)
@@ -428,8 +555,8 @@ static LPENTITY InstantiatePrefabForScript(State& state,
             engine::mesh_renderer::UpdateLocalBoundsForEntity(*state.world, entity, state.assetRegistry);
     }
 
-    state.transformSystem.Update(*state.world);
-    state.boundsSystem.Update(*state.world);
+    // Usable right away (stored world transform and bounds), without a whole-world update.
+    UpdateSpawnedTransforms(*state.world, instance.entities);
     return instance.root;
 }
 
@@ -1032,6 +1159,23 @@ bool EnsureInitialized()
 
 } // namespace
 
+engine::assets::AssetRegistry& internal::GetWrapperAssetRegistry()
+{
+    return Get().assetRegistry;
+}
+
+size_t internal::GetWrapperSceneRootCount(LPSCENE scene)
+{
+    const auto& scenes = Get().sceneManager.scenes;
+    const auto it = scenes.find(scene.id);
+    return it != scenes.end() ? it->second.rootEntities.size() : 0u;
+}
+
+size_t internal::GetWrapperPersistentEntityCount()
+{
+    return Get().sceneManager.persistentEntityIds.size();
+}
+
 // =========================================================================
 // Ebene 2 + 3 — Component-Zugriff, Systeme, Scripts
 // =========================================================================
@@ -1094,6 +1238,7 @@ void SetAssetRoot(const std::filesystem::path& path)
 {
     State& state = Get();
     state.assetRoot = path;
+    state.prefabCache.clear();   // relative asset paths of the cached prefabs refer to the old root
     state.game.SetAssetRoot(path);
     if (state.render.probeRuntime)
         state.render.probeRuntime->SetAssetRoot(PathToUtf8(path));
@@ -1320,13 +1465,13 @@ bool DestroyEntity(LPENTITY entity)
     if (!state.world || !state.world->IsAlive(entity))
         return false;
 
-    state.sceneManager.persistentEntityIds.erase(entity.value);
+    // No transform/bounds update needed: dead ids are skipped, and the next regular
+    // update rebuilds its sorted list through the world's structure version.
+    internal::ForgetDestroyedEntities(state.sceneManager, *state.world, entity);
     std::erase_if(state.surfaces, [&](const auto& item) {
         return item.second.entity == entity;
     });
     internal::DestroyEntityRecursive(*state.world, entity);
-    state.transformSystem.Update(*state.world);
-    state.boundsSystem.Update(*state.world);
     return true;
 }
 
@@ -1528,7 +1673,8 @@ bool PrintAssetTree(const char* path)
 
 LPMESH LoadMesh(const char* path)
 {
-    return internal::LoadMesh(Get().assetPipeline.get(), path);
+    State& state = Get();
+    return internal::LoadMesh(state.assetPipeline.get(), state.assetRegistry, path);
 }
 
 LPTEXTURE LoadTexture(const char* path)
@@ -1559,7 +1705,8 @@ LPMATERIAL CreateTextureMaterial(LPTEXTURE texture,
 
 LPMATERIAL LoadMaterial(const char* path)
 {
-    return internal::LoadMaterial(Get().assetPipeline.get(), path);
+    State& state = Get();
+    return internal::LoadMaterial(state.assetPipeline.get(), state.assetRegistry, path);
 }
 
 bool SetMesh(LPENTITY entity, LPMESH mesh)
@@ -2128,7 +2275,7 @@ int Run()
         hooks.renderSettings = &renderSettings;
         hooks.destroyEntity = [&state](LPENTITY id)
         {
-            state.sceneManager.persistentEntityIds.erase(id.value);
+            internal::ForgetDestroyedEntities(state.sceneManager, *state.world, id);
             internal::DestroyEntityRecursive(*state.world, id);
         };
         hooks.loadScene = [](const engine::script::SceneLoadRequest& request)
@@ -2306,8 +2453,8 @@ void Shutdown()
     state.featuresRegistered = false;
     state.tickCallback = {};
     state.initCallback = {};
-    state.sceneManager.scenes.clear();
-    state.sceneManager.persistentEntityIds.clear();
+    internal::ClearScenes(state.sceneManager);
+    state.prefabCache.clear();
     state.texturePaths.clear();
     state.runtimeMaterialCache.clear();
     state.surfaces.clear();

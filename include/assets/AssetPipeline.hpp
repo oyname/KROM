@@ -73,6 +73,9 @@ public:
     // Format-agnostisch: .glb, .fbx, .obj, .usd — alles was einen Importer hat.
     // Gibt bundle.Ok()==false zurück wenn kein Importer registriert ist.
     [[nodiscard]] ImportedAssetBundle ImportBundle(const std::string& path);
+    // True if a registered importer handles the extension of the resolved path
+    // (the same test ImportBundle uses to pick an importer).
+    [[nodiscard]] bool HasMeshImporterFor(const std::string& path) const;
 
     [[nodiscard]] MeshHandle LoadMesh(const std::string& path);
     [[nodiscard]] TextureHandle LoadTexture(const std::string& path, TextureLoadRole role = TextureLoadRole::Auto);

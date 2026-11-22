@@ -1,6 +1,7 @@
 #include "scene/BoundsSystem.hpp"
 #include "ecs/Components.hpp"
 #include "jobs/JobSystem.hpp"
+#include "scene/TransformSystem.hpp"
 #include <cmath>
 #include <vector>
 
@@ -87,6 +88,83 @@ void BoundsSystem::Update(ecs::World& world, jobs::JobSystem& js)
     });
     if (!result.Succeeded())
         Debug::LogError("BoundsSystem::Update parallel pass failed");
+}
+
+namespace {
+
+// True when the stored WorldTransformComponent of `entity` is exactly what
+// TransformSystem::ComputeCurrentWorldTransform() would compute now: no entity
+// in the parent chain is dirty or behind its parent's world version (the
+// conditions under which TransformSystem::Update() would recompute it), and
+// every link follows the parent rules of ComputeCurrentWorldTransform().
+// Anything unusual (self-parent, parent without transform components, a
+// cycle, a never-updated entity) answers false and takes the full path.
+bool StoredWorldTransformIsCurrent(const ecs::World& world, EntityID entity) noexcept
+{
+    EntityID cursor = entity;
+    for (uint32_t depth = 0u; depth < 1024u; ++depth)
+    {
+        const TransformComponent* local = world.Get<TransformComponent>(cursor);
+        if (!local || !world.Has<WorldTransformComponent>(cursor) ||
+            local->dirty || local->worldVersion == 0u)
+            return false;
+
+        EntityID parent = NULL_ENTITY;
+        if (const auto* link = world.Get<ParentComponent>(cursor);
+            link && world.IsAlive(link->parent))
+        {
+            // Update() and ComputeCurrentWorldTransform() treat these differently.
+            if (link->parent == cursor ||
+                !world.Has<TransformComponent>(link->parent) ||
+                !world.Has<WorldTransformComponent>(link->parent))
+                return false;
+            parent = link->parent;
+        }
+
+        if (!parent.IsValid())
+            // Root now. A non-zero parent version means it was last computed as a
+            // child (detached without dirty): stored value is not the root value.
+            return local->parentWorldVersion == 0u;
+
+        if (local->parentWorldVersion != world.Get<TransformComponent>(parent)->worldVersion)
+            return false;
+        cursor = parent;
+    }
+    return false;   // parent cycle
+}
+
+} // namespace
+
+bool BoundsSystem::ComputeCurrentWorldBounds(const ecs::World& world, EntityID id,
+                                             math::Vec3& outCenter, math::Vec3& outExtents) noexcept
+{
+    const BoundsComponent* bounds = world.Get<BoundsComponent>(id);   // null when dead
+    if (!bounds)
+        return false;
+
+    const TransformComponent* transform = world.Get<TransformComponent>(id);
+    const WorldTransformComponent* worldTransform = world.Get<WorldTransformComponent>(id);
+    if (transform && worldTransform)
+    {
+        if (!bounds->localDirty && bounds->lastTransformVersion == transform->worldVersion &&
+            StoredWorldTransformIsCurrent(world, id))
+        {
+            outCenter = bounds->centerWorld;
+            outExtents = bounds->extentsWorld;
+            return true;
+        }
+        const WorldTransformComponent current = TransformSystem::ComputeCurrentWorldTransform(world, id);
+        TransformAABB(bounds->centerLocal, bounds->extentsLocal, current.matrix, outCenter, outExtents);
+        return true;
+    }
+    if (worldTransform)
+    {
+        TransformAABB(bounds->centerLocal, bounds->extentsLocal, worldTransform->matrix, outCenter, outExtents);
+        return true;
+    }
+    outCenter = bounds->centerWorld;
+    outExtents = bounds->extentsWorld;
+    return true;
 }
 
 void BoundsSystem::ComputeBoundsForEntity(ecs::World& world,

@@ -6,13 +6,18 @@
 
 namespace engine::script {
 
-// Erkennt Ein-/Austritte in Trigger-Volumen (OBBComponent mit isTrigger) und
-// ruft OnTriggerEnter/OnTriggerExit auf den Scripts beider Seiten auf.
+// Detects entering/leaving trigger volumes (OBBComponent with isTrigger) and calls
+// OnTriggerEnter/OnTriggerExit on the scripts of both sides.
 //
-// Gegenseite sind Kollisions-Boxen (OBB ohne Trigger) und Mesh-Bounds, jeweils
-// zusammengefasst auf ihre Hierarchie-Wurzel; die eigene Hierarchie des
-// Triggers zaehlt nicht. Getestet wird mit Welt-AABBs (gedrehte Boxen also
-// konservativ) auf Basis der zuletzt berechneten World-Transforms/Bounds.
+// The other side are collision boxes (OBB without trigger) and mesh bounds, each
+// merged to its hierarchy root; the trigger's own hierarchy does not count.
+// The test uses world AABBs (rotated boxes are thus conservative) from the CURRENT
+// transforms: Update() runs in the script phase after all OnUpdate calls and before
+// the frame's TransformSystem::Update, so entities with a TransformComponent are
+// evaluated from the local transforms of their parent chain
+// (TransformSystem::ComputeCurrentWorldTransform, BoundsSystem::ComputeCurrentWorldBounds),
+// and something a script moved in this OnUpdate enters/exits in this frame. Entities
+// with only a WorldTransformComponent use the stored world transform. Reads only.
 class ScriptTriggerSystem
 {
 public:

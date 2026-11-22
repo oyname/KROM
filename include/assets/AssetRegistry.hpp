@@ -66,6 +66,10 @@ struct MeshAsset : AssetBase
     std::vector<MaterialHandle> materialHandles; // index == SubMeshData::materialIndex
     GpuUploadStatus gpuStatus{};
     uint64_t geometryRevision = 0u;
+    // False for meshes whose normals must be used exactly as supplied (krom.h
+    // MeshData::generateNormals = false): runtime code must neither fill zero
+    // normals nor normalise the others. True for everything else.
+    bool generateMissingNormals = true;
 
     // True if any submesh carries bone weights and indices (needs a skinning shader).
     [[nodiscard]] bool HasSkinning() const noexcept

@@ -130,10 +130,14 @@ static bool CollectWorldBoundsRecursive(const engine::ecs::World& world,
     if (!world.IsAlive(entity))
         return false;
 
-    if (const auto* bounds = world.Get<engine::BoundsComponent>(entity))
+    // Current box, also right after a transform setter (before the frame's
+    // transform/bounds update). Reads only.
+    engine::math::Vec3 center{};
+    engine::math::Vec3 extents{};
+    if (engine::BoundsSystem::ComputeCurrentWorldBounds(world, entity, center, extents))
     {
-        const engine::math::Vec3 localMin = bounds->centerWorld - bounds->extentsWorld;
-        const engine::math::Vec3 localMax = bounds->centerWorld + bounds->extentsWorld;
+        const engine::math::Vec3 localMin = center - extents;
+        const engine::math::Vec3 localMax = center + extents;
         if (!ioHasBounds)
         {
             ioMin = localMin;
@@ -565,16 +569,34 @@ engine::math::Vec3 GetRotationEulerDeg(engine::ecs::World* world, LPENTITY entit
         return {};
     const engine::math::Quat* q = &rotation;
 
-    const float sinP = 2.0f * (q->w * q->x - q->z * q->y);
-    const float pitch = std::abs(sinP) >= 0.9999f
-        ? std::copysign(90.0f, sinP)
-        : engine::math::RAD_TO_DEG * std::asin(std::clamp(sinP, -1.0f, 1.0f));
-    const float yaw = engine::math::RAD_TO_DEG *
-        std::atan2(2.0f * (q->w * q->y + q->x * q->z),
-                   1.0f - 2.0f * (q->y * q->y + q->x * q->x));
-    const float roll = engine::math::RAD_TO_DEG *
-        std::atan2(2.0f * (q->w * q->z + q->x * q->y),
-                   1.0f - 2.0f * (q->x * q->x + q->z * q->z));
+    // Same formulas as the editor inspector (QuatToEulerDeg in EditorUI.cpp).
+    // Both atan2 argument pairs have the length cos(pitch). At gimbal lock
+    // (|pitch| = 90) they go to zero; there only yaw - roll (pitch +90) or
+    // yaw + roll (pitch -90) is defined, so roll is set to 0 and yaw taken from
+    // other matrix elements (the editor's gimbal branch). The switch happens only
+    // when cos(pitch) is really tiny: ignoring roll costs about cos(pitch) * |roll|
+    // of rotation, so the editor's |sin(pitch)| >= 0.9999 (|pitch| > ~89.2 deg)
+    // would lose up to ~2.5 deg. Pitch from atan2(sin, cos) stays accurate near 90.
+    const float sinP = std::clamp(2.0f * (q->w * q->x - q->z * q->y), -1.0f, 1.0f);
+    const float yawSin = 2.0f * (q->w * q->y + q->x * q->z);
+    const float yawCos = 1.0f - 2.0f * (q->y * q->y + q->x * q->x);
+    const float cosP = std::sqrt(yawSin * yawSin + yawCos * yawCos);
+    const float pitch = engine::math::RAD_TO_DEG * std::atan2(sinP, cosP);
+    float yaw = 0.0f;
+    float roll = 0.0f;
+    if (cosP > 3.0e-4f)
+    {
+        yaw = engine::math::RAD_TO_DEG * std::atan2(yawSin, yawCos);
+        roll = engine::math::RAD_TO_DEG *
+            std::atan2(2.0f * (q->w * q->z + q->x * q->y),
+                       1.0f - 2.0f * (q->x * q->x + q->z * q->z));
+    }
+    else
+    {
+        yaw = engine::math::RAD_TO_DEG *
+            std::atan2(-2.0f * (q->x * q->z - q->w * q->y),
+                       1.0f - 2.0f * (q->y * q->y + q->z * q->z));
+    }
     return {pitch, yaw, roll};
 }
 

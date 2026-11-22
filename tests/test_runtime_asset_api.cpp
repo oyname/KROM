@@ -7,8 +7,10 @@
 // DX11 window stays hidden. The checks document the current behaviour of the
 // wrapper, oddities included (marked "current behaviour").
 #include "krom.h"
+#include "KromAssetApi.hpp"
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/mesh_renderer/MeshRendererComponents.hpp"
+#include "core/Debug.hpp"
 #include <cmath>
 #include <cstdio>
 #include <cstring>
@@ -138,6 +140,91 @@ Krom::MeshData TriangleData(const char* name)
     return data;
 }
 
+// Same triangle, normals (0, 0, 2): pointing the right way but not unit length.
+const Krom::MeshVertex kLongNormalTriangle[3] = {
+    {{-1.f, -1.f, 0.f}, {0.f, 0.f, 2.f}, {0.f, 0.f}},
+    {{ 1.f, -1.f, 0.f}, {0.f, 0.f, 2.f}, {1.f, 0.f}},
+    {{ 0.f,  1.f, 0.f}, {0.f, 0.f, 2.f}, {0.5f, 1.f}},
+};
+
+// CPU data of a mesh in the wrapper's asset registry (wrapper internal).
+const engine::assets::MeshAsset* MeshAssetOf(LPMESH mesh)
+{
+    return mesh.IsValid() ? Krom::internal::GetWrapperAssetRegistry().meshes.Get(mesh) : nullptr;
+}
+
+// Every vertex of every submesh has exactly the normal expected (within 1e-5).
+bool NormalsAll(LPMESH mesh, const Vec3& expected)
+{
+    const engine::assets::MeshAsset* asset = MeshAssetOf(mesh);
+    if (!asset || asset->submeshes.empty())
+        return false;
+    for (const engine::assets::SubMeshData& submesh : asset->submeshes)
+    {
+        const size_t vertexCount = submesh.positions.size() / 3u;
+        if (vertexCount == 0u || submesh.normals.size() != vertexCount * 3u)
+            return false;
+        for (size_t v = 0; v < vertexCount; ++v)
+        {
+            const Vec3 n{submesh.normals[v * 3u], submesh.normals[v * 3u + 1u], submesh.normals[v * 3u + 2u]};
+            if (!NearVec(n, expected, 1.0e-5f))
+            {
+                std::printf("INFO: mesh %u vertex %zu normal=(%g %g %g)\n", mesh.value, v, n.x, n.y, n.z);
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+// No NaN / infinity in the tangents (an empty tangent channel counts as finite).
+bool TangentsFinite(LPMESH mesh)
+{
+    const engine::assets::MeshAsset* asset = MeshAssetOf(mesh);
+    if (!asset)
+        return false;
+    for (const engine::assets::SubMeshData& submesh : asset->submeshes)
+        for (const float value : submesh.tangents)
+            if (!std::isfinite(value))
+                return false;
+    return true;
+}
+
+// Error lines logged between BeginLogCapture and EndLogCapture (engine::Debug::onLog).
+std::vector<std::string> g_capturedErrors;
+bool g_capturing = false;
+
+void BeginLogCapture()
+{
+    g_capturedErrors.clear();
+    g_capturing = true;
+}
+
+void EndLogCapture()
+{
+    g_capturing = false;
+}
+
+int CapturedErrorCount()
+{
+    return static_cast<int>(g_capturedErrors.size());
+}
+
+bool CapturedErrorContains(size_t index, const char* text)
+{
+    return index < g_capturedErrors.size() && g_capturedErrors[index].find(text) != std::string::npos;
+}
+
+// Number of captured error lines that contain text.
+int CapturedErrorWith(const char* text)
+{
+    int count = 0;
+    for (const std::string& line : g_capturedErrors)
+        if (line.find(text) != std::string::npos)
+            ++count;
+    return count;
+}
+
 } // namespace
 
 int main()
@@ -146,6 +233,10 @@ int main()
     const auto check = [&](bool ok, const char* message) {
         std::printf("%s: %s\n", ok ? "PASS" : "FAIL", message);
         if (!ok) ++failures;
+    };
+    engine::Debug::onLog = [](engine::LogLevel level, const char* message) {
+        if (g_capturing && level >= engine::LogLevel::Error && message)
+            g_capturedErrors.emplace_back(message);
     };
 
 #if KROM_WRAPPER_HAS_GLTF
@@ -210,10 +301,31 @@ int main()
     check(loadedMesh.IsValid(), "LoadMesh of a .glb file");
     check(Krom::LoadMesh(cubeCopyPath.c_str()) == loadedMesh, "LoadMesh of the same path returns the same handle");
     check(std::filesystem::exists(scratch / "wuerfel.kmesh"), "LoadMesh writes a .kmesh cache next to the model");
+    BeginLogCapture();
     const LPMESH missingMesh = Krom::LoadMesh("Models/does_not_exist.glb");
-    check(missingMesh.IsValid(),
-          "LoadMesh of a missing file still returns a valid handle (current behaviour: failed asset in the registry)");
+    EndLogCapture();
+    check(!missingMesh.IsValid(), "LoadMesh of a missing file returns null");
+    check(CapturedErrorCount() == 1 && CapturedErrorContains(0, "LoadMesh") &&
+          CapturedErrorContains(0, "Models/does_not_exist.glb") && CapturedErrorContains(0, "not found"),
+          "LoadMesh of a missing file logs exactly one error naming the function, the path and 'not found'");
     check(!Krom::LoadMesh(nullptr).IsValid(), "LoadMesh(nullptr) returns null");
+    check(!Krom::LoadMesh("").IsValid(), "LoadMesh(\"\") returns null");
+    const auto brokenGlb = scratch / "broken.glb";
+    {
+        std::FILE* file = std::fopen(brokenGlb.string().c_str(), "wb");
+        if (file)
+        {
+            std::fputs("this is not a glb file", file);
+            std::fclose(file);
+        }
+    }
+    const std::string brokenGlbPath = brokenGlb.generic_string();
+    BeginLogCapture();
+    const LPMESH brokenMesh = Krom::LoadMesh(brokenGlbPath.c_str());
+    EndLogCapture();
+    check(!brokenMesh.IsValid(), "LoadMesh of a file that exists but cannot be imported returns null");
+    check(CapturedErrorWith("LoadMesh") == 1 && CapturedErrorWith("could not be loaded") == 1,
+          "LoadMesh of a broken file logs one wrapper error 'could not be loaded'");
 
     const LPTEXTURE texture = Krom::LoadTexture("Textures/albedo.png");
     check(texture.IsValid(), "LoadTexture of a .png file");
@@ -224,10 +336,15 @@ int main()
     const LPMATERIAL blockAsset = Krom::LoadMaterial("Materials/Block.mat");
     check(blockAsset.IsValid(), "LoadMaterial of a .mat file");
     check(Krom::LoadMaterial("Materials/Block.mat") == blockAsset, "LoadMaterial of the same path returns the same handle");
+    BeginLogCapture();
     const LPMATERIAL missingMaterial = Krom::LoadMaterial("Materials/does_not_exist.mat");
-    check(missingMaterial.IsValid(),
-          "LoadMaterial of a missing file still returns a valid handle (current behaviour)");
+    EndLogCapture();
+    check(!missingMaterial.IsValid(), "LoadMaterial of a missing file returns null");
+    check(CapturedErrorCount() == 1 && CapturedErrorContains(0, "LoadMaterial") &&
+          CapturedErrorContains(0, "Materials/does_not_exist.mat") && CapturedErrorContains(0, "not found"),
+          "LoadMaterial of a missing file logs exactly one error naming the function, the path and 'not found'");
     check(!Krom::LoadMaterial(nullptr).IsValid(), "LoadMaterial(nullptr) returns null");
+    check(!Krom::LoadMaterial("").IsValid(), "LoadMaterial(\"\") returns null");
 
     // --- Materials made through krom.h -----------------------------------------
     const LPMATERIAL texturedByPath = Krom::CreateTextureMaterial("Textures/albedo.png");
@@ -265,6 +382,46 @@ int main()
     plainFlags.generateNormals = false;
     plainFlags.generateTangents = false;
     check(Krom::CreateMeshAsset(plainFlags).IsValid(), "CreateMeshAsset with generateNormals / generateTangents off");
+    // generateNormals = false: normals stay exactly as supplied, also after the
+    // mesh got an entity and materials (and, further below, after frames ran).
+    Krom::MeshData zeroNormalsOff = TriangleData("ZeroNormalsOff");
+    zeroNormalsOff.generateNormals = false;
+    const LPMESH zeroOffMesh = Krom::CreateMeshAsset(zeroNormalsOff);
+    check(NormalsAll(zeroOffMesh, {0.f, 0.f, 0.f}), "generateNormals=false keeps zero normals in CreateMeshAsset");
+    check(TangentsFinite(zeroOffMesh), "generateNormals=false with zero normals gives finite tangents");
+    Krom::MeshData zeroNormalsOn = TriangleData("ZeroNormalsOn");
+    const LPMESH zeroOnMesh = Krom::CreateMeshAsset(zeroNormalsOn);
+    check(NormalsAll(zeroOnMesh, {0.f, 0.f, 1.f}), "generateNormals=true fills zero normals with unit face normals");
+    Krom::MeshData longNormalsOff = TriangleData("LongNormalsOff");
+    longNormalsOff.vertices = kLongNormalTriangle;
+    longNormalsOff.generateNormals = false;
+    const LPMESH longOffMesh = Krom::CreateMeshAsset(longNormalsOff);
+    check(NormalsAll(longOffMesh, {0.f, 0.f, 2.f}), "generateNormals=false keeps non-unit normals unnormalised");
+    Krom::MeshData longNormalsOn = TriangleData("LongNormalsOn");
+    longNormalsOn.vertices = kLongNormalTriangle;
+    const LPMESH longOnMesh = Krom::CreateMeshAsset(longNormalsOn);
+    check(NormalsAll(longOnMesh, {0.f, 0.f, 1.f}), "generateNormals=true normalises non-unit normals");
+
+    const LPENTITY zeroOffEntity = Krom::CreateEntity("ZeroNormalsOffEntity");
+    check(Krom::SetMesh(zeroOffEntity, zeroOffMesh) && MaterialOf(zeroOffEntity).IsValid() &&
+          NormalsAll(zeroOffMesh, {0.f, 0.f, 0.f}),
+          "generateNormals=false: zero normals stay zero after SetMesh (default material)");
+    check(Krom::SetPBR(zeroOffEntity, Krom::PBR{}) && NormalsAll(zeroOffMesh, {0.f, 0.f, 0.f}) &&
+          TangentsFinite(zeroOffMesh),
+          "generateNormals=false: zero normals stay zero after SetPBR");
+    check(Krom::SetMaterialFromAsset(zeroOffEntity, "Materials/Block.mat") && NormalsAll(zeroOffMesh, {0.f, 0.f, 0.f}),
+          "generateNormals=false: zero normals stay zero after SetMaterialFromAsset");
+    check(Krom::SetMaterial(zeroOffEntity, litB) && NormalsAll(zeroOffMesh, {0.f, 0.f, 0.f}),
+          "generateNormals=false: zero normals stay zero after SetMaterial");
+    const LPENTITY longOffEntity = Krom::CreateEntity("LongNormalsOffEntity");
+    check(Krom::SetMesh(longOffEntity, longOffMesh) && Krom::SetPBR(longOffEntity, Krom::PBR{}) &&
+          Krom::SetMaterialFromAsset(longOffEntity, "Materials/Block.mat") &&
+          NormalsAll(longOffMesh, {0.f, 0.f, 2.f}),
+          "generateNormals=false: non-unit normals stay unnormalised after SetMesh / SetPBR / SetMaterialFromAsset");
+    const LPENTITY zeroOffProcedural = Krom::CreateMeshEntity(zeroNormalsOff);
+    check(zeroOffProcedural.IsValid() && NormalsAll(MeshOf(zeroOffProcedural), {0.f, 0.f, 0.f}),
+          "generateNormals=false: CreateMeshEntity keeps zero normals");
+
     Krom::MeshData unnamed = TriangleData(nullptr);
     check(Krom::CreateMeshAsset(unnamed).IsValid(), "CreateMeshAsset with a null name");
     Krom::MeshData empty{};
@@ -307,11 +464,20 @@ int main()
     check(MaterialOf(fromAsset).IsValid(), "SetMeshFromAsset assigns a material");
     check(!Krom::SetMeshFromAsset(fromAsset, nullptr), "SetMeshFromAsset(nullptr) returns false");
     const LPENTITY missingFromAsset = Krom::CreateEntity("MissingFromAsset");
+    BeginLogCapture();
     const bool missingMeshSet = Krom::SetMeshFromAsset(missingFromAsset, "Models/does_not_exist.glb");
-    check(missingMeshSet && MeshOf(missingFromAsset) == missingMesh,
-          "SetMeshFromAsset of a missing file returns true with the failed mesh (current behaviour)");
-    check(!MaterialOf(missingFromAsset).IsValid(),
-          "SetMeshFromAsset of a missing file leaves the entity without a material (current behaviour)");
+    EndLogCapture();
+    check(!missingMeshSet, "SetMeshFromAsset of a missing file returns false");
+    check(!Krom::HasComponent<engine::MeshComponent>(missingFromAsset) &&
+          !Krom::HasComponent<engine::MaterialComponent>(missingFromAsset) &&
+          !Krom::HasComponent<engine::BoundsComponent>(missingFromAsset),
+          "SetMeshFromAsset of a missing file leaves the entity untouched (no mesh, material or bounds)");
+    check(CapturedErrorCount() == 1 && CapturedErrorContains(0, "not found"),
+          "SetMeshFromAsset of a missing file logs exactly one 'not found' error");
+    check(Krom::SetMeshFromAsset(missingFromAsset, cubeCopyPath.c_str()) == true &&
+          !Krom::SetMeshFromAsset(missingFromAsset, "Models/does_not_exist.glb") &&
+          MeshOf(missingFromAsset) == loadedMesh,
+          "SetMeshFromAsset of a missing file keeps the mesh the entity already had");
 
     check(Krom::SetMaterialFromAsset(fromAsset, "Materials/Block.mat"), "SetMaterialFromAsset");
     const auto* fromAssetMaterial = Krom::GetComponent<engine::MaterialComponent>(fromAsset);
@@ -322,11 +488,24 @@ int main()
           "SetMaterialFromAsset realizes the asset handle into a runtime material");
     check(!Krom::SetMaterialFromAsset(fromAsset, nullptr), "SetMaterialFromAsset(nullptr) returns false");
     const LPENTITY missingMaterialHolder = Krom::CreateMeshEntity(TriangleData("MissingMaterialHolder"));
+    const LPMATERIAL holderMaterialBefore = MaterialOf(missingMaterialHolder);
+    BeginLogCapture();
     const bool missingMaterialSet = Krom::SetMaterialFromAsset(missingMaterialHolder, "Materials/does_not_exist.mat");
+    EndLogCapture();
     const auto* missingMaterialComponent = Krom::GetComponent<engine::MaterialComponent>(missingMaterialHolder);
-    check(missingMaterialSet && MaterialOf(missingMaterialHolder).IsValid() && missingMaterialComponent &&
-          missingMaterialComponent->materialAssetPath == "Materials/does_not_exist.mat",
-          "SetMaterialFromAsset of a missing file returns true, assigns a material and stores the path (current behaviour)");
+    check(!missingMaterialSet && holderMaterialBefore.IsValid() &&
+          MaterialOf(missingMaterialHolder) == holderMaterialBefore && missingMaterialComponent &&
+          missingMaterialComponent->materialAssetPath.empty(),
+          "SetMaterialFromAsset of a missing file returns false, keeps the material and stores no path");
+    check(CapturedErrorCount() == 1 && CapturedErrorContains(0, "not found"),
+          "SetMaterialFromAsset of a missing file logs exactly one 'not found' error");
+    const LPMATERIAL blockRuntimeBefore = MaterialOf(fromAsset);
+    const bool missingOverBlock = Krom::SetMaterialFromAsset(fromAsset, "Materials/does_not_exist.mat");
+    const auto* fromAssetMaterialAfter = Krom::GetComponent<engine::MaterialComponent>(fromAsset);
+    check(!missingOverBlock && blockRuntimeBefore.IsValid() && fromAssetMaterialAfter &&
+          fromAssetMaterialAfter->material == blockRuntimeBefore &&
+          fromAssetMaterialAfter->materialAssetPath == "Materials/Block.mat",
+          "SetMaterialFromAsset of a missing file keeps the previous material and materialAssetPath");
     check(!Krom::SetMaterialFromAsset(NULL_LPENTITY, "Materials/Block.mat"),
           "SetMaterialFromAsset rejects a null entity");
 
@@ -463,6 +642,22 @@ int main()
     check(sameMeshes, "the second import reuses the mesh handles (registry entries replaced by path)");
     check(newMaterials, "the second import creates new runtime materials (not cached)");
 
+    // Sub-asset keys of an imported model (as stored in prefabs and scenes) load
+    // from the registry and keep the asset Loaded (car.glb has no materials;
+    // the material key is checked with CesiumMan below).
+    const LPMESH carSubMesh = Krom::LoadMesh("Models/car.glb#mesh/0");
+    const engine::assets::MeshAsset* carSubMeshAsset = MeshAssetOf(carSubMesh);
+    check(carSubMeshAsset && carSubMeshAsset->state == engine::assets::AssetState::Loaded &&
+          carSubMesh == MeshOf(Krom::GetChild(car, 0)),
+          "LoadMesh of an imported sub-asset key returns the imported mesh, still Loaded");
+    BeginLogCapture();
+    const LPMATERIAL unknownSubMaterial = Krom::LoadMaterial("Models/car.glb#material/99");
+    const LPMATERIAL missingModelSubMaterial = Krom::LoadMaterial("Models/does_not_exist.glb#material/0");
+    EndLogCapture();
+    check(!unknownSubMaterial.IsValid() && !missingModelSubMaterial.IsValid() && CapturedErrorCount() == 2 &&
+          CapturedErrorContains(0, "could not be loaded") && CapturedErrorContains(1, "not found"),
+          "LoadMaterial of an unknown sub-asset / a sub-asset of a missing model returns null with one error each");
+
     const LPENTITY cesium = Krom::CreateEntityFromAsset("Models/CesiumMan.glb");
     check(cesium.IsValid(), "CreateEntityFromAsset of a skinned model");
     DumpHierarchy("CesiumMan", cesium);
@@ -491,23 +686,78 @@ int main()
         if (HasSkeleton(entity))
             skinsPlay = skinsPlay && HasPlayingClip(entity);
     check(skinsPlay, "the skinned mesh entities play the first clip too");
+    const LPMATERIAL cesiumSubMaterial = Krom::LoadMaterial("Models/CesiumMan.glb#material/0");
+    const auto* cesiumSubMaterialAsset = cesiumSubMaterial.IsValid()
+        ? Krom::internal::GetWrapperAssetRegistry().materials.Get(cesiumSubMaterial) : nullptr;
+    check(cesiumSubMaterialAsset && cesiumSubMaterialAsset->state == engine::assets::AssetState::Loaded &&
+          cesiumSubMaterialAsset->debugName == "Cesium_Man-effect",
+          "LoadMaterial of an imported sub-asset key returns the imported material, still Loaded");
 
-    // Missing file and null path.
+    // Missing file, broken file, extension without importer, null path.
+    const size_t entitiesBeforeMissing = Krom::GetWorld().EntityCount();
+    BeginLogCapture();
     const LPENTITY missingModel = Krom::CreateEntityFromAsset("Models/does_not_exist.glb", "MissingModel");
-    // The fallback logs "no bundle importer", although the glTF importer exists and only the file is missing.
-    check(missingModel.IsValid() && std::strcmp(Krom::GetName(missingModel), "MissingModel") == 0 &&
-          MeshOf(missingModel) == missingMesh && !MaterialOf(missingModel).IsValid(),
-          "CreateEntityFromAsset of a missing file falls back to a single entity with the failed mesh, no material (current behaviour)");
+    EndLogCapture();
+    check(!missingModel.IsValid(), "CreateEntityFromAsset of a missing file returns null");
+    check(Krom::GetWorld().EntityCount() == entitiesBeforeMissing && !Krom::FindEntity("MissingModel").IsValid(),
+          "CreateEntityFromAsset of a missing file leaves no entity behind");
+    check(CapturedErrorCount() == 1 && CapturedErrorContains(0, "CreateEntityFromAsset") &&
+          CapturedErrorContains(0, "Models/does_not_exist.glb") && CapturedErrorContains(0, "not found"),
+          "CreateEntityFromAsset of a missing file logs exactly one 'not found' error naming the function and path");
     const LPENTITY missingUnnamed = Krom::CreateEntityFromAsset("Models/does_not_exist.glb");
-    check(missingUnnamed.IsValid() && std::strcmp(Krom::GetName(missingUnnamed), "Models/does_not_exist.glb") == 0,
-          "the fallback entity without a name is named after the path (current behaviour)");
+    check(!missingUnnamed.IsValid() && Krom::GetWorld().EntityCount() == entitiesBeforeMissing &&
+          !Krom::FindEntity("Models/does_not_exist.glb").IsValid(),
+          "CreateEntityFromAsset of a missing file without a name returns null and leaves nothing behind");
+
+    BeginLogCapture();
+    const LPENTITY brokenModel = Krom::CreateEntityFromAsset(brokenGlbPath.c_str(), "BrokenModel");
+    EndLogCapture();
+    check(!brokenModel.IsValid() && Krom::GetWorld().EntityCount() == entitiesBeforeMissing &&
+          !Krom::FindEntity("BrokenModel").IsValid(),
+          "CreateEntityFromAsset of a file the importer rejects returns null and leaves nothing behind");
+    check(CapturedErrorWith("cgltf") >= 1 && CapturedErrorWith("lade als einfaches Mesh") == 0 &&
+          CapturedErrorWith("simple mesh") == 0,
+          "CreateEntityFromAsset of a rejected file reports the import error and does not fall back to a simple mesh");
+
+    // Extension without a registered importer: the simple text mesh format of
+    // AssetPipeline::ReloadMesh ("v", "vt", "vn", "i" lines) still loads as one entity.
+    const auto textMesh = scratch / "triangle.kromtxt";
+    {
+        std::FILE* file = std::fopen(textMesh.string().c_str(), "wb");
+        if (file)
+        {
+            std::fputs("v -1 -1 0\nv 1 -1 0\nv 0 1 0\n"
+                       "vt 0 0\nvt 1 0\nvt 0.5 1\n"
+                       "vn 0 0 1\nvn 0 0 1\nvn 0 0 1\n"
+                       "i 0 1 2\n", file);
+            std::fclose(file);
+        }
+    }
+    const std::string textMeshPath = textMesh.generic_string();
+    const LPENTITY textModel = Krom::CreateEntityFromAsset(textMeshPath.c_str(), "TextModel");
+    check(textModel.IsValid() && std::strcmp(Krom::GetName(textModel), "TextModel") == 0 && HasMesh(textModel) &&
+          Krom::GetWorld().EntityCount() == entitiesBeforeMissing + 1u,
+          "CreateEntityFromAsset of an extension without importer falls back to a single mesh entity");
+    const auto brokenText = scratch / "empty.kromtxt";
+    {
+        std::FILE* file = std::fopen(brokenText.string().c_str(), "wb");
+        if (file)
+        {
+            std::fputs("# no vertices\n", file);
+            std::fclose(file);
+        }
+    }
+    const std::string brokenTextPath = brokenText.generic_string();
+    const size_t entitiesBeforeBrokenText = Krom::GetWorld().EntityCount();
+    const LPENTITY brokenTextModel = Krom::CreateEntityFromAsset(brokenTextPath.c_str(), "EmptyTextModel");
+    check(!brokenTextModel.IsValid() && Krom::GetWorld().EntityCount() == entitiesBeforeBrokenText &&
+          !Krom::FindEntity("EmptyTextModel").IsValid(),
+          "a failed simple-mesh fallback destroys the entity it created");
     check(!Krom::CreateEntityFromAsset(nullptr).IsValid() && !Krom::CreateEntityFromAsset("").IsValid(),
           "CreateEntityFromAsset(nullptr / \"\") returns null");
 
-    // Entities with a failed mesh are not drawn; remove them before rendering.
-    check(Krom::DestroyEntity(missingModel) && Krom::DestroyEntity(missingUnnamed) &&
-          Krom::DestroyEntity(missingFromAsset),
-          "test cleanup: entities with the failed mesh destroyed");
+    check(Krom::DestroyEntity(textModel) && Krom::DestroyEntity(missingFromAsset),
+          "test cleanup: fallback entities destroyed");
 
     // --- Render the imported models, then without them ------------------------------
     Krom::SetPosition(car, -2.5f, 0.0f, 0.0f);
@@ -551,6 +801,10 @@ int main()
     check(clipTimeAfter > clipTimeBefore, "the clip of the skinned model advances while rendering");
     check(destroyed && allGone, "DestroyEntity removes the imported hierarchies");
     check(Krom::IsAlive(root) && Krom::IsAlive(meshChild), "the other test entities survive");
+    check(Krom::IsAlive(zeroOffEntity) && NormalsAll(zeroOffMesh, {0.f, 0.f, 0.f}) && TangentsFinite(zeroOffMesh),
+          "generateNormals=false: zero normals stay zero after frames rendered");
+    check(Krom::IsAlive(longOffEntity) && NormalsAll(longOffMesh, {0.f, 0.f, 2.f}),
+          "generateNormals=false: non-unit normals stay unnormalised after frames rendered");
 
     Krom::Shutdown();
     std::filesystem::remove_all(scratch, ec);

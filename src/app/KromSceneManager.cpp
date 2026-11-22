@@ -131,6 +131,78 @@ static KromSceneData ParseKscene(const std::string& json)
 // Scene Entity-Instantiierung
 // =============================================================================
 
+// =============================================================================
+// Scene roots: SceneRecord::rootEntities plus the index SceneManagerState::rootScenes
+// =============================================================================
+
+static void RemoveSceneRoot(SceneManagerState& manager, LPENTITY entity)
+{
+    const auto it = manager.rootScenes.find(entity.value);
+    if (it == manager.rootScenes.end())
+        return;
+    if (const auto sceneIt = manager.scenes.find(it->second); sceneIt != manager.scenes.end())
+    {
+        // erase, not swap-and-pop: FindEntityInScene depends on the root order.
+        std::vector<LPENTITY>& roots = sceneIt->second.rootEntities;
+        if (const auto pos = std::find(roots.begin(), roots.end(), entity); pos != roots.end())
+            roots.erase(pos);
+    }
+    manager.rootScenes.erase(it);
+}
+
+static void AddSceneRoot(SceneManagerState& manager, uint32_t sceneId, LPENTITY entity)
+{
+    const auto sceneIt = manager.scenes.find(sceneId);
+    if (sceneIt == manager.scenes.end())
+        return;
+    if (const auto it = manager.rootScenes.find(entity.value); it != manager.rootScenes.end())
+    {
+        if (it->second == sceneId)
+            return;
+        RemoveSceneRoot(manager, entity);   // a root belongs to one scene
+    }
+    sceneIt->second.rootEntities.push_back(entity);
+    manager.rootScenes.emplace(entity.value, sceneId);
+}
+
+// Removes the scene record and the index entries of its roots.
+static void ForgetScene(SceneManagerState& manager, uint32_t sceneId)
+{
+    const auto sceneIt = manager.scenes.find(sceneId);
+    if (sceneIt == manager.scenes.end())
+        return;
+    for (const LPENTITY root : sceneIt->second.rootEntities)
+        if (const auto it = manager.rootScenes.find(root.value); it != manager.rootScenes.end() && it->second == sceneId)
+            manager.rootScenes.erase(it);
+    manager.scenes.erase(sceneIt);
+}
+
+void ForgetDestroyedEntities(SceneManagerState& manager, const engine::ecs::World& world, LPENTITY subtreeRoot)
+{
+    if (!world.IsAlive(subtreeRoot) || (manager.rootScenes.empty() && manager.persistentEntityIds.empty()))
+        return;
+    // Same entities as DestroyEntityRecursive: the subtree through ChildrenComponent.
+    std::vector<LPENTITY> stack{subtreeRoot};
+    while (!stack.empty())
+    {
+        const LPENTITY entity = stack.back();
+        stack.pop_back();
+        if (!world.IsAlive(entity))
+            continue;
+        RemoveSceneRoot(manager, entity);
+        manager.persistentEntityIds.erase(entity.value);
+        if (const auto* children = world.Get<engine::ChildrenComponent>(entity))
+            stack.insert(stack.end(), children->children.begin(), children->children.end());
+    }
+}
+
+void ClearScenes(SceneManagerState& manager)
+{
+    manager.scenes.clear();
+    manager.rootScenes.clear();
+    manager.persistentEntityIds.clear();
+}
+
 static void MarkPersistentRecursive(const SceneContext& ctx, LPENTITY entity)
 {
     if (!ctx.world || !ctx.world->IsAlive(entity))
@@ -176,16 +248,18 @@ void RegisterScriptSpawn(const SceneContext& ctx, LPENTITY owner, LPENTITY root)
 {
     if (!ctx.world || !ctx.world->IsAlive(root))
         return;
-    std::unordered_set<uint32_t> visited;
-    for (LPENTITY current = owner; ctx.world->IsAlive(current) && visited.insert(current.value).second;)
+    // One index lookup per ancestor; the depth limit guards against parent cycles.
+    LPENTITY current = owner;
+    for (uint32_t depth = 0u; depth < 1024u && ctx.world->IsAlive(current); ++depth)
     {
-        for (auto& [sceneId, scene] : ctx.manager.scenes)
+        if (const auto it = ctx.manager.rootScenes.find(current.value); it != ctx.manager.rootScenes.end())
         {
-            (void)sceneId;
-            if (std::find(scene.rootEntities.begin(), scene.rootEntities.end(), current) != scene.rootEntities.end())
+            const uint32_t sceneId = it->second;
+            if (const auto sceneIt = ctx.manager.scenes.find(sceneId); sceneIt != ctx.manager.scenes.end())
             {
-                scene.rootEntities.push_back(root);
-                if (scene.persistent)
+                const bool persistent = sceneIt->second.persistent;
+                AddSceneRoot(ctx.manager, sceneId, root);
+                if (persistent)
                     MarkPersistentRecursive(ctx, root);
                 return;
             }
@@ -210,19 +284,23 @@ static void UnloadSceneById(const SceneContext& ctx, uint32_t sceneId)
     SceneRecord& record = it->second;
     if (ctx.world)
     {
-        for (const LPENTITY entity : record.rootEntities)
+        // A copy: ForgetDestroyedEntities removes the destroyed roots from the record.
+        const std::vector<LPENTITY> roots = record.rootEntities;
+        for (const LPENTITY entity : roots)
         {
             if (!ctx.world->IsAlive(entity))
                 continue;
             if (ctx.manager.persistentEntityIds.count(entity.value))
                 continue;
             PreservePersistentSubtrees(*ctx.world, entity, ctx.manager.persistentEntityIds);
+            // Also covers roots of other scenes reparented below this one.
+            ForgetDestroyedEntities(ctx.manager, *ctx.world, entity);
             DestroyEntityRecursive(*ctx.world, entity);
         }
     }
     if (record.active && !record.name.empty())
         ctx.eventBus.Emit<engine::events::SceneUnloadedEvent>(record.name);
-    ctx.manager.scenes.erase(it);
+    ForgetScene(ctx.manager, sceneId);
 }
 
 static void RebuildChildrenComponentsForLoadedEntities(const SceneContext& ctx,
@@ -333,7 +411,7 @@ static void ResolveSerializedSceneAssetBindings(const SceneContext& ctx,
 
 static bool LoadComponentSerializedScene(const SceneContext& ctx,
                                          const KromSceneData& data,
-                                         SceneRecord& record)
+                                         uint32_t sceneId)
 {
     engine::serialization::SceneDeserializer deserializer(*ctx.world);
     deserializer.RegisterDefaultHandlers();
@@ -376,7 +454,7 @@ static bool LoadComponentSerializedScene(const SceneContext& ctx,
         if (!ctx.world->IsAlive(entity))
             continue;
         if (!ctx.world->Has<engine::ParentComponent>(entity))
-            record.rootEntities.push_back(entity);
+            AddSceneRoot(ctx.manager, sceneId, entity);
         if (data.persistent)
             MarkPersistentRecursive(ctx, entity);
     }
@@ -458,9 +536,10 @@ static void ApplySceneEnvironment(const SceneContext& ctx, const KromSceneData& 
 }
 
 // Gemeinsamer Instantiierungspfad fuer LoadScene/LoadSceneAdditive und ActivateScene.
-static bool InstantiateSceneData(const SceneContext& ctx, const KromSceneData& data, SceneRecord& record)
+static bool InstantiateSceneData(const SceneContext& ctx, const KromSceneData& data,
+                                 uint32_t sceneId, const SceneRecord& record)
 {
-    if (!LoadComponentSerializedScene(ctx, data, record))
+    if (!LoadComponentSerializedScene(ctx, data, sceneId))
         return false;
 
     ctx.transformSystem.Update(*ctx.world);
@@ -497,9 +576,9 @@ static LPSCENE LoadSceneFromData(const SceneContext& ctx, KromSceneData data, bo
     record.persistent = data.persistent;
     record.active     = true;
 
-    if (!InstantiateSceneData(ctx, data, record))
+    if (!InstantiateSceneData(ctx, data, sceneId, record))
     {
-        ctx.manager.scenes.erase(sceneId);
+        ForgetScene(ctx.manager, sceneId);
         return NULL_SCENE;
     }
 
@@ -657,7 +736,7 @@ bool ActivateScene(const SceneContext& ctx, LPSCENE scene)
     const KromSceneData& data = record.stagedData;
     if (!data.valid)
     {
-        ctx.manager.scenes.erase(it);
+        ForgetScene(ctx.manager, scene.id);
         return false;
     }
 
@@ -666,9 +745,9 @@ bool ActivateScene(const SceneContext& ctx, LPSCENE scene)
     record.active     = true;
     record.staged     = false;
 
-    if (!InstantiateSceneData(ctx, data, record))
+    if (!InstantiateSceneData(ctx, data, scene.id, record))
     {
-        ctx.manager.scenes.erase(it);
+        ForgetScene(ctx.manager, scene.id);
         return false;
     }
 

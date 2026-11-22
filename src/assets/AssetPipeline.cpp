@@ -242,6 +242,17 @@ namespace engine::assets {
         return empty;
     }
 
+    bool AssetPipeline::HasMeshImporterFor(const std::string& path) const
+    {
+        const std::string ext = PathToUtf8(Resolve(path).extension());
+        for (const auto& importer : m_meshImporters)
+        {
+            if (importer->CanImport(ext))
+                return true;
+        }
+        return false;
+    }
+
     void AssetPipeline::RegisterSceneDirectiveHandler(SceneDirectiveHandler handler)
     {
         if (handler)

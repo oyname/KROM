@@ -78,6 +78,14 @@ void GenerateMissingNormals(engine::assets::SubMeshData& submesh)
     }
 }
 
+void GenerateMissingNormals(engine::assets::MeshAsset& mesh)
+{
+    if (!mesh.generateMissingNormals)
+        return;
+    for (engine::assets::SubMeshData& submesh : mesh.submeshes)
+        GenerateMissingNormals(submesh);
+}
+
 std::string ResolveEngineAssetPath(const RuntimeMaterialContext& ctx, const char* path)
 {
     if (!path || path[0] == '\0')
@@ -259,9 +267,9 @@ engine::MaterialHandle CreateRuntimeLitMaterialFromAssets(const RuntimeMaterialC
 static bool EnsureTangentsForPbr(engine::assets::MeshAsset& mesh)
 {
     bool changed = false;
+    GenerateMissingNormals(mesh);
     for (engine::assets::SubMeshData& submesh : mesh.submeshes)
     {
-        GenerateMissingNormals(submesh);
         if (engine::assets::HasValidTangents(submesh))
             continue;
         if (!engine::assets::EnsureTangents(submesh))
@@ -425,8 +433,7 @@ static engine::MaterialHandle CreateRuntimeUnlitMaterialFromAssets(const Runtime
 {
     using namespace engine;
 
-    for (assets::SubMeshData& submesh : mesh.submeshes)
-        GenerateMissingNormals(submesh);
+    GenerateMissingNormals(mesh);
 
     // Custom shaders bring their own vertex stage and stay on the static layout.
     const bool skinned = mesh.HasSkinning() && !customVS.IsValid();
@@ -698,8 +705,7 @@ LPMATERIAL RealizeMaterialForEntity(const RuntimeMaterialContext& ctx, LPENTITY 
     if (!mesh || mesh->submeshes.empty())
         return material;
 
-    for (engine::assets::SubMeshData& submesh : mesh->submeshes)
-        GenerateMissingNormals(submesh);
+    GenerateMissingNormals(*mesh);
 
     const uint64_t cacheKey = RuntimeMaterialCacheKey(material, meshComp->mesh);
     if (const auto cached = ctx.runtimeMaterialCache.find(cacheKey); cached != ctx.runtimeMaterialCache.end())
@@ -942,8 +948,7 @@ static LPMATERIAL GetOrCreateDefaultLitMaterial(const RuntimeMaterialContext& ct
     if (const auto cached = ctx.runtimeMaterialCache.find(cacheKey); cached != ctx.runtimeMaterialCache.end())
         return cached->second;
 
-    for (engine::assets::SubMeshData& submesh : mesh->submeshes)
-        GenerateMissingNormals(submesh);
+    GenerateMissingNormals(*mesh);
 
     engine::assets::MaterialAsset defaultMat{};
     defaultMat.debugName       = "DefaultLit";

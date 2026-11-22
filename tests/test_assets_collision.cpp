@@ -15,6 +15,7 @@
 #include "NullDevice.hpp"
 #include "scene/Scene.hpp"
 #include "scene/BoundsSystem.hpp"
+#include "scene/TransformSystem.hpp"
 #include "addons/mesh_renderer/MeshBounds.hpp"
 #include "ecs/Components.hpp"
 #include <filesystem>
@@ -810,6 +811,133 @@ static void TestMeshBoundsDirtyFlagPreservesWorldRebuild(test::TestContext& ctx)
     CHECK(ctx, updated != nullptr && std::fabs(updated->extentsWorld.y - 2.f) < 1e-6f);
 }
 
+static bool NearVec3(const math::Vec3& a, const math::Vec3& b, float tolerance = 1e-5f)
+{
+    return std::fabs(a.x - b.x) <= tolerance && std::fabs(a.y - b.y) <= tolerance &&
+           std::fabs(a.z - b.z) <= tolerance;
+}
+
+// ComputeCurrentWorldBounds gives what TransformSystem::Update + BoundsSystem::Update
+// write, already before they run (dirty), and the same value after them.
+static void TestComputeCurrentWorldBoundsMatchesSystems(test::TestContext& ctx)
+{
+    ecs::ComponentMetaRegistry componentRegistry = CreateAssetCollisionRegistry();
+    ecs::World world(componentRegistry);
+
+    const auto spawn = [&](EntityID parent, const math::Vec3& position, const math::Vec3& eulerDeg,
+                           const math::Vec3& scale) {
+        const EntityID e = world.CreateEntity();
+        auto& tc = world.Add<TransformComponent>(e);
+        tc.localPosition = position;
+        tc.localRotation = math::Quat::FromEulerDeg(eulerDeg.x, eulerDeg.y, eulerDeg.z);
+        tc.localScale = scale;
+        tc.dirty = true;
+        world.Add<WorldTransformComponent>(e);
+        auto& b = world.Add<BoundsComponent>(e);
+        b.centerLocal = { 0.2f, -0.3f, 0.1f };
+        b.extentsLocal = { 1.f, 0.5f, 2.f };
+        b.localDirty = true;
+        if (parent.IsValid())
+            world.Add<ParentComponent>(e, ParentComponent{ parent });
+        return e;
+    };
+    const EntityID root = spawn(NULL_ENTITY, { 1.f, 2.f, 3.f }, { 20.f, 45.f, 10.f }, { 2.f, 1.f, 0.5f });
+    const EntityID mid  = spawn(root, { 1.f, 0.f, -2.f }, { 0.f, 30.f, -15.f }, { 1.f, 3.f, 1.f });
+    const EntityID leaf = spawn(mid, { 0.5f, 1.f, 0.f }, { 10.f, 0.f, 70.f }, { 1.5f, 0.5f, 2.f });
+    const EntityID chain[] = { root, mid, leaf };
+
+    TransformSystem transforms;
+    BoundsSystem boundsSystem;
+
+    // Fresh values while dirty == what the systems write == fresh values afterwards.
+    const auto checkAgainstSystems = [&]() {
+        math::Vec3 freshCenter[3]{}, freshExtents[3]{};
+        for (int i = 0; i < 3; ++i)
+            CHECK(ctx, BoundsSystem::ComputeCurrentWorldBounds(world, chain[i], freshCenter[i], freshExtents[i]));
+        transforms.Update(world);
+        boundsSystem.Update(world);
+        for (int i = 0; i < 3; ++i)
+        {
+            const BoundsComponent* b = world.Get<BoundsComponent>(chain[i]);
+            CHECK(ctx, b && NearVec3(b->centerWorld, freshCenter[i]) && NearVec3(b->extentsWorld, freshExtents[i]));
+            math::Vec3 c{}, e{};
+            CHECK(ctx, BoundsSystem::ComputeCurrentWorldBounds(world, chain[i], c, e) &&
+                       NearVec3(c, freshCenter[i]) && NearVec3(e, freshExtents[i]));
+        }
+    };
+
+    checkAgainstSystems();   // first update: everything dirty
+
+    // Reads only: no flag or stored value changes.
+    world.Get<TransformComponent>(mid)->localPosition = { -2.f, 1.f, 4.f };
+    world.Get<TransformComponent>(mid)->dirty = true;
+    {
+        const math::Vec3 storedLeafCenter = world.Get<BoundsComponent>(leaf)->centerWorld;
+        math::Vec3 c{}, e{};
+        CHECK(ctx, BoundsSystem::ComputeCurrentWorldBounds(world, leaf, c, e));
+        CHECK(ctx, !NearVec3(c, storedLeafCenter, 1e-3f));   // the parent moved: not the stored box
+        CHECK(ctx, world.Get<TransformComponent>(mid)->dirty);
+        CHECK(ctx, NearVec3(world.Get<BoundsComponent>(leaf)->centerWorld, storedLeafCenter, 0.f));
+    }
+    checkAgainstSystems();   // middle moved
+
+    world.Get<TransformComponent>(root)->localRotation = math::Quat::FromEulerDeg(-35.f, 120.f, 5.f);
+    world.Get<TransformComponent>(root)->dirty = true;
+    checkAgainstSystems();   // root rotated
+
+    world.Get<BoundsComponent>(leaf)->extentsLocal = { 0.25f, 3.f, 1.f };
+    world.Get<BoundsComponent>(leaf)->localDirty = true;
+    checkAgainstSystems();   // local bounds changed
+
+    // Detached without dirty: the leaf is a root now, its stored box was computed
+    // as a child. The fresh value is the root value (as ComputeCurrentWorldTransform).
+    world.Remove<ParentComponent>(leaf);
+    {
+        math::Vec3 c{}, e{}, expectedCenter{}, expectedExtents{};
+        CHECK(ctx, BoundsSystem::ComputeCurrentWorldBounds(world, leaf, c, e));
+        const BoundsComponent* b = world.Get<BoundsComponent>(leaf);
+        BoundsSystem::TransformAABB(b->centerLocal, b->extentsLocal,
+                                    TransformSystem::ComputeCurrentWorldTransform(world, leaf).matrix,
+                                    expectedCenter, expectedExtents);
+        CHECK(ctx, NearVec3(c, expectedCenter) && NearVec3(e, expectedExtents));
+    }
+
+    // Fallback: only a WorldTransformComponent -> its stored matrix.
+    {
+        const EntityID e = world.CreateEntity();
+        auto& wt = world.Add<WorldTransformComponent>(e);
+        wt.matrix = math::Mat4::TRS({ 5.f, -1.f, 2.f }, math::Quat::FromEulerDeg(0.f, 90.f, 0.f), { 2.f, 1.f, 1.f });
+        auto& b = world.Add<BoundsComponent>(e);
+        b.centerLocal = { 1.f, 0.f, 0.f };
+        b.extentsLocal = { 1.f, 2.f, 3.f };
+        b.centerWorld = { 99.f, 99.f, 99.f };   // stale stored value, not used
+        math::Vec3 c{}, ext{}, expectedCenter{}, expectedExtents{};
+        BoundsSystem::TransformAABB(b.centerLocal, b.extentsLocal, wt.matrix, expectedCenter, expectedExtents);
+        CHECK(ctx, BoundsSystem::ComputeCurrentWorldBounds(world, e, c, ext));
+        CHECK(ctx, NearVec3(c, expectedCenter) && NearVec3(ext, expectedExtents));
+    }
+    // Fallback: no transform at all -> the stored world box.
+    {
+        const EntityID e = world.CreateEntity();
+        auto& b = world.Add<BoundsComponent>(e);
+        b.centerWorld = { 7.f, 8.f, 9.f };
+        b.extentsWorld = { 0.5f, 1.5f, 2.5f };
+        math::Vec3 c{}, ext{};
+        CHECK(ctx, BoundsSystem::ComputeCurrentWorldBounds(world, e, c, ext));
+        CHECK(ctx, NearVec3(c, { 7.f, 8.f, 9.f }, 0.f) && NearVec3(ext, { 0.5f, 1.5f, 2.5f }, 0.f));
+    }
+    // No BoundsComponent / dead entity -> false.
+    {
+        const EntityID plain = world.CreateEntity();
+        world.Add<TransformComponent>(plain);
+        world.Add<WorldTransformComponent>(plain);
+        math::Vec3 c{}, ext{};
+        CHECK(ctx, !BoundsSystem::ComputeCurrentWorldBounds(world, plain, c, ext));
+        world.DestroyEntity(root);
+        CHECK(ctx, !BoundsSystem::ComputeCurrentWorldBounds(world, root, c, ext));
+    }
+}
+
 static void TestSceneDirectiveRegistrySupportsMultipleHandlers(test::TestContext& ctx)
 {
     namespace fs = std::filesystem;
@@ -988,6 +1116,7 @@ int RunAssetsCollisionTests()
         .Add("MeshCollisionPipeline bounds fallback does not hide precise hit", TestMeshCollisionPipelineBoundsFallbackDoesNotHidePreciseHit)
         .Add("Ray-triangle hits tiny triangle", TestRayTriangleHitsTinyTriangle)
         .Add("MeshBounds dirty flag preserves world rebuild", TestMeshBoundsDirtyFlagPreservesWorldRebuild)
+        .Add("ComputeCurrentWorldBounds matches the transform and bounds systems", TestComputeCurrentWorldBoundsMatchesSystems)
         .Add("Scene directive registry supports multiple handlers", TestSceneDirectiveRegistrySupportsMultipleHandlers)
         .Add("AssetPipeline glTF materialHandles registered", TestAssetPipelineGltfMaterialHandlesRegistered);
     return suite.Run();
