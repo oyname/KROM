@@ -284,6 +284,34 @@ int main()
           "GetRotationEulerDeg right after TurnEntity returns the turned rotation");
     check(NearVec(Krom::GetRotationEulerDeg(NULL_LPENTITY), {0.f, 0.f, 0.f}), "GetRotationEulerDeg(null) is zero");
 
+    // Round trip through the Euler angles, including gimbal lock (|pitch| = 90):
+    // FromEulerDeg(GetRotationEulerDeg()) is the same rotation as the one set
+    // (compared by rotating two axis vectors; the angles themselves are not
+    // unique at gimbal lock).
+    {
+        const Vec3 cases[] = {
+            {90.f, 30.f, 0.f}, {-90.f, -120.f, 0.f}, {90.f, 0.f, 40.f}, {-90.f, 60.f, -25.f},
+            {89.9f, 45.f, 10.f}, {-89.9f, -170.f, 35.f}, {89.99f, 100.f, 170.f}, {-89.95f, 20.f, -150.f},
+            {89.5f, -30.f, 120.f}, {-89.f, 10.f, 179.f},
+            {0.f, 0.f, 0.f}, {20.f, 30.f, 0.f}, {-30.f, 0.f, 10.f}, {10.f, -60.f, 25.f}, {45.f, 170.f, -100.f},
+        };
+        const LPENTITY eulerProbe = Krom::CreateEntity("EulerProbe");
+        for (const Vec3& c : cases)
+        {
+            Krom::SetRotationEulerDeg(eulerProbe, c.x, c.y, c.z);
+            const Vec3 e = Krom::GetRotationEulerDeg(eulerProbe);
+            const Quat expected = EulerToQuat(c);
+            const Quat actual = EulerToQuat(e);
+            const bool same = NearVec(actual.Rotate(Vec3{1.f, 0.f, 0.f}), expected.Rotate(Vec3{1.f, 0.f, 0.f})) &&
+                              NearVec(actual.Rotate(Vec3{0.f, 0.f, 1.f}), expected.Rotate(Vec3{0.f, 0.f, 1.f}));
+            char message[192];
+            std::snprintf(message, sizeof(message),
+                          "GetRotationEulerDeg round trip is the same rotation (%g, %g, %g) -> (%g, %g, %g)",
+                          c.x, c.y, c.z, e.x, e.y, e.z);
+            check(same, message);
+        }
+    }
+
     // Child under a rotated parent: GetRotationEulerDeg is the world rotation,
     // current right after the child's own setter. Compared with the frame below.
     const LPENTITY rotParent = Krom::CreateEntity("RotParent");
@@ -506,6 +534,9 @@ int main()
 
     // --- Frames ------------------------------------------------------------------------------
     int frame = 0;
+    bool boundsFreshOk = false;
+    Vec3 boundsFreshRootCenter{}, boundsFreshRootExtents{};
+    Vec3 boundsFreshChildCenter{}, boundsFreshChildExtents{};
     const int runResult = Krom::Run([&](float) {
         ++frame;
         if (frame == 2)
@@ -565,9 +596,61 @@ int main()
                   NearVec(center, {4.f, 10.f, 0.f}) && NearVec(extents, {1.f, 1.f, 1.f}),
                   "GetWorldBounds of the child alone");
             check(!Krom::GetWorldBounds(noBounds, center, extents, sphere), "GetWorldBounds without bounds fails");
+
+            // GetWorldBounds right after a setter in the same step (no transform
+            // update in between) returns the new box.
+            Krom::SetPosition(boundsRoot, 0.f, 20.f, 0.f);
+            check(Krom::GetWorldBounds(boundsRoot, center, extents, sphere) &&
+                  NearVec(center, {2.f, 20.f, 0.f}) && NearVec(extents, {3.f, 1.f, 1.f}),
+                  "GetWorldBounds right after SetPosition of the root covers the moved root and child");
+            check(Krom::GetWorldBounds(boundsChild, center, extents, sphere) &&
+                  NearVec(center, {4.f, 20.f, 0.f}) && NearVec(extents, {1.f, 1.f, 1.f}),
+                  "GetWorldBounds of the child right after SetPosition of its parent");
+            Krom::SetScale(boundsRoot, 2.f);   // child at local x 4 -> world x 8, extents 2
+            check(Krom::GetWorldBounds(boundsRoot, center, extents, sphere) &&
+                  NearVec(center, {4.f, 20.f, 0.f}) && NearVec(extents, {6.f, 2.f, 2.f}) &&
+                  Near(sphere, std::sqrt(44.f)),
+                  "GetWorldBounds right after SetScale of the root");
+            check(Krom::GetWorldBounds(boundsChild, center, extents, sphere) &&
+                  NearVec(center, {8.f, 20.f, 0.f}) && NearVec(extents, {2.f, 2.f, 2.f}),
+                  "GetWorldBounds of the child right after SetScale of its parent");
+            check(Krom::Detach(boundsChild, false) &&
+                  Krom::GetWorldBounds(boundsChild, center, extents, sphere) &&
+                  NearVec(center, {4.f, 0.f, 0.f}) && NearVec(extents, {1.f, 1.f, 1.f}),
+                  "GetWorldBounds of the child right after Detach without keepWorldTransform");
+            check(Krom::GetWorldBounds(boundsRoot, center, extents, sphere) &&
+                  NearVec(center, {0.f, 20.f, 0.f}) && NearVec(extents, {2.f, 2.f, 2.f}),
+                  "GetWorldBounds of the root right after Detach of its child");
+            check(Krom::SetParent(boundsChild, boundsRoot, false) &&
+                  Krom::GetWorldBounds(boundsChild, center, extents, sphere) &&
+                  NearVec(center, {8.f, 20.f, 0.f}) && NearVec(extents, {2.f, 2.f, 2.f}),
+                  "GetWorldBounds of the child right after SetParent without keepWorldTransform");
+            // Leave a pending change for the frame: the next frame's systems must
+            // write exactly what GetWorldBounds returns now.
+            Krom::SetPosition(boundsRoot, 0.f, 30.f, 0.f);
+            Krom::SetRotationEulerDeg(boundsChild, 0.f, 30.f, 0.f);
+            boundsFreshOk = Krom::GetWorldBounds(boundsRoot, boundsFreshRootCenter, boundsFreshRootExtents, sphere) &&
+                            Krom::GetWorldBounds(boundsChild, boundsFreshChildCenter, boundsFreshChildExtents, sphere);
+            check(boundsFreshOk && NearVec(boundsFreshChildCenter, {8.f, 30.f, 0.f}),
+                  "GetWorldBounds right after SetPosition / SetRotationEulerDeg in a hierarchy");
         }
         else if (frame == 3)
         {
+            {
+                Vec3 center{}, extents{};
+                float sphere = 0.f;
+                const auto* childBounds = Krom::GetComponent<engine::BoundsComponent>(boundsChild);
+                check(boundsFreshOk && childBounds &&
+                      NearVec(childBounds->centerWorld, boundsFreshChildCenter, 1.0e-5f) &&
+                      NearVec(childBounds->extentsWorld, boundsFreshChildExtents, 1.0e-5f),
+                      "the frame's bounds update writes what GetWorldBounds returned before it (child)");
+                check(Krom::GetWorldBounds(boundsRoot, center, extents, sphere) &&
+                      NearVec(center, boundsFreshRootCenter, 1.0e-5f) && NearVec(extents, boundsFreshRootExtents, 1.0e-5f),
+                      "GetWorldBounds after the frame equals the value before it (root and child)");
+                check(Krom::GetWorldBounds(boundsChild, center, extents, sphere) &&
+                      NearVec(center, boundsFreshChildCenter, 1.0e-5f) && NearVec(extents, boundsFreshChildExtents, 1.0e-5f),
+                      "GetWorldBounds after the frame equals the value before it (child)");
+            }
             check(NearVec(WorldForward(entityLooker), {0.6f, 0.f, -0.8f}) &&
                   NearVec(WorldPosition(lookTarget), {3.f, 0.f, -1.f}),
                   "frame update keeps LookAt(entity) towards the moved target");

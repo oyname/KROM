@@ -33,6 +33,10 @@ struct AssetContext
     RuntimeMaterialContext materials;
 };
 
+// The asset registry of the wrapper State (defined in KromWrapper.cpp). For
+// wrapper-internal tests that inspect CPU mesh data; not part of krom.h.
+[[nodiscard]] engine::assets::AssetRegistry& GetWrapperAssetRegistry();
+
 // Entity with mesh and a matt code material (CreateMeshEntity, shader warm-up);
 // null if mesh is invalid.
 [[nodiscard]] LPENTITY CreateProceduralEntity(const AssetContext& ctx, LPMESH mesh, const char* name);
@@ -44,12 +48,25 @@ struct AssetContext
 [[nodiscard]] LPENTITY CreateEntityFromAsset(const AssetContext& ctx, const char* path, const char* name);
 bool PrintAssetTree(engine::assets::AssetPipeline* assetPipeline, const char* path);
 
-[[nodiscard]] LPMESH LoadMesh(engine::assets::AssetPipeline* assetPipeline, const char* path);
+// LoadMesh / LoadMaterial return null (and log one error naming caller and
+// path) when the file does not exist - the pipeline is not called then, so no
+// failed entry lands in the registry - or when the asset in assetRegistry is
+// not Loaded afterwards. A null or empty path returns null without a log.
+// Sub-asset keys of an imported model ("Models/a.glb#material/0", as stored in
+// prefabs and scenes) are looked up in assetRegistry only (the model file must
+// exist); the pipeline would mark such an imported entry Failed.
+[[nodiscard]] LPMESH LoadMesh(engine::assets::AssetPipeline* assetPipeline,
+                              engine::assets::AssetRegistry& assetRegistry,
+                              const char* path,
+                              const char* caller = "LoadMesh");
 // Remembers the path of the texture in texturePaths (CreateTextureMaterial(LPTEXTURE)).
 [[nodiscard]] LPTEXTURE LoadTexture(engine::assets::AssetPipeline* assetPipeline,
                                     TexturePathMap& texturePaths,
                                     const char* path);
-[[nodiscard]] LPMATERIAL LoadMaterial(engine::assets::AssetPipeline* assetPipeline, const char* path);
+[[nodiscard]] LPMATERIAL LoadMaterial(engine::assets::AssetPipeline* assetPipeline,
+                                      engine::assets::AssetRegistry& assetRegistry,
+                                      const char* path,
+                                      const char* caller = "LoadMaterial");
 
 [[nodiscard]] LPMATERIAL CreateTextureMaterial(const AssetContext& ctx,
                                                const char* albedoTexturePath,

@@ -1,5 +1,7 @@
 #include "addons/script/ScriptTriggers.hpp"
 #include "collision/SceneQueries.hpp"
+#include "scene/BoundsSystem.hpp"
+#include "scene/TransformSystem.hpp"
 
 namespace engine::script {
 
@@ -24,6 +26,17 @@ struct Collider
     collision::AABB aabb;
 };
 
+// Current world transform: entities with a local transform are computed from the
+// local transforms of their parent chain (what this frame's TransformSystem::Update
+// will write); entities with only a world transform keep the stored value.
+WorldTransformComponent CurrentWorldTransform(const ecs::World& world, EntityID id,
+                                              const WorldTransformComponent& stored)
+{
+    if (world.Has<TransformComponent>(id))
+        return TransformSystem::ComputeCurrentWorldTransform(world, id);
+    return stored;
+}
+
 void Notify(ecs::World& world, bool enter, EntityID self, EntityID other, const ScriptServices& services)
 {
     if (!world.IsAlive(self))
@@ -42,7 +55,7 @@ void ScriptTriggerSystem::Update(ecs::World& world, const ScriptServices& servic
         if (!obb.isTrigger)
             return;
         if (const auto* transform = world.Get<WorldTransformComponent>(id))
-            triggers.emplace_back(id, collision::ComputeWorldAABB(obb, *transform));
+            triggers.emplace_back(id, collision::ComputeWorldAABB(obb, CurrentWorldTransform(world, id, *transform)));
     });
 
     std::set<Contact, ContactLess> current;
@@ -50,17 +63,20 @@ void ScriptTriggerSystem::Update(ecs::World& world, const ScriptServices& servic
     {
         // Gegenseite: Box-Kollisionen haben Vorrang vor Mesh-Bounds (wie SceneQueries::BuildColliders)
         std::vector<Collider> colliders;
-        world.View<BoundsComponent>([&](EntityID id, const BoundsComponent& bounds) {
+        world.View<BoundsComponent>([&](EntityID id, const BoundsComponent&) {
             if (world.Has<OBBComponent>(id))
                 return;
-            colliders.push_back({RootOf(world, id),
-                {bounds.centerWorld - bounds.extentsWorld, bounds.centerWorld + bounds.extentsWorld}});
+            math::Vec3 center{};
+            math::Vec3 extents{};
+            if (BoundsSystem::ComputeCurrentWorldBounds(world, id, center, extents))
+                colliders.push_back({RootOf(world, id), {center - extents, center + extents}});
         });
         world.View<OBBComponent>([&](EntityID id, const OBBComponent& obb) {
             if (obb.isTrigger)
                 return;
             if (const auto* transform = world.Get<WorldTransformComponent>(id))
-                colliders.push_back({RootOf(world, id), collision::ComputeWorldAABB(obb, *transform)});
+                colliders.push_back({RootOf(world, id),
+                    collision::ComputeWorldAABB(obb, CurrentWorldTransform(world, id, *transform))});
         });
 
         for (const auto& [trigger, triggerBox] : triggers)

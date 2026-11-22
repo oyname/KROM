@@ -13,6 +13,7 @@
 #include <cfloat>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <filesystem>
 #include <functional>
 #include <memory>
@@ -20,6 +21,7 @@
 #include <vector>
 
 using engine::PathFromUtf8;
+using engine::PathToGenericUtf8;
 using engine::PathToUtf8;
 
 namespace Krom::internal {
@@ -85,6 +87,62 @@ static engine::math::Vec3 ComputeImportedModelCenter(const engine::assets::Impor
     return hasPosition ? (boundsMin + boundsMax) * 0.5f : math::Vec3::Zero();
 }
 
+// Same rule as AssetPipeline::Resolve (private): absolute paths and an empty
+// asset root stay as they are, everything else is relative to the asset root.
+static std::filesystem::path ResolveAssetPath(const engine::assets::AssetPipeline& assetPipeline, const char* path)
+{
+    const std::filesystem::path requested = PathFromUtf8(path);
+    if (requested.is_absolute() || assetPipeline.GetAssetRoot().empty())
+        return requested;
+    return assetPipeline.GetAssetRoot() / requested;
+}
+
+static bool IsRegularFile(const std::filesystem::path& path)
+{
+    std::error_code ec;
+    return std::filesystem::is_regular_file(path, ec);
+}
+
+static void LogFileNotFound(const engine::assets::AssetPipeline& assetPipeline, const char* path, const char* caller)
+{
+    engine::Debug::LogError("krom.h: %s: file not found: '%s' (resolved: '%s')",
+        caller, path, PathToGenericUtf8(ResolveAssetPath(assetPipeline, path)).c_str());
+}
+
+// True if the path names an existing file; otherwise logs one error naming the
+// calling krom.h function and the path.
+static bool AssetFileExists(const engine::assets::AssetPipeline& assetPipeline, const char* path, const char* caller)
+{
+    if (IsRegularFile(ResolveAssetPath(assetPipeline, path)))
+        return true;
+    LogFileNotFound(assetPipeline, path, caller);
+    return false;
+}
+
+enum class AssetFileKind
+{
+    Missing,   // neither the file nor (for "file#...") the model file exists; error logged
+    File,      // the path is an existing file
+    SubAsset,  // "Models/a.glb#material/0": a part of an existing model file
+};
+
+// Sub-asset keys ("model.glb#mesh/2", "model.glb#material/0") come from the
+// model import (prefabs, scenes). They are no files of their own, so they are
+// looked up in the registry instead of being loaded through the pipeline.
+static AssetFileKind CheckAssetFile(const engine::assets::AssetPipeline& assetPipeline, const char* path, const char* caller)
+{
+    if (IsRegularFile(ResolveAssetPath(assetPipeline, path)))
+        return AssetFileKind::File;
+    if (const char* hash = std::strchr(path, '#'); hash && hash != path)
+    {
+        const std::string modelFile(path, hash);
+        if (IsRegularFile(ResolveAssetPath(assetPipeline, modelFile.c_str())))
+            return AssetFileKind::SubAsset;
+    }
+    LogFileNotFound(assetPipeline, path, caller);
+    return AssetFileKind::Missing;
+}
+
 static void AddVertex(engine::assets::SubMeshData& submesh, const MeshVertex& vertex)
 {
     submesh.positions.insert(submesh.positions.end(), {vertex.position.x, vertex.position.y, vertex.position.z});
@@ -93,12 +151,19 @@ static void AddVertex(engine::assets::SubMeshData& submesh, const MeshVertex& ve
     submesh.colors.insert(submesh.colors.end(), {vertex.color.x, vertex.color.y, vertex.color.z, vertex.color.w});
 }
 
-static LPMESH RegisterProceduralMesh(const AssetContext& ctx, engine::assets::SubMeshData submesh, const char* name, bool generateTangents)
+// generateNormals = false keeps the normals exactly as supplied, now and in
+// every later material realisation (MeshAsset::generateMissingNormals).
+static LPMESH RegisterProceduralMesh(const AssetContext& ctx,
+                                     engine::assets::SubMeshData submesh,
+                                     const char* name,
+                                     bool generateNormals,
+                                     bool generateTangents)
 {
     if (submesh.positions.empty())
         return NULL_MESH;
 
-    GenerateMissingNormals(submesh);
+    if (generateNormals)
+        GenerateMissingNormals(submesh);
     if (submesh.uvs.empty())
         submesh.uvs.assign((submesh.positions.size() / 3u) * 2u, 0.0f);
     if (submesh.colors.empty())
@@ -110,6 +175,7 @@ static LPMESH RegisterProceduralMesh(const AssetContext& ctx, engine::assets::Su
     mesh->debugName = (name && name[0] != '\0') ? name : "KromProceduralMesh";
     mesh->path = mesh->debugName;
     mesh->state = engine::assets::AssetState::Loaded;
+    mesh->generateMissingNormals = generateNormals;
     mesh->submeshes.push_back(std::move(submesh));
     mesh->gpuStatus.dirty = true;
     return ctx.assetRegistry.meshes.Add(std::move(mesh));
@@ -157,92 +223,108 @@ LPENTITY CreateEntityFromAsset(const AssetContext& ctx, const char* path, const 
     if (!ctx.world || !ctx.assetPipeline || !path || path[0] == '\0')
         return NULL_LPENTITY;
 
+    if (!AssetFileExists(*ctx.assetPipeline, path, "CreateEntityFromAsset"))
+        return NULL_LPENTITY;
+
+    // Extension without a registered importer: load the file as one simple mesh
+    // (text mesh format of AssetPipeline::ReloadMesh, .kmesh).
+    if (!ctx.assetPipeline->HasMeshImporterFor(path))
+    {
+        engine::Debug::Log("krom.h: CreateEntityFromAsset: no model importer for '%s', loading it as a simple mesh", path);
+        const LPENTITY entity = CreateEntity(ctx.world, (name && name[0] != '\0') ? name : path);
+        if (!entity.IsValid())
+            return NULL_LPENTITY;
+        if (!SetMeshFromAsset(ctx, entity, path))
+        {
+            DestroyEntityRecursive(*ctx.world, entity);
+            return NULL_LPENTITY;
+        }
+        return entity;
+    }
+
     // Format-agnostisch: AssetPipeline wählt den passenden registrierten Importer.
     // Ob GLB, FBX, OBJ oder ein anderes Format — der Wrapper muss es nicht wissen.
     engine::assets::ImportedAssetBundle bundle = ctx.assetPipeline->ImportBundle(path);
 
-    if (bundle.Ok())
+    if (!bundle.Ok())
     {
-        const std::filesystem::path logicalPath = PathFromUtf8(path);
-
-        const engine::math::Vec3 modelCenter = ComputeImportedModelCenter(bundle);
-        const bool needsAnimationSystems = BundleHasSkeletonsOrAnimations(bundle);
-        if (needsAnimationSystems)
-            ctx.ensureAnimationSystems();
-
-        engine::assets::MeshAsset* sharedFallbackMesh =
-            !bundle.meshes.empty() ? &bundle.meshes[0] : nullptr;
-        const engine::assets::MaterialAsset* sharedFallbackAsset =
-            !bundle.materials.empty() ? &bundle.materials[0] : nullptr;
-        const std::string sharedFallbackName =
-            ((name && name[0] != '\0') ? std::string(name) : PathToUtf8(logicalPath.stem())) + "_SharedRuntimeMaterial";
-        const engine::MaterialHandle sharedFallbackMaterial =
-            sharedFallbackMesh
-                ? internal::CreateRuntimeLitMaterialFromAssets(
-                    ctx.materials, *sharedFallbackMesh, sharedFallbackAsset, sharedFallbackName.c_str())
-                : engine::MaterialHandle::Invalid();
-
-        engine::addons::prefab::PrefabBuildOptions buildOptions;
-        buildOptions.name = (name && name[0] != '\0') ? name : PathToUtf8(logicalPath.stem());
-        buildOptions.createSyntheticRoot = true;
-        buildOptions.playFirstAnimation = true;
-        buildOptions.loopAnimations = true;
-
-        engine::addons::prefab::PrefabAsset prefab =
-            engine::addons::prefab::BuildPrefabFromImportedBundle(
-                std::move(bundle), ctx.assetRegistry, buildOptions);
-
-        for (engine::addons::prefab::PrefabEntityRecord& record : prefab.records)
-        {
-            if (record.parentIndex == static_cast<int32_t>(prefab.rootIndex))
-                record.localPosition -= modelCenter;
-
-            if (record.mesh.IsValid())
-            {
-                auto* meshAsset = ctx.assetRegistry.meshes.Get(record.mesh);
-                const auto* materialAsset = record.material.IsValid()
-                    ? ctx.assetRegistry.materials.Get(record.material)
-                    : nullptr;
-                if (meshAsset)
-                {
-                    const std::string runtimeName = !record.name.empty()
-                        ? record.name + "_RuntimeMaterial"
-                        : buildOptions.name + "_RuntimeMaterial";
-                    const engine::MaterialHandle runtimeMaterial =
-                        internal::CreateRuntimeLitMaterialFromAssets(ctx.materials, *meshAsset, materialAsset, runtimeName.c_str());
-                    record.material = runtimeMaterial.IsValid() ? runtimeMaterial : sharedFallbackMaterial;
-                    if (!record.material.IsValid())
-                        engine::Debug::LogError("krom.h: kein Material für Node '%s' in '%s'",
-                            record.name.c_str(), path);
-                }
-            }
-        }
-
-        engine::addons::prefab::PrefabInstantiateOptions options{};
-        options.scriptRegistry = &ctx.scriptAddonRegistry;
-        const engine::addons::prefab::PrefabInstance instance =
-            engine::addons::prefab::InstantiatePrefab(*ctx.world, prefab, options);
-        if (!instance.IsValid())
-        {
-            engine::Debug::LogError("krom.h: Instantiierung fehlgeschlagen: '%s'", path);
-            return NULL_LPENTITY;
-        }
-        for (const LPENTITY instantiatedEntity : instance.entities)
-        {
-            if (instantiatedEntity.IsValid() && ctx.world->Has<engine::MeshComponent>(instantiatedEntity))
-                engine::mesh_renderer::UpdateLocalBoundsForEntity(*ctx.world, instantiatedEntity, ctx.assetRegistry);
-        }
-        ctx.transformSystem.Update(*ctx.world);
-        ctx.boundsSystem.Update(*ctx.world);
-        return instance.root;
+        // ImportBundle already logged the importer error (bundle.error).
+        engine::Debug::LogError("krom.h: CreateEntityFromAsset: import of '%s' failed", path);
+        return NULL_LPENTITY;
     }
 
-    // Fallback: kein Importer registriert → einfaches Single-Mesh-Entity
-    engine::Debug::Log("krom.h: kein Bundle-Importer für '%s', lade als einfaches Mesh", path);
-    const LPENTITY entity = CreateEntity(ctx.world, name ? name : path);
-    if (!entity.IsValid())
+    const std::filesystem::path logicalPath = PathFromUtf8(path);
+
+    const engine::math::Vec3 modelCenter = ComputeImportedModelCenter(bundle);
+    const bool needsAnimationSystems = BundleHasSkeletonsOrAnimations(bundle);
+    if (needsAnimationSystems)
+        ctx.ensureAnimationSystems();
+
+    engine::assets::MeshAsset* sharedFallbackMesh =
+        !bundle.meshes.empty() ? &bundle.meshes[0] : nullptr;
+    const engine::assets::MaterialAsset* sharedFallbackAsset =
+        !bundle.materials.empty() ? &bundle.materials[0] : nullptr;
+    const std::string sharedFallbackName =
+        ((name && name[0] != '\0') ? std::string(name) : PathToUtf8(logicalPath.stem())) + "_SharedRuntimeMaterial";
+    const engine::MaterialHandle sharedFallbackMaterial =
+        sharedFallbackMesh
+            ? internal::CreateRuntimeLitMaterialFromAssets(
+                ctx.materials, *sharedFallbackMesh, sharedFallbackAsset, sharedFallbackName.c_str())
+            : engine::MaterialHandle::Invalid();
+
+    engine::addons::prefab::PrefabBuildOptions buildOptions;
+    buildOptions.name = (name && name[0] != '\0') ? name : PathToUtf8(logicalPath.stem());
+    buildOptions.createSyntheticRoot = true;
+    buildOptions.playFirstAnimation = true;
+    buildOptions.loopAnimations = true;
+
+    engine::addons::prefab::PrefabAsset prefab =
+        engine::addons::prefab::BuildPrefabFromImportedBundle(
+            std::move(bundle), ctx.assetRegistry, buildOptions);
+
+    for (engine::addons::prefab::PrefabEntityRecord& record : prefab.records)
+    {
+        if (record.parentIndex == static_cast<int32_t>(prefab.rootIndex))
+            record.localPosition -= modelCenter;
+
+        if (record.mesh.IsValid())
+        {
+            auto* meshAsset = ctx.assetRegistry.meshes.Get(record.mesh);
+            const auto* materialAsset = record.material.IsValid()
+                ? ctx.assetRegistry.materials.Get(record.material)
+                : nullptr;
+            if (meshAsset)
+            {
+                const std::string runtimeName = !record.name.empty()
+                    ? record.name + "_RuntimeMaterial"
+                    : buildOptions.name + "_RuntimeMaterial";
+                const engine::MaterialHandle runtimeMaterial =
+                    internal::CreateRuntimeLitMaterialFromAssets(ctx.materials, *meshAsset, materialAsset, runtimeName.c_str());
+                record.material = runtimeMaterial.IsValid() ? runtimeMaterial : sharedFallbackMaterial;
+                if (!record.material.IsValid())
+                    engine::Debug::LogError("krom.h: kein Material für Node '%s' in '%s'",
+                        record.name.c_str(), path);
+            }
+        }
+    }
+
+    engine::addons::prefab::PrefabInstantiateOptions options{};
+    options.scriptRegistry = &ctx.scriptAddonRegistry;
+    const engine::addons::prefab::PrefabInstance instance =
+        engine::addons::prefab::InstantiatePrefab(*ctx.world, prefab, options);
+    if (!instance.IsValid())
+    {
+        engine::Debug::LogError("krom.h: Instantiierung fehlgeschlagen: '%s'", path);
         return NULL_LPENTITY;
-    return SetMeshFromAsset(ctx, entity, path) ? entity : NULL_LPENTITY;
+    }
+    for (const LPENTITY instantiatedEntity : instance.entities)
+    {
+        if (instantiatedEntity.IsValid() && ctx.world->Has<engine::MeshComponent>(instantiatedEntity))
+            engine::mesh_renderer::UpdateLocalBoundsForEntity(*ctx.world, instantiatedEntity, ctx.assetRegistry);
+    }
+    ctx.transformSystem.Update(*ctx.world);
+    ctx.boundsSystem.Update(*ctx.world);
+    return instance.root;
 }
 
 bool PrintAssetTree(engine::assets::AssetPipeline* assetPipeline, const char* path)
@@ -347,9 +429,29 @@ bool PrintAssetTree(engine::assets::AssetPipeline* assetPipeline, const char* pa
 // Loading
 // =============================================================================
 
-LPMESH LoadMesh(engine::assets::AssetPipeline* assetPipeline, const char* path)
+LPMESH LoadMesh(engine::assets::AssetPipeline* assetPipeline,
+                engine::assets::AssetRegistry& assetRegistry,
+                const char* path,
+                const char* caller)
 {
-    return (assetPipeline && path) ? assetPipeline->LoadMesh(path) : NULL_MESH;
+    if (!assetPipeline || !path || path[0] == '\0')
+        return NULL_MESH;
+    const AssetFileKind kind = CheckAssetFile(*assetPipeline, path, caller);
+    if (kind == AssetFileKind::Missing)
+        return NULL_MESH;
+
+    // A sub-asset key is no file: AssetPipeline::LoadMesh would mark the
+    // imported entry Failed, so only take it from the registry.
+    const LPMESH mesh = kind == AssetFileKind::SubAsset
+        ? assetRegistry.FindMeshByPath(path)
+        : assetPipeline->LoadMesh(path);
+    const engine::assets::MeshAsset* asset = mesh.IsValid() ? assetRegistry.meshes.Get(mesh) : nullptr;
+    if (!asset || asset->state != engine::assets::AssetState::Loaded)
+    {
+        engine::Debug::LogError("krom.h: %s: mesh '%s' could not be loaded", caller, path);
+        return NULL_MESH;
+    }
+    return mesh;
 }
 
 LPTEXTURE LoadTexture(engine::assets::AssetPipeline* assetPipeline,
@@ -362,9 +464,29 @@ LPTEXTURE LoadTexture(engine::assets::AssetPipeline* assetPipeline,
     return texture;
 }
 
-LPMATERIAL LoadMaterial(engine::assets::AssetPipeline* assetPipeline, const char* path)
+LPMATERIAL LoadMaterial(engine::assets::AssetPipeline* assetPipeline,
+                        engine::assets::AssetRegistry& assetRegistry,
+                        const char* path,
+                        const char* caller)
 {
-    return (assetPipeline && path) ? assetPipeline->LoadMaterial(path) : NULL_MATERIAL;
+    if (!assetPipeline || !path || path[0] == '\0')
+        return NULL_MATERIAL;
+    const AssetFileKind kind = CheckAssetFile(*assetPipeline, path, caller);
+    if (kind == AssetFileKind::Missing)
+        return NULL_MATERIAL;
+
+    // See LoadMesh: sub-asset keys only come from the registry.
+    const LPMATERIAL material = kind == AssetFileKind::SubAsset
+        ? assetRegistry.FindMaterialByPath(path)
+        : assetPipeline->LoadMaterial(path);
+    const engine::assets::MaterialAsset* asset =
+        material.IsValid() ? assetRegistry.materials.Get(material) : nullptr;
+    if (!asset || asset->state != engine::assets::AssetState::Loaded)
+    {
+        engine::Debug::LogError("krom.h: %s: material '%s' could not be loaded", caller, path);
+        return NULL_MATERIAL;
+    }
+    return material;
 }
 
 // =============================================================================
@@ -498,13 +620,17 @@ bool SetPBR(const AssetContext& ctx, LPENTITY entity, const PBR& materialDesc, b
 
 bool SetMeshFromAsset(const AssetContext& ctx, LPENTITY entity, const char* path)
 {
-    const LPMESH mesh = LoadMesh(ctx.assetPipeline, path);
+    if (!ctx.world || !ctx.world->IsAlive(entity))
+        return false;
+    const LPMESH mesh = LoadMesh(ctx.assetPipeline, ctx.assetRegistry, path, "SetMeshFromAsset");
     return mesh.IsValid() && SetMesh(ctx, entity, mesh);
 }
 
 bool SetMaterialFromAsset(const AssetContext& ctx, LPENTITY entity, const char* path)
 {
-    const LPMATERIAL material = LoadMaterial(ctx.assetPipeline, path);
+    if (!ctx.world || !ctx.world->IsAlive(entity))
+        return false;
+    const LPMATERIAL material = LoadMaterial(ctx.assetPipeline, ctx.assetRegistry, path, "SetMaterialFromAsset");
     if (!material.IsValid())
         return false;
 
@@ -560,9 +686,8 @@ LPMESH CreateMeshAsset(const AssetContext& ctx, const MeshData& meshData)
             submesh.indices.push_back(i);
     }
 
-    if (meshData.generateNormals)
-        GenerateMissingNormals(submesh);
-    return RegisterProceduralMesh(ctx, std::move(submesh), meshData.name, meshData.generateTangents);
+    return RegisterProceduralMesh(ctx, std::move(submesh), meshData.name,
+                                  meshData.generateNormals, meshData.generateTangents);
 }
 
 LPENTITY CreateMeshEntity(const AssetContext& ctx, const MeshData& meshData)

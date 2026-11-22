@@ -72,6 +72,9 @@ struct SceneRecord
     std::string path;
     bool persistent = false;
     bool active = false;
+    // Root entities in load/spawn order (FindEntityInScene returns the first match in
+    // this order). Changed only through the SceneManagerState helpers below, which
+    // keep SceneManagerState::rootScenes in sync.
     std::vector<LPENTITY> rootEntities;
 
     // Async-Support
@@ -85,6 +88,8 @@ struct SceneRecord
 struct SceneManagerState
 {
     std::unordered_map<uint32_t, SceneRecord> scenes;
+    // EntityID::value of every entry of every SceneRecord::rootEntities -> scene id.
+    std::unordered_map<uint32_t, uint32_t>    rootScenes;
     std::unordered_set<uint32_t>              persistentEntityIds;
     uint32_t                                  nextSceneId = 1u;
     // Scene order of the project (LoadScene(int), GetSceneCount); written by LoadProject.
@@ -116,6 +121,20 @@ struct SceneContext
 // Script spawns belong to the scene of the calling object (found through its
 // parent chain); spawns of a persistent object become persistent too.
 void RegisterScriptSpawn(const SceneContext& ctx, LPENTITY owner, LPENTITY root);
+
+// Call before destroying subtreeRoot with its children (ChildrenComponent): every
+// entity of the subtree leaves the scene roots and the persistent ids, so a stale
+// id cannot match a recycled entity later (EntityID has 8 generation bits).
+// Entities destroyed behind the wrapper's back (World::DestroyEntity) stay listed.
+void ForgetDestroyedEntities(SceneManagerState& manager, const engine::ecs::World& world, LPENTITY subtreeRoot);
+
+// Forgets all scenes, scene roots and persistent ids (Shutdown).
+void ClearScenes(SceneManagerState& manager);
+
+// Diagnostics of the wrapper State for wrapper-internal tests (defined in
+// KromWrapper.cpp); not part of krom.h. Unknown scene: 0.
+[[nodiscard]] size_t GetWrapperSceneRootCount(LPSCENE scene);
+[[nodiscard]] size_t GetWrapperPersistentEntityCount();
 
 // --- krom.h functions --------------------------------------------------------
 

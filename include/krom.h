@@ -117,6 +117,9 @@ struct MeshData
     uint32_t vertexCount = 0u;
     const uint32_t* indices = nullptr;
     uint32_t indexCount = 0u;
+    // true: vertices with a zero normal get a normal computed from their
+    // triangles, the other normals are normalised. false: the normals are used
+    // exactly as given (also later, when materials are assigned).
     bool generateNormals = true;
     bool generateTangents = true;
 };
@@ -242,7 +245,10 @@ bool SetPosition(LPENTITY entity, float x, float y, float z);
 bool SetRotationEulerDeg(LPENTITY entity, float pitch, float yaw, float roll);
 // Returns (pitch, yaw, roll) in degrees of the current world rotation (parent
 // chain included), also right after SetRotationEulerDeg/TurnEntity in the same step.
-// Konvention: ZYX-Euler (Reihenfolge: Roll → Pitch → Yaw).
+// Same convention as SetRotationEulerDeg and the editor inspector:
+// q = yaw(Y) * pitch(X) * roll(Z), i.e. roll is applied first, then pitch, then yaw.
+// Ranges: pitch [-90, 90], yaw and roll (-180, 180]; near |pitch| = 90 (gimbal lock)
+// roll is returned as 0 and yaw carries the combined angle.
 engine::math::Vec3 GetRotationEulerDeg(LPENTITY entity);
 bool SetScale(LPENTITY entity, const engine::math::Vec3& scale);
 bool SetScale(LPENTITY entity, float x, float y, float z);
@@ -281,9 +287,12 @@ LPENTITY CreateSpotLight(const char* name = "SpotLight",
                          float range = 15.0f,
                          float innerDeg = 15.0f,
                          float outerDeg = 30.0f);
+// Returns null and logs an error when the file is missing or its importer
+// fails. A file whose extension has no importer is loaded as one simple mesh.
 LPENTITY CreateEntityFromAsset(const char* path, const char* name = nullptr);
 bool PrintAssetTree(const char* path);
 
+// Returns null and logs an error when the file is missing or cannot be loaded.
 LPMESH LoadMesh(const char* path);
 LPTEXTURE LoadTexture(const char* path);
 LPMATERIAL CreateTextureMaterial(const char* albedoTexturePath,
@@ -299,6 +308,7 @@ LPMATERIAL CreateTextureMaterial(LPTEXTURE texture,
 
 // Lädt ein Material aus einer .mat-Datei (Editor-Workflow).
 // Für rein programmatische Nutzung: CreateLitMaterial() verwenden.
+// Returns null and logs an error when the file is missing or cannot be loaded.
 LPMATERIAL LoadMaterial(const char* path);
 
 // Erstellt ein Lit-Material direkt aus Code — kein .mat-File nötig.
@@ -321,6 +331,8 @@ bool SetTexture(LPENTITY entity,
                 int materialModel = MaterialModel::Lit,
                 bool recursive = true);
 bool SetPBR(LPENTITY entity, const PBR& material, bool recursive = true);
+// Both return false, log an error and leave the entity unchanged when the file
+// is missing or cannot be loaded.
 bool SetMeshFromAsset(LPENTITY entity, const char* path);
 bool SetMaterialFromAsset(LPENTITY entity, const char* path);
 LPMESH CreateMeshAsset(const MeshData& mesh);

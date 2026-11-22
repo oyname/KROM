@@ -1312,6 +1312,105 @@ void TestTriggerEnterAndExit(test::TestContext& ctx)
     CHECK_EQ(ctx, triggers.ActiveContactCount(), size_t{0});
 }
 
+// Triggers run in the script phase, after OnUpdate and before the frame's
+// transform update. Something a script moved in this OnUpdate (only the local
+// transform is changed and marked dirty) must be tested at its new place, so
+// enter/exit come in the same frame.
+void TestTriggerSeesTransformsMovedInScriptPhase(test::TestContext& ctx)
+{
+    auto reg = MakeCollisionRegistry();
+
+    // Entity with local + world transform at a local position (no transform update yet).
+    const auto spawnMovable = [](ecs::World& world, const math::Vec3& localPosition) {
+        const EntityID e = world.CreateEntity();
+        auto& tc = world.Add<engine::TransformComponent>(e);
+        tc.localPosition = localPosition;
+        tc.dirty = true;
+        world.Add<engine::WorldTransformComponent>(e);
+        return e;
+    };
+    const auto moveTo = [](ecs::World& world, EntityID e, const math::Vec3& localPosition) {
+        auto* tc = world.Get<engine::TransformComponent>(e);
+        tc->localPosition = localPosition;
+        tc->dirty = true;
+    };
+
+    // Runs: settle (one transform + bounds update), check no contact, move in
+    // (local only), check enter, move out (local only), check exit.
+    const auto runScenario = [&](const char* label, ecs::World& world, EntityID zone, EntityID mover,
+                                 EntityID expectedOther, const math::Vec3& inside, const math::Vec3& outside) {
+        TransformSystem transforms;
+        BoundsSystem bounds;
+        transforms.Update(world);
+        bounds.Update(world);
+
+        TriggerCounter* zoneScript = AttachCounter(world, zone);
+        ScriptServices services{};
+        services.world = &world;
+        ScriptTriggerSystem triggers;
+
+        triggers.Update(world, services);
+        const bool noneAtStart = zoneScript->enters == 0;
+        moveTo(world, mover, inside);
+        triggers.Update(world, services);
+        const bool enteredNow = zoneScript->enters == 1 && zoneScript->lastOther.value == expectedOther.value;
+        moveTo(world, mover, outside);
+        triggers.Update(world, services);
+        const bool exitedNow = zoneScript->exits == 1 && triggers.ActiveContactCount() == 0u;
+        if (!noneAtStart || !enteredNow || !exitedNow)
+            std::fprintf(stdout, "  trigger scenario failed: %s\n", label);
+        CHECK(ctx, noneAtStart);
+        CHECK(ctx, enteredNow);
+        CHECK(ctx, exitedNow);
+    };
+
+    {   // Box collider (OBB) moved by its local transform.
+        ecs::World world(reg);
+        const EntityID zone   = SpawnBox(world, {0.f, 0.f, 0.f}, true);
+        const EntityID player = spawnMovable(world, {10.f, 0.f, 0.f});
+        world.Add<engine::OBBComponent>(player);
+        runScenario("OBB collider", world, zone, player, player, {0.5f, 0.f, 0.f}, {10.f, 0.f, 0.f});
+    }
+    {   // Mesh-bounds collider (BoundsComponent, no OBB).
+        ecs::World world(reg);
+        const EntityID zone   = SpawnBox(world, {0.f, 0.f, 0.f}, true);
+        const EntityID player = spawnMovable(world, {10.f, 0.f, 0.f});
+        auto& b = world.Add<engine::BoundsComponent>(player);
+        b.centerLocal  = {0.f, 0.f, 0.f};
+        b.extentsLocal = {0.5f, 0.5f, 0.5f};
+        runScenario("mesh bounds collider", world, zone, player, player, {0.5f, 0.f, 0.f}, {10.f, 0.f, 0.f});
+    }
+    {   // OBB child whose PARENT is moved.
+        ecs::World world(reg);
+        const EntityID zone   = SpawnBox(world, {0.f, 0.f, 0.f}, true);
+        const EntityID parent = spawnMovable(world, {10.f, 0.f, 0.f});
+        const EntityID child  = spawnMovable(world, {1.f, 0.f, 0.f});
+        world.Add<engine::ParentComponent>(child, engine::ParentComponent{parent});
+        world.Add<engine::OBBComponent>(child);
+        runScenario("OBB child of a moved parent", world, zone, parent, parent, {-1.f, 0.f, 0.f}, {10.f, 0.f, 0.f});
+    }
+    {   // Mesh-bounds child whose PARENT is moved.
+        ecs::World world(reg);
+        const EntityID zone   = SpawnBox(world, {0.f, 0.f, 0.f}, true);
+        const EntityID parent = spawnMovable(world, {10.f, 0.f, 0.f});
+        const EntityID child  = spawnMovable(world, {1.f, 0.f, 0.f});
+        world.Add<engine::ParentComponent>(child, engine::ParentComponent{parent});
+        auto& b = world.Add<engine::BoundsComponent>(child);
+        b.centerLocal  = {0.f, 0.f, 0.f};
+        b.extentsLocal = {0.5f, 0.5f, 0.5f};
+        runScenario("mesh bounds child of a moved parent", world, zone, parent, parent, {-1.f, 0.f, 0.f}, {10.f, 0.f, 0.f});
+    }
+    {   // The trigger itself is moved by its local transform onto a static box.
+        ecs::World world(reg);
+        const EntityID zone = spawnMovable(world, {10.f, 0.f, 0.f});
+        engine::OBBComponent obb{};
+        obb.isTrigger = true;
+        world.Add<engine::OBBComponent>(zone, obb);
+        const EntityID box = SpawnBox(world, {0.f, 0.f, 0.f});
+        runScenario("moved trigger", world, zone, zone, box, {0.5f, 0.f, 0.f}, {10.f, 0.f, 0.f});
+    }
+}
+
 class CollisionCounter : public ComponentScript
 {
 public:
@@ -1696,6 +1795,7 @@ int RunScriptTests()
         .Add("Context: raycast root/ignoreSelf", TestContextRaycastHitsRootAndIgnoresSelf)
         .Add("Context: overlap sphere",          TestContextOverlapSphere)
         .Add("Trigger: enter and exit",          TestTriggerEnterAndExit)
+        .Add("Trigger: sees transforms moved in the script phase", TestTriggerSeesTransformsMovedInScriptPhase)
         .Add("Collision: dispatch both sides",   TestDispatchCollisionBothSides)
         .Add("Events: target and broadcast",     TestScriptEventsTargetAndBroadcast)
         .Add("Context: LoadScene is deferred",   TestContextLoadSceneIsDeferred);

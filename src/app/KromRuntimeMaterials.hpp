@@ -36,8 +36,12 @@ struct RuntimeMaterialContext
     bool enableForwardPlus = false;                           // GraphicsConfig::enableForwardPlus
 };
 
-// Fills in normals that are missing or zero from the triangles (smooth per vertex).
+// Fills in normals that are missing or zero from the triangles (smooth per
+// vertex) and normalises the others.
 void GenerateMissingNormals(engine::assets::SubMeshData& submesh);
+// The same for every submesh, but only if mesh.generateMissingNormals is set;
+// otherwise the normals stay exactly as supplied. Use this whenever the mesh is known.
+void GenerateMissingNormals(engine::assets::MeshAsset& mesh);
 
 // Shader path below the project assets, then below the engine shaders; the
 // path itself if neither has it.
