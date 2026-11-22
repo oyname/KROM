@@ -1490,6 +1490,11 @@ bool SetLayer(LPENTITY entity, uint32_t layerMask)
     return internal::SetLayer(Get().world.get(), entity, layerMask);
 }
 
+bool SetLayerRecursive(LPENTITY rootEntity, uint32_t layerMask)
+{
+    return internal::SetLayerRecursive(Get().world.get(), rootEntity, layerMask);
+}
+
 uint32_t GetLayer(LPENTITY entity)
 {
     return internal::GetLayer(Get().world.get(), entity);

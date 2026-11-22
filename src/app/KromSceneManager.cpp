@@ -356,8 +356,7 @@ static void ResolveSerializedSceneAssetBindings(const SceneContext& ctx,
         ctx.assetRegistry,
         *ctx.world);
 
-    std::unordered_map<std::string, engine::assets::ImportedAssetBundle> importedBundleCache;
-    std::unordered_map<std::string, LPMATERIAL> importedRuntimeMaterialCache;
+    internal::ImportedMaterialCache importedMaterialCache;
 
     for (const LPENTITY entity : loadedEntities)
     {
@@ -378,15 +377,17 @@ static void ResolveSerializedSceneAssetBindings(const SceneContext& ctx,
 
         // Erst GLB-Import-Materialien in Runtime-Materialien uebersetzen.
         // DefaultLit greift nur, wenn danach immer noch kein Material existiert.
-        internal::ApplyImportedMeshMaterialsForEntity(
-            ctx.materials, entity, importedBundleCache, importedRuntimeMaterialCache);
+        internal::ApplyImportedMeshMaterialsForEntity(ctx.materials, entity, importedMaterialCache);
         internal::EnsureDefaultMaterialForEntity(ctx.materials, entity);
+        // "<model>#material/<n>" keys are no files: built from the model import.
+        internal::ApplyImportedMaterialKeysForEntity(ctx.materials, entity, importedMaterialCache);
 
         auto* material = ctx.world->Get<engine::MaterialComponent>(entity);
         if (!material)
             continue;
 
-        if (!material->materialAssetPath.empty())
+        if (!material->materialAssetPath.empty() &&
+            !internal::IsImportedMaterialKey(material->materialAssetPath, material->materialOverrideSource))
         {
             const LPMATERIAL assetMaterial = material->materialOverrideSource.empty()
                 ? Krom::LoadMaterial(material->materialAssetPath.c_str())
@@ -397,7 +398,8 @@ static void ResolveSerializedSceneAssetBindings(const SceneContext& ctx,
 
         for (engine::MaterialComponent::SlotOverride& slot : material->slotOverrides)
         {
-            if (slot.materialAssetPath.empty())
+            if (slot.materialAssetPath.empty() ||
+                internal::IsImportedMaterialKey(slot.materialAssetPath, slot.materialOverrideSource))
                 continue;
 
             const LPMATERIAL assetMaterial = slot.materialOverrideSource.empty()

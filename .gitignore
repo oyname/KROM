@@ -24,6 +24,8 @@ projects/*/shader_artifacts/
 projects/*/generated/*
 !projects/*/generated/ScriptBindings.cpp
 *.iblcache
+# Mesh import cache written next to a model by LoadMesh / SetMeshFromAsset
+*.kmesh
 
 # Logs und temporäre Dateien
 *.log

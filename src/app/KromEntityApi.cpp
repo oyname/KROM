@@ -310,6 +310,32 @@ bool SetLayer(engine::ecs::World* world, LPENTITY entity, uint32_t layerMask)
     return false;
 }
 
+bool SetLayerRecursive(engine::ecs::World* world, LPENTITY rootEntity, uint32_t layerMask)
+{
+    if (!world || !world->IsAlive(rootEntity))
+        return false;
+
+    bool changed = false;
+    std::function<void(LPENTITY)> apply = [&](LPENTITY current)
+    {
+        if (!world->IsAlive(current))
+            return;
+        if (auto* mesh = world->Get<engine::MeshComponent>(current))
+        {
+            mesh->layerMask = layerMask;
+            changed = true;
+        }
+        if (const auto* children = world->Get<engine::ChildrenComponent>(current))
+        {
+            const auto descendants = children->children;
+            for (const LPENTITY child : descendants)
+                apply(child);
+        }
+    };
+    apply(rootEntity);
+    return changed;
+}
+
 uint32_t GetLayer(engine::ecs::World* world, LPENTITY entity)
 {
     if (!world || !world->IsAlive(entity)) return engine::renderer::LAYER_DEFAULT;
