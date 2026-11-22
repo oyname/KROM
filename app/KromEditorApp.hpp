@@ -116,6 +116,7 @@ private:
     [[nodiscard]] bool SaveProjectFile(bool saveScene = true);
     [[nodiscard]] bool LoadProjectFile(const std::string& projectPath, bool stageInitialScene = false);
     bool FinishProjectLoad(bool sceneLoaded);
+    void WarnIfProjectPathTooLong();
     [[nodiscard]] bool CreateEditorProject(const std::string& projectName,
                                            const std::string& parentDirectory,
                                            renderer::DeviceFactory::BackendType backend);

@@ -146,8 +146,28 @@ int main()
     ready.sdk = true;
     ready.sdkBuildId = std::string(64, 'a');
     const auto project = scratch.path / PathFromUtf8("Projekt Größe");
-    Check(ready.ProjectBuildDir(project, "14.44.35207") == project / ".krom/build" /
-        std::string(16, 'a') / "win64/14.44.35207/Release", "SDK build cache separates build ID, platform, toolset and Release");
+    const auto buildDir = ready.ProjectBuildDir(project, "14.44.35207");
+    const auto hashName = PathToUtf8(buildDir.filename());
+    Check(buildDir.parent_path() == project / ".krom/b" && hashName.size() == 12 &&
+          hashName.find_first_not_of("0123456789abcdef") == std::string::npos,
+          "SDK build cache is one short hash directory below project/.krom/b");
+    Check(buildDir == ready.ProjectBuildDir(project, "14.44.35207"), "SDK build cache name is stable");
+    EnginePaths otherId = ready;
+    otherId.sdkBuildId = std::string(64, 'b');
+    Check(buildDir != ready.ProjectBuildDir(project, "14.44.35208") && buildDir != otherId.ProjectBuildDir(project, "14.44.35207"),
+          "SDK build cache separates build ID and toolset");
+    const auto info = ready.ProjectBuildInfo("14.44.35207");
+    Check(info.find("sdkBuildId=" + std::string(64, 'a') + "\n") != std::string::npos &&
+          info.find("platform=win64\n") != std::string::npos && info.find("compiler=14.44.35207\n") != std::string::npos &&
+          info.find("configuration=Release\n") != std::string::npos, "SDK build info lists the hashed values");
+    const auto shallow = fs::path("C:/P/.krom/b/0123456789ab");
+    Check(ProjectBuildPathOverflow(shallow) == 0, "short project path fits the compiler path limit");
+    const auto deep = fs::path("C:/" + std::string(150, 'x') + "/.krom/b/0123456789ab");
+    Check(ProjectBuildPathOverflow(deep) == deep.native().size() + kProjectBuildPathReserve - kMaxCompilerObjectPath,
+          "deep project path reports its overflow in characters");
+    const auto umlaut = fs::path(PathFromUtf8("C:/" + std::string(130, 'x') + "/Größe/.krom/b/0123456789ab"));
+    Check(ProjectBuildPathOverflow(umlaut) == umlaut.native().size() + kProjectBuildPathReserve - kMaxCompilerObjectPath,
+          "path limit counts characters, not UTF-8 bytes");
     Check(ready.ProjectBuildDir(project, "../escape").empty() && ready.ProjectBuildDir("relative", "14.44").empty(),
           "SDK build cache rejects relative project roots and invalid toolset paths");
     return failures ? 1 : 0;

@@ -300,10 +300,29 @@ std::filesystem::path EnginePaths::ProjectBuildDir(const std::filesystem::path& 
 {
     if (!sdk || !BuildsAvailable() || !project.is_absolute() || toolset.empty() || toolset.front() < '0' || toolset.front() > '9' ||
         !std::all_of(toolset.begin(), toolset.end(), [](char c) { return (c >= '0' && c <= '9') || c == '.'; })) return {};
-    // A full SHA256 makes CMake's compiler probes exceed Windows' path limit
-    // even for ordinary project directories. The full ID is still verified in
-    // the package, module ABI and CMake cache; only the directory is abbreviated.
-    return project / ".krom" / "build" / sdkBuildId.substr(0, 16) / "win64" / PathFromUtf8(toolset) / "Release";
+    // CMake's compiler probes add ~92 characters below the build directory and
+    // cl.exe is not long-path aware, so every character here shortens the allowed
+    // project path. One short hash keys build ID, platform, toolset and
+    // configuration; the full values are verified in the package, module ABI and
+    // CMake cache and listed in kProjectBuildInfoFile for humans.
+    const std::string key = sdkBuildId + '\n' + "win64" + '\n' + toolset + '\n' + "Release";
+    uint64_t hash = 14695981039346656037ull; // FNV-1a 64
+    for (const unsigned char c : key) { hash ^= c; hash *= 1099511628211ull; }
+    char hex[17]{};
+    for (int i = 15; i >= 0; --i, hash >>= 4) hex[i] = "0123456789abcdef"[hash & 0xF];
+    return project / ".krom" / "b" / std::string(hex, 12);
+}
+
+std::string EnginePaths::ProjectBuildInfo(const std::string& toolset) const
+{
+    return "sdkBuildId=" + sdkBuildId + "\nplatform=win64\ncompiler=" + toolset + "\nconfiguration=Release\n";
+}
+
+size_t ProjectBuildPathOverflow(const std::filesystem::path& buildDir) noexcept
+{
+    // Characters as Windows counts them (UTF-16 units), not UTF-8 bytes.
+    const size_t needed = buildDir.native().size() + kProjectBuildPathReserve;
+    return needed > kMaxCompilerObjectPath ? needed - kMaxCompilerObjectPath : 0;
 }
 
 std::filesystem::path EnginePaths::ProjectBrowseDir() const

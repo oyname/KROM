@@ -72,7 +72,12 @@ template must exist. V1 remains a path-only preview with builds disabled.
 
 V2 builds Script DLLs and runtimes against installed libraries with
 `find_package(Krom CONFIG REQUIRED)`. Build outputs are isolated under
-`<project>/.krom/build/<sdkBuildId-prefix>/win64/<compiler-version>/Release/`. No engine
+`<project>/.krom/b/<hash>/`, where `<hash>` is 12 hex digits of FNV-1a over SDK build
+ID, platform (`win64`), full compiler version and `Release`. `krom-build-info.txt` in
+that folder lists these four values. The folder name is short on purpose: cl.exe is
+not long-path aware and CMake's compiler probes add ~92 characters below it. The
+editor refuses a build when the folder plus a 95-character reserve exceeds 250
+characters and already warns when such a project is created or opened. No engine
 source build is involved. CMake writes actual target paths into
 `target-paths/Release/`; the editor reads these instead of guessing DLL/EXE names.
 

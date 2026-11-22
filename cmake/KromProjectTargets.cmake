@@ -127,6 +127,52 @@ function(krom_apply_release_runtime_options target)
     endif()
 endfunction()
 
+# Project sources live outside the SDK template's source and build trees, so CMake
+# names their objects CMakeFiles/<target>.dir/<32-char hash>/<file>.obj. Inside the
+# project-local cache (<project>/.krom/build/...) that exceeds MAX_PATH for cl.exe
+# already at ~100-character project paths. In SDK mode each project .cpp/.cxx is
+# compiled through a one-line wrapper in the build tree instead; diagnostics, debug
+# info and /showIncludes dependencies still refer to the original file.
+function(krom_shorten_project_sources out_var)
+    if(NOT Krom_SDK_ROOT)
+        set(${out_var} ${ARGN} PARENT_SCOPE)
+        return()
+    endif()
+    set(_result)
+    foreach(_source IN LISTS ARGN)
+        if(_source MATCHES "\\.(cpp|cxx)$")
+            string(MD5 _hash "${_source}")
+            string(SUBSTRING "${_hash}" 0 8 _hash)
+            set(_wrapper "${CMAKE_CURRENT_BINARY_DIR}/ps/${_hash}.cpp")
+            set(_content "#include \"${_source}\"\n")
+            set(_existing "")
+            if(EXISTS "${_wrapper}")
+                file(READ "${_wrapper}" _existing)
+            endif()
+            if(NOT _existing STREQUAL _content)
+                file(WRITE "${_wrapper}" "${_content}")
+            endif()
+            list(APPEND _result "${_wrapper}")
+        else()
+            list(APPEND _result "${_source}")
+        endif()
+    endforeach()
+    set(${out_var} ${_result} PARENT_SCOPE)
+endfunction()
+
+# cl.exe is not long-path aware: object paths at or above 260 characters fail with
+# C1083 "Invalid argument". Warn at configure time with a fix the user can apply.
+# CMake measures bytes, so non-ASCII project paths warn slightly early.
+function(krom_check_object_path_length target)
+    set(_longest "${CMAKE_CURRENT_BINARY_DIR}/CMakeFiles/${target}.dir/ps/00000000.cpp.obj")
+    string(LENGTH "${_longest}" _length)
+    if(_length GREATER 250)
+        message(WARNING "  ${target}: Objektpfade erreichen ${_length} von maximal 259 Zeichen "
+                        "(${CMAKE_CURRENT_BINARY_DIR}). Der Compiler kann dann mit C1083 abbrechen. "
+                        "Projekt in einen kuerzeren Ordner verschieben, z. B. direkt unter ein Laufwerk.")
+    endif()
+endfunction()
+
 function(krom_link_project_scripts target)
     if(ARGC GREATER 1)
         set(_krom_project_root "${ARGV1}")
@@ -161,6 +207,7 @@ function(krom_link_project_scripts target)
         return()
     endif()
 
+    krom_shorten_project_sources(_krom_project_script_sources ${_krom_project_script_sources})
     target_sources(${target} PRIVATE ${_krom_project_script_sources} ${_krom_project_script_headers})
     target_include_directories(${target} PRIVATE
         "${_krom_project_root}"
@@ -193,7 +240,9 @@ function(krom_add_project_script_module project_root)
         configure_file("${_entry}" "${CMAKE_CURRENT_BINARY_DIR}/krom_sdk_module.cpp" COPYONLY)
         set(_entry "${CMAKE_CURRENT_BINARY_DIR}/krom_sdk_module.cpp")
     endif()
-    add_library(${_target} SHARED EXCLUDE_FROM_ALL ${_scripts} ${_bindings} "${_entry}")
+    krom_shorten_project_sources(_scripts ${_scripts} ${_bindings})
+    add_library(${_target} SHARED EXCLUDE_FROM_ALL ${_scripts} "${_entry}")
+    krom_check_object_path_length(${_target})
     krom_enable_unicode_link(${_target})
     target_include_directories(${_target} PRIVATE "${project_root}"
         "${project_root}/Assets/Scripts" "${project_root}/scripts" "${project_root}/generated")
@@ -229,6 +278,7 @@ function(krom_add_project_runtime target output_name platform_target backend_add
         set(_entry "${CMAKE_CURRENT_BINARY_DIR}/krom_sdk_runtime.cpp")
     endif()
     add_executable(${target} "${_entry}")
+    krom_check_object_path_length(${target})
     krom_enable_unicode_link(${target})
     set_target_properties(${target} PROPERTIES OUTPUT_NAME "${output_name}")
     krom_apply_console_option(${target})

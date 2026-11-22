@@ -1,4 +1,4 @@
-param(
+﻿param(
     [Parameter(Mandatory=$true)][string]$SdkDirectory,
     [Parameter(Mandatory=$true)][string]$SmokeExecutable,
     [switch]$HideSources,

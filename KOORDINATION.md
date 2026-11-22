@@ -527,6 +527,46 @@ müssen aber weiter bauen und starten; ein OpenGL-Bruch durch gemeinsamen Code i
   `KROM_VALIDATION=1` (no messages) / OpenGL runs, image unchanged vs. before (same values).
   Not checked: the new editor UI by eye.
 
+## SDK: short project build folder and path-length checks (Claude, 2026-11-21)
+
+Branch `fix/sdk-long-paths` from `main` 1af019a, PR #41. Plan agreed with the user after
+the review "Lösung 1 mit drei Ergänzungen".
+
+- Starting point: SDK package `Krom-windows-x64-4585ef3906ae` (after PR #39, D3DCompiler is the
+  Windows SDK redist copy) passed `tests/test_sdk_package.ps1 -HideSources -ReadOnly` for DX11/Vulkan
+  (full flow) and OpenGL (`-StartupOnly`). Two findings on the way:
+  1. `tests/test_sdk_package.ps1` had no UTF-8 BOM; Windows PowerShell 5.1 turned `Größe` into
+     `GrÃ¶ÃŸe`. Fixed: file now starts with a BOM (the only non-ASCII .ps1 in the repo).
+  2. Project builds fail with C1083 "Invalid argument" once an object path reaches 260 characters.
+     The deepest paths are CMake's compiler probes (`CMakeFiles/CMakeScratch/TryCompile-*/CMakeFiles/
+     cmTC_*.dir/*.obj`, ~92 below the build folder); CMake itself warns above 250.
+- `EnginePaths::ProjectBuildDir`: `<project>/.krom/b/<12 hex>` (FNV-1a over SDK build ID, `win64`,
+  compiler version, `Release`) instead of `.krom/build/<16>/win64/<msvc>/Release` (54 -> 21
+  characters; project paths up to ~137 instead of ~104). The full ID is still checked in CMake cache
+  and module ABI. Old `.krom/build/` caches are no longer used and can be deleted.
+- `krom-build-info.txt` in that folder lists the four values (`EnginePaths::ProjectBuildInfo`),
+  rewritten only when it changes.
+- `ProjectBuildPathOverflow(buildDir)`: UTF-16 length + 95 reserve against 250, computed from the real
+  folder. Hard error `build.path_too_long` before configure; warning `project.path_too_long` on
+  project create and open (`KromEditorApp::WarnIfProjectPathTooLong`, status line + log). de/en.
+- `cmake/KromProjectTargets.cmake` (SDK mode only): project scripts and `generated/ScriptBindings.cpp`
+  compile through one-line `#include` wrappers `<build>/ps/<8 hex>.cpp`, so their objects avoid
+  CMake's 32-character hash directory; diagnostics/debug info still name the originals. Configure
+  warning when a target's object path would exceed 250 bytes (covers manual template builds).
+- Docs: `doc/SDK_PATHS.md`, `doc/SDK_DISTRIBUTION.md`. Test `test_engine_paths.cpp` adapted
+  (layout, stable/separating hash, info text, overflow incl. umlauts).
+- Checked: SDK package `Krom-windows-x64-95279741807c` built (Release producer build, local
+  Jolt/miniaudio). `krom_engine_paths_tests` 47 PASS. Long-path acceptance from a worktree named
+  `sdk-main-langer-pfad-test1` (where the old layout already failed in CMake's compiler probe),
+  fresh ZIP extract, producer sources hidden too: DX11 and Vulkan 19 PASS / 0 FAIL each, longest
+  object 214 characters, `krom-build-info.txt` correct. `krom_tests` in the Release producer
+  build: only `Swap copies only the DLL's PDB...` fails, because the Release fixture DLL has no
+  PDB; unrelated to this change.
+- Not checked: OpenGL startup with the new package, the too-deep error/warning in the real editor UI
+  (only unit-tested), source-mode Debug build of the three editors.
+- Please review: reserve 95 vs. other deep CMake paths, and whether the wrapper sources should
+  also apply in source mode.
+
 ## PBR: Specular-Materialeingang (Codex, 2026-11-20)
 
 Auf ausdruecklichen Nutzerauftrag implementiert. Roughness steuert weiterhin die
