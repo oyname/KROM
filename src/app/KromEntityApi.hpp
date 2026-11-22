@@ -42,6 +42,9 @@ bool SetName(engine::ecs::World* world, LPENTITY entity, const char* name);
 [[nodiscard]] LPENTITY GetMainCamera(engine::ecs::World* world);
 
 bool SetLayer(engine::ecs::World* world, LPENTITY entity, uint32_t layerMask);
+// layerMask for every MeshComponent of rootEntity and its descendants (ChildrenComponent);
+// true if at least one mesh was changed, false for a dead/invalid root.
+bool SetLayerRecursive(engine::ecs::World* world, LPENTITY rootEntity, uint32_t layerMask);
 [[nodiscard]] uint32_t GetLayer(engine::ecs::World* world, LPENTITY entity);
 bool SetCameraLayers(engine::ecs::World* world, LPENTITY camera, uint32_t cullingMask);
 [[nodiscard]] uint32_t GetCameraLayers(engine::ecs::World* world, LPENTITY camera);

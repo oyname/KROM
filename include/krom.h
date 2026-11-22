@@ -512,6 +512,10 @@ namespace Layer {
 // Setzt die layerMask der MeshComponent einer Entity (Bit 0..31, siehe Layer::*).
 bool        SetLayer(LPENTITY entity, uint32_t layerMask);
 
+// Sets the layerMask of every MeshComponent in the hierarchy below rootEntity
+// (rootEntity included). Returns true when at least one mesh was changed.
+bool        SetLayerRecursive(LPENTITY rootEntity, uint32_t layerMask);
+
 // Gibt die layerMask der MeshComponent zurueck (oder LAYER_DEFAULT wenn keine Mesh vorhanden).
 uint32_t    GetLayer(LPENTITY entity);
 

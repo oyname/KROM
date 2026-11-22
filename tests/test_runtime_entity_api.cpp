@@ -436,6 +436,46 @@ int main()
           "SetLayer / GetLayer round trip");
     check(Krom::GetLayer(visChild) == engine::renderer::LAYER_DEFAULT, "SetLayer is not recursive");
 
+    // SetLayerRecursive: root without mesh -> child with mesh -> grandchild with mesh.
+    {
+        const LPENTITY layerRoot = Krom::CreateEntity("LayerRoot");
+        const LPENTITY layerChild = CreateTriangleEntity("LayerChild");
+        const LPENTITY layerGrandchild = CreateTriangleEntity("LayerGrandchild");
+        const LPENTITY layerOther = CreateTriangleEntity("LayerOther");
+        check(layerRoot.IsValid() && layerChild.IsValid() && layerGrandchild.IsValid() && layerOther.IsValid() &&
+              Krom::SetParent(layerChild, layerRoot, false) && Krom::SetParent(layerGrandchild, layerChild, false),
+              "layer hierarchy");
+        check(Krom::SetLayer(layerOther, Krom::Layer::User3), "unrelated mesh entity on User3");
+        const uint32_t mask = Krom::Layer::User0 | Krom::Layer::User2;
+        check(!Krom::SetLayer(layerRoot, mask) && Krom::GetLayer(layerChild) == engine::renderer::LAYER_DEFAULT &&
+              Krom::GetLayer(layerGrandchild) == engine::renderer::LAYER_DEFAULT,
+              "SetLayer on the mesh-less root fails and changes nothing");
+        check(Krom::SetLayerRecursive(layerRoot, mask), "SetLayerRecursive returns true when meshes changed");
+        check(Krom::GetLayer(layerChild) == mask && Krom::GetLayer(layerGrandchild) == mask,
+              "SetLayerRecursive sets child and grandchild (GetLayer agrees)");
+        const auto* childMesh = Krom::GetComponent<engine::MeshComponent>(layerChild);
+        const auto* grandchildMesh = Krom::GetComponent<engine::MeshComponent>(layerGrandchild);
+        check(childMesh && grandchildMesh && childMesh->layerMask == mask && grandchildMesh->layerMask == mask,
+              "SetLayerRecursive writes MeshComponent::layerMask");
+        check(!Krom::HasComponent<engine::MeshComponent>(layerRoot), "SetLayerRecursive adds no mesh to the root");
+        check(Krom::GetLayer(layerOther) == Krom::Layer::User3, "SetLayerRecursive leaves an unrelated mesh alone");
+        check(Krom::SetLayerRecursive(layerChild, Krom::Layer::User1) &&
+              Krom::GetLayer(layerChild) == Krom::Layer::User1 && Krom::GetLayer(layerGrandchild) == Krom::Layer::User1,
+              "SetLayerRecursive includes a mesh root");
+        check(Krom::SetLayerRecursive(layerGrandchild, Krom::Layer::User3) &&
+              Krom::GetLayer(layerGrandchild) == Krom::Layer::User3 && Krom::GetLayer(layerChild) == Krom::Layer::User1,
+              "SetLayerRecursive on a leaf changes only the leaf");
+
+        const LPENTITY emptyRoot = Krom::CreateEntity("LayerEmptyRoot");
+        const LPENTITY emptyChild = Krom::CreateEntity("LayerEmptyChild");
+        check(Krom::SetParent(emptyChild, emptyRoot, false) && !Krom::SetLayerRecursive(emptyRoot, mask),
+              "SetLayerRecursive returns false for a hierarchy without meshes");
+        check(!Krom::SetLayerRecursive(NULL_LPENTITY, mask), "SetLayerRecursive(null) returns false");
+        const LPENTITY doomed = CreateTriangleEntity("LayerDoomed");
+        check(Krom::DestroyEntity(doomed) && !Krom::SetLayerRecursive(doomed, mask),
+              "SetLayerRecursive on a destroyed entity returns false");
+    }
+
     check(!Krom::SetCameraLayers(plain, 3u) && Krom::GetCameraLayers(plain) == engine::renderer::LAYER_ALL,
           "camera layers on a non-camera: set fails, get returns LAYER_ALL");
 
