@@ -1,4 +1,5 @@
 #include "krom.h"
+#include "KromEntityApi.hpp"
 #include "KromRenderSettings.hpp"
 #include "KromRuntimeMaterials.hpp"
 #include "KromSceneManager.hpp"
@@ -280,91 +281,6 @@ const char* BackendName(engine::renderer::DeviceFactory::BackendType backend) no
     }
 }
 
-engine::math::Quat QuatFromRotationMatrix(const engine::math::Mat4& m) noexcept
-{
-    const float trace = m.m[0][0] + m.m[1][1] + m.m[2][2];
-    if (trace > 0.f)
-    {
-        const float s = std::sqrt(trace + 1.f) * 2.f;
-        return {(m.m[1][2] - m.m[2][1]) / s,
-                (m.m[2][0] - m.m[0][2]) / s,
-                (m.m[0][1] - m.m[1][0]) / s,
-                0.25f * s};
-    }
-    if (m.m[0][0] > m.m[1][1] && m.m[0][0] > m.m[2][2])
-    {
-        const float s = std::sqrt(1.f + m.m[0][0] - m.m[1][1] - m.m[2][2]) * 2.f;
-        return {0.25f * s,
-                (m.m[1][0] + m.m[0][1]) / s,
-                (m.m[2][0] + m.m[0][2]) / s,
-                (m.m[1][2] - m.m[2][1]) / s};
-    }
-    if (m.m[1][1] > m.m[2][2])
-    {
-        const float s = std::sqrt(1.f + m.m[1][1] - m.m[0][0] - m.m[2][2]) * 2.f;
-        return {(m.m[1][0] + m.m[0][1]) / s,
-                0.25f * s,
-                (m.m[2][1] + m.m[1][2]) / s,
-                (m.m[2][0] - m.m[0][2]) / s};
-    }
-
-    const float s = std::sqrt(1.f + m.m[2][2] - m.m[0][0] - m.m[1][1]) * 2.f;
-    return {(m.m[2][0] + m.m[0][2]) / s,
-            (m.m[2][1] + m.m[1][2]) / s,
-            0.25f * s,
-            (m.m[0][1] - m.m[1][0]) / s};
-}
-
-engine::math::Vec3 ResolveEntityPosition(const State& state, LPENTITY entity) noexcept
-{
-    if (!state.world || !state.world->IsAlive(entity))
-        return {};
-    if (const auto* wt = state.world->Get<engine::WorldTransformComponent>(entity))
-        return wt->position;
-    if (const auto* tr = state.world->Get<engine::TransformComponent>(entity))
-        return tr->localPosition;
-    return {};
-}
-
-bool CollectWorldBoundsRecursive(const engine::ecs::World& world,
-                                 LPENTITY entity,
-                                 engine::math::Vec3& ioMin,
-                                 engine::math::Vec3& ioMax,
-                                 bool& ioHasBounds)
-{
-    if (!world.IsAlive(entity))
-        return false;
-
-    if (const auto* bounds = world.Get<engine::BoundsComponent>(entity))
-    {
-        const engine::math::Vec3 localMin = bounds->centerWorld - bounds->extentsWorld;
-        const engine::math::Vec3 localMax = bounds->centerWorld + bounds->extentsWorld;
-        if (!ioHasBounds)
-        {
-            ioMin = localMin;
-            ioMax = localMax;
-            ioHasBounds = true;
-        }
-        else
-        {
-            ioMin.x = std::min(ioMin.x, localMin.x);
-            ioMin.y = std::min(ioMin.y, localMin.y);
-            ioMin.z = std::min(ioMin.z, localMin.z);
-            ioMax.x = std::max(ioMax.x, localMax.x);
-            ioMax.y = std::max(ioMax.y, localMax.y);
-            ioMax.z = std::max(ioMax.z, localMax.z);
-        }
-    }
-
-    if (const auto* children = world.Get<engine::ChildrenComponent>(entity))
-    {
-        for (const LPENTITY child : children->children)
-            CollectWorldBoundsRecursive(world, child, ioMin, ioMax, ioHasBounds);
-    }
-
-    return ioHasBounds;
-}
-
 engine::math::Vec3 ComputeImportedModelCenter(const engine::assets::ImportedAssetBundle& bundle) noexcept
 {
     using namespace engine;
@@ -506,6 +422,11 @@ internal::SceneContext MakeSceneContext(State& state)
         MakeMaterialContext(state)};
 }
 
+internal::EntityContext MakeEntityContext(State& state)
+{
+    return internal::EntityContext{state.world.get(), state.transformSystem, state.boundsSystem};
+}
+
 LPMESH RegisterProceduralMesh(State& state, engine::assets::SubMeshData submesh, const char* name, bool generateTangents)
 {
     if (submesh.positions.empty())
@@ -545,99 +466,6 @@ LPENTITY CreateProceduralEntity(State& state, LPMESH mesh, const char* name)
     if (material.IsValid())
         (void)SetMaterial(entity, material);
     return entity;
-}
-
-struct CapturedTransform
-{
-    engine::math::Vec3 position{0.0f, 0.0f, 0.0f};
-    engine::math::Quat rotation = engine::math::Quat::Identity();
-    engine::math::Vec3 scale{1.0f, 1.0f, 1.0f};
-};
-
-static CapturedTransform CaptureWorldTransform(State& state, LPENTITY entity)
-{
-    CapturedTransform result{};
-    if (!state.world || !state.world->IsAlive(entity))
-        return result;
-
-    state.transformSystem.Update(*state.world);
-    if (const auto* worldTransform = state.world->Get<engine::WorldTransformComponent>(entity))
-    {
-        result.position = worldTransform->position;
-        result.rotation = worldTransform->rotation;
-        result.scale = worldTransform->scale;
-        return result;
-    }
-    if (const auto* transform = state.world->Get<engine::TransformComponent>(entity))
-    {
-        result.position = transform->localPosition;
-        result.rotation = transform->localRotation;
-        result.scale = transform->localScale;
-    }
-    return result;
-}
-
-static bool IsDescendantOf(const engine::ecs::World& world, LPENTITY entity, LPENTITY possibleAncestor)
-{
-    LPENTITY cursor = entity;
-    uint32_t depth = 0u;
-    while (world.IsAlive(cursor) && depth < 1024u)
-    {
-        if (cursor == possibleAncestor)
-            return true;
-        const auto* parent = world.Get<engine::ParentComponent>(cursor);
-        if (!parent || !parent->parent.IsValid())
-            return false;
-        cursor = parent->parent;
-        ++depth;
-    }
-    return false;
-}
-
-static void ApplyLocalFromWorld(State& state, LPENTITY entity, const CapturedTransform& worldTransform)
-{
-    if (!state.world || !state.world->IsAlive(entity))
-        return;
-
-    auto* transform = state.world->Get<engine::TransformComponent>(entity);
-    if (!transform)
-        return;
-
-    const auto* parent = state.world->Get<engine::ParentComponent>(entity);
-    if (parent && parent->parent.IsValid() && state.world->IsAlive(parent->parent))
-    {
-        state.transformSystem.Update(*state.world);
-        if (const auto* parentWorld = state.world->Get<engine::WorldTransformComponent>(parent->parent))
-        {
-            const engine::math::Quat inverseParentRotation = parentWorld->rotation.Conjugate().Normalized();
-            engine::math::Vec3 localPosition = inverseParentRotation.Rotate(worldTransform.position - parentWorld->position);
-            if (transform->inheritParentScale)
-            {
-                localPosition.x = std::abs(parentWorld->scale.x) > engine::math::EPSILON
-                    ? localPosition.x / parentWorld->scale.x : localPosition.x;
-                localPosition.y = std::abs(parentWorld->scale.y) > engine::math::EPSILON
-                    ? localPosition.y / parentWorld->scale.y : localPosition.y;
-                localPosition.z = std::abs(parentWorld->scale.z) > engine::math::EPSILON
-                    ? localPosition.z / parentWorld->scale.z : localPosition.z;
-            }
-
-            transform->localPosition = localPosition;
-            transform->localRotation = (inverseParentRotation * worldTransform.rotation).Normalized();
-            transform->localScale = transform->inheritParentScale
-                ? engine::math::Vec3{
-                    std::abs(parentWorld->scale.x) > engine::math::EPSILON ? worldTransform.scale.x / parentWorld->scale.x : worldTransform.scale.x,
-                    std::abs(parentWorld->scale.y) > engine::math::EPSILON ? worldTransform.scale.y / parentWorld->scale.y : worldTransform.scale.y,
-                    std::abs(parentWorld->scale.z) > engine::math::EPSILON ? worldTransform.scale.z / parentWorld->scale.z : worldTransform.scale.z}
-                : worldTransform.scale;
-            transform->dirty = true;
-            return;
-        }
-    }
-
-    transform->localPosition = worldTransform.position;
-    transform->localRotation = worldTransform.rotation;
-    transform->localScale = worldTransform.scale;
-    transform->dirty = true;
 }
 
 static LPENTITY InstantiatePrefabForScript(State& state,
@@ -1598,27 +1426,21 @@ bool AppRunning()
     return state.running && !state.renderLoop.ShouldExit();
 }
 
+// =============================================================================
+// Entities (KromEntityApi.cpp)
+// =============================================================================
+
 LPENTITY CreateEntity(const char* name)
 {
-    State& state = Get();
-    if (!state.world)
-        return NULL_LPENTITY;
-
-    const LPENTITY entity = state.world->CreateEntity();
-    state.world->Add<engine::TransformComponent>(entity);
-    state.world->Add<engine::WorldTransformComponent>(entity);
-    state.world->Add<engine::ActiveComponent>(entity);
-    if (name && name[0] != '\0')
-        state.world->Add<engine::NameComponent>(entity, engine::NameComponent{name});
-    return entity;
+    return internal::CreateEntity(Get().world.get(), name);
 }
 
 bool IsAlive(LPENTITY entity)
 {
-    State& state = Get();
-    return state.world && state.world->IsAlive(entity);
+    return internal::IsAlive(Get().world.get(), entity);
 }
 
+// Stays here: it also clears scene-manager and surface state of the entity.
 bool DestroyEntity(LPENTITY entity)
 {
     State& state = Get();
@@ -1637,282 +1459,87 @@ bool DestroyEntity(LPENTITY entity)
 
 bool SetName(LPENTITY entity, const char* name)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    const std::string value = name ? name : "";
-    if (auto* nameComponent = state.world->Get<engine::NameComponent>(entity))
-        nameComponent->name = value;
-    else
-        state.world->Add<engine::NameComponent>(entity, engine::NameComponent{value});
-    return true;
+    return internal::SetName(Get().world.get(), entity, name);
 }
 
 const char* GetName(LPENTITY entity)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return "";
-    if (const auto* nameComponent = state.world->Get<engine::NameComponent>(entity))
-        return nameComponent->name.c_str();
-    return "";
+    return internal::GetName(Get().world.get(), entity);
 }
 
 bool SetLayer(LPENTITY entity, uint32_t layerMask)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity)) return false;
-    if (auto* mesh = state.world->Get<engine::MeshComponent>(entity))
-    { mesh->layerMask = layerMask; return true; }
-    return false;
+    return internal::SetLayer(Get().world.get(), entity, layerMask);
 }
 
 uint32_t GetLayer(LPENTITY entity)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity)) return engine::renderer::LAYER_DEFAULT;
-    if (const auto* mesh = state.world->Get<engine::MeshComponent>(entity))
-        return mesh->layerMask;
-    return engine::renderer::LAYER_DEFAULT;
+    return internal::GetLayer(Get().world.get(), entity);
 }
 
 bool SetCameraLayers(LPENTITY camera, uint32_t cullingMask)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(camera)) return false;
-    if (auto* cam = state.world->Get<engine::CameraComponent>(camera))
-    { cam->cullingMask = cullingMask; return true; }
-    return false;
+    return internal::SetCameraLayers(Get().world.get(), camera, cullingMask);
 }
 
 uint32_t GetCameraLayers(LPENTITY camera)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(camera)) return engine::renderer::LAYER_ALL;
-    if (const auto* cam = state.world->Get<engine::CameraComponent>(camera))
-        return cam->cullingMask;
-    return engine::renderer::LAYER_ALL;
+    return internal::GetCameraLayers(Get().world.get(), camera);
 }
 
 bool SetTag(LPENTITY entity, const char* tag)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity)) return false;
-    const std::string value = tag ? tag : "";
-    if (!state.world->Has<engine::TagComponent>(entity))
-        state.world->Add<engine::TagComponent>(entity, engine::TagComponent{value});
-    else if (auto* tc = state.world->Get<engine::TagComponent>(entity))
-        tc->tag = value;
-    return true;
+    return internal::SetTag(Get().world.get(), entity, tag);
 }
 
 const char* GetTag(LPENTITY entity)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity)) return "";
-    if (const auto* tc = state.world->Get<engine::TagComponent>(entity))
-        return tc->tag.c_str();
-    return "";
+    return internal::GetTag(Get().world.get(), entity);
 }
 
 LPENTITY FindEntityByTag(const char* tag)
 {
-    State& state = Get();
-    if (!state.world || !tag) return NULL_LPENTITY;
-    LPENTITY found = NULL_LPENTITY;
-    state.world->View<engine::TagComponent>([&](LPENTITY id, const engine::TagComponent& tc)
-    {
-        if (!found.IsValid() && tc.tag == tag)
-            found = id;
-    });
-    return found;
+    return internal::FindEntityByTag(Get().world.get(), tag);
 }
 
 LPENTITY FindChild(LPENTITY rootEntity, const char* name)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(rootEntity) || !name)
-        return NULL_LPENTITY;
-
-    LPENTITY found = NULL_LPENTITY;
-    std::function<void(LPENTITY)> search = [&](LPENTITY entity)
-    {
-        if (found.IsValid() || !state.world->IsAlive(entity))
-            return;
-
-        if (const auto* nameComponent = state.world->Get<engine::NameComponent>(entity))
-        {
-            if (nameComponent->name == name)
-            {
-                found = entity;
-                return;
-            }
-        }
-
-        if (const auto* children = state.world->Get<engine::ChildrenComponent>(entity))
-        {
-            for (const LPENTITY child : children->children)
-                search(child);
-        }
-    };
-    search(rootEntity);
-    return found;
+    return internal::FindChild(Get().world.get(), rootEntity, name);
 }
 
 int CountChildren(LPENTITY entity)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return 0;
-    if (const auto* children = state.world->Get<engine::ChildrenComponent>(entity))
-        return static_cast<int>(children->children.size());
-    return 0;
+    return internal::CountChildren(Get().world.get(), entity);
 }
 
 LPENTITY GetChild(LPENTITY entity, int index)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity) || index < 0)
-        return NULL_LPENTITY;
-    const auto* children = state.world->Get<engine::ChildrenComponent>(entity);
-    if (!children)
-        return NULL_LPENTITY;
-    const size_t childIndex = static_cast<size_t>(index);
-    if (childIndex >= children->children.size())
-        return NULL_LPENTITY;
-    return children->children[childIndex];
+    return internal::GetChild(Get().world.get(), entity, index);
 }
 
 bool SetVisible(LPENTITY entity, bool visible, bool recursive)
 {
-    // Nur Rendering an/aus — Entity laeuft weiter durch Systeme und Transform.
-    // Fuer vollstaendige Deaktivierung: SetActive() verwenden.
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    std::function<void(LPENTITY)> apply = [&](LPENTITY current)
-    {
-        if (!state.world->IsAlive(current))
-            return;
-
-        state.world->SetComponent(current, engine::VisibilityComponent{visible});
-        if (auto* mesh = state.world->Get<engine::MeshComponent>(current))
-            mesh->visible = visible;
-
-        if (!recursive)
-            return;
-        if (const auto* children = state.world->Get<engine::ChildrenComponent>(current))
-        {
-            // Adding state to a descendant can migrate an ancestor's archetype slot.
-            const auto descendants = children->children;
-            for (const LPENTITY child : descendants)
-                apply(child);
-        }
-    };
-    apply(entity);
-    return true;
+    return internal::SetVisible(Get().world.get(), entity, visible, recursive);
 }
 
 bool SetActive(LPENTITY entity, bool active, bool recursive)
 {
-    // Vollstaendige Deaktivierung — Entity wird aus Rendering UND Systemen entfernt.
-    // Fuer reines Verstecken: SetVisible() verwenden.
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    std::function<void(LPENTITY)> apply = [&](LPENTITY current)
-    {
-        if (!state.world->IsAlive(current))
-            return;
-
-        if (auto* a = state.world->Get<engine::ActiveComponent>(current))
-            a->active = active;
-        else
-            state.world->Add<engine::ActiveComponent>(current, engine::ActiveComponent{active});
-
-        if (!recursive)
-            return;
-        if (const auto* children = state.world->Get<engine::ChildrenComponent>(current))
-        {
-            // Adding state to a descendant can migrate an ancestor's archetype slot.
-            const auto descendants = children->children;
-            for (const LPENTITY child : descendants)
-                apply(child);
-        }
-    };
-    apply(entity);
-    return true;
+    return internal::SetActive(Get().world.get(), entity, active, recursive);
 }
 
 bool SetParent(LPENTITY child, LPENTITY parent, bool keepWorldTransform)
 {
-    State& state = Get();
-    if (!state.world ||
-        !state.world->IsAlive(child) ||
-        !state.world->IsAlive(parent) ||
-        child == parent ||
-        IsDescendantOf(*state.world, parent, child))
-    {
-        return false;
-    }
-
-    const CapturedTransform worldTransform = keepWorldTransform
-        ? CaptureWorldTransform(state, child)
-        : CapturedTransform{};
-
-    internal::DetachEntityFromParent(*state.world, child);
-    state.world->Add<engine::ParentComponent>(child, parent);
-    if (!state.world->Has<engine::ChildrenComponent>(parent))
-        state.world->Add<engine::ChildrenComponent>(parent);
-    state.world->Get<engine::ChildrenComponent>(parent)->Add(child);
-
-    if (keepWorldTransform)
-        ApplyLocalFromWorld(state, child, worldTransform);
-    else if (auto* transform = state.world->Get<engine::TransformComponent>(child))
-        transform->dirty = true;
-
-    state.transformSystem.Update(*state.world);
-    state.boundsSystem.Update(*state.world);
-    return true;
+    return internal::SetParent(MakeEntityContext(Get()), child, parent, keepWorldTransform);
 }
 
 bool Detach(LPENTITY child, bool keepWorldTransform)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(child))
-        return false;
-
-    const CapturedTransform worldTransform = keepWorldTransform
-        ? CaptureWorldTransform(state, child)
-        : CapturedTransform{};
-
-    internal::DetachEntityFromParent(*state.world, child);
-    if (keepWorldTransform)
-        ApplyLocalFromWorld(state, child, worldTransform);
-    else if (auto* transform = state.world->Get<engine::TransformComponent>(child))
-        transform->dirty = true;
-
-    state.transformSystem.Update(*state.world);
-    state.boundsSystem.Update(*state.world);
-    return true;
+    return internal::Detach(MakeEntityContext(Get()), child, keepWorldTransform);
 }
 
 bool SetPosition(LPENTITY entity, const engine::math::Vec3& position)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    if (auto* transform = state.world->Get<engine::TransformComponent>(entity))
-    {
-        transform->localPosition = position;
-        transform->dirty = true;
-        return true;
-    }
-    return false;
+    return internal::SetPosition(Get().world.get(), entity, position);
 }
 
 bool SetPosition(LPENTITY entity, float x, float y, float z)
@@ -1922,60 +1549,17 @@ bool SetPosition(LPENTITY entity, float x, float y, float z)
 
 bool SetRotationEulerDeg(LPENTITY entity, float pitch, float yaw, float roll)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    if (auto* transform = state.world->Get<engine::TransformComponent>(entity))
-    {
-        transform->SetEulerDeg(pitch, yaw, roll);
-        return true;
-    }
-    return false;
+    return internal::SetRotationEulerDeg(Get().world.get(), entity, pitch, yaw, roll);
 }
 
 engine::math::Vec3 GetRotationEulerDeg(LPENTITY entity)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return {};
-
-    // WorldTransform bevorzugen (nach TransformSystem.Update() immer aktuell).
-    // Quaternion → Euler (Reihenfolge YXZ = Yaw→Pitch→Roll = typisch für Kameras).
-    const engine::math::Quat* q = nullptr;
-    if (const auto* wt = state.world->Get<engine::WorldTransformComponent>(entity))
-        q = &wt->rotation;
-    else if (const auto* tr = state.world->Get<engine::TransformComponent>(entity))
-        q = &tr->localRotation;
-    if (!q)
-        return {};
-
-    const float sinP = 2.0f * (q->w * q->x - q->z * q->y);
-    const float pitch = std::abs(sinP) >= 0.9999f
-        ? std::copysign(90.0f, sinP)
-        : engine::math::RAD_TO_DEG * std::asin(std::clamp(sinP, -1.0f, 1.0f));
-    const float yaw = engine::math::RAD_TO_DEG *
-        std::atan2(2.0f * (q->w * q->y + q->x * q->z),
-                   1.0f - 2.0f * (q->y * q->y + q->x * q->x));
-    const float roll = engine::math::RAD_TO_DEG *
-        std::atan2(2.0f * (q->w * q->z + q->x * q->y),
-                   1.0f - 2.0f * (q->x * q->x + q->z * q->z));
-    return {pitch, yaw, roll};
+    return internal::GetRotationEulerDeg(Get().world.get(), entity);
 }
 
 bool SetScale(LPENTITY entity, const engine::math::Vec3& scale)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    if (auto* transform = state.world->Get<engine::TransformComponent>(entity))
-    {
-        transform->localScale = scale;
-        transform->dirty = true;
-        return true;
-    }
-    return false;
+    return internal::SetScale(Get().world.get(), entity, scale);
 }
 
 bool SetScale(LPENTITY entity, float x, float y, float z)
@@ -1990,32 +1574,12 @@ bool SetScale(LPENTITY entity, float uniformScale)
 
 bool MoveEntity(LPENTITY entity, float x, float y, float z)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    auto* transform = state.world->Get<engine::TransformComponent>(entity);
-    if (!transform)
-        return false;
-
-    const engine::math::Vec3 localOffset = transform->localRotation.Rotate({x, y, z});
-    transform->localPosition += localOffset;
-    transform->dirty = true;
-    return true;
+    return internal::MoveEntity(Get().world.get(), entity, x, y, z);
 }
 
 bool TurnEntity(LPENTITY entity, float pitch, float yaw, float roll)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    auto* transform = state.world->Get<engine::TransformComponent>(entity);
-    if (!transform)
-        return false;
-
-    transform->RotateLocalEulerDeg(pitch, yaw, roll);
-    return true;
+    return internal::TurnEntity(Get().world.get(), entity, pitch, yaw, roll);
 }
 
 bool GetWorldBounds(LPENTITY entity,
@@ -2023,65 +1587,17 @@ bool GetWorldBounds(LPENTITY entity,
                     engine::math::Vec3& outExtents,
                     float& outBoundingSphere)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    engine::math::Vec3 boundsMin{};
-    engine::math::Vec3 boundsMax{};
-    bool hasBounds = false;
-    if (!CollectWorldBoundsRecursive(*state.world, entity, boundsMin, boundsMax, hasBounds))
-        return false;
-
-    outCenter = (boundsMin + boundsMax) * 0.5f;
-    outExtents = (boundsMax - boundsMin) * 0.5f;
-    outBoundingSphere = outExtents.Length();
-    return true;
+    return internal::GetWorldBounds(Get().world.get(), entity, outCenter, outExtents, outBoundingSphere);
 }
 
 bool LookAt(LPENTITY entity, const engine::math::Vec3& target, const engine::math::Vec3& up)
 {
-    State& state = Get();
-    if (!state.world || !state.world->IsAlive(entity))
-        return false;
-
-    auto* transform = state.world->Get<engine::TransformComponent>(entity);
-    if (!transform)
-        return false;
-
-    const engine::math::Vec3 position = ResolveEntityPosition(state, entity);
-    const engine::math::Vec3 forward = (target - position).Normalized();
-    if (forward.LengthSq() <= engine::math::EPSILON)
-        return false;
-
-    engine::math::Vec3 right = engine::math::Vec3::Cross(forward, up).Normalized();
-    if (right.LengthSq() <= engine::math::EPSILON)
-        right = engine::math::Vec3::Cross(forward, engine::math::Vec3::Right()).Normalized();
-    if (right.LengthSq() <= engine::math::EPSILON)
-        return false;
-
-    const engine::math::Vec3 correctedUp = engine::math::Vec3::Cross(right, forward).Normalized();
-    const engine::math::Vec3 back = -forward;
-
-    engine::math::Mat4 rotation = engine::math::Mat4::Identity();
-    rotation.m[0][0] = right.x;
-    rotation.m[0][1] = right.y;
-    rotation.m[0][2] = right.z;
-    rotation.m[1][0] = correctedUp.x;
-    rotation.m[1][1] = correctedUp.y;
-    rotation.m[1][2] = correctedUp.z;
-    rotation.m[2][0] = back.x;
-    rotation.m[2][1] = back.y;
-    rotation.m[2][2] = back.z;
-
-    transform->localRotation = QuatFromRotationMatrix(rotation).Normalized();
-    transform->dirty = true;
-    return true;
+    return internal::LookAt(Get().world.get(), entity, target, up);
 }
 
 bool LookAt(LPENTITY entity, LPENTITY targetEntity, const engine::math::Vec3& up)
 {
-    return LookAt(entity, ResolveEntityPosition(Get(), targetEntity), up);
+    return internal::LookAt(Get().world.get(), entity, targetEntity, up);
 }
 
 LPENTITY CreateCamera(const char* name,
@@ -2089,22 +1605,7 @@ LPENTITY CreateCamera(const char* name,
                       float fovYDeg,
                       bool isMainCamera)
 {
-    State& state = Get();
-    const LPENTITY entity = CreateEntity(name);
-    if (!entity.IsValid())
-        return NULL_LPENTITY;
-
-    SetPosition(entity, position);
-    SetRotationEulerDeg(entity, -10.0f, 0.0f, 0.0f);
-
-    engine::CameraComponent camera{};
-    camera.projection = engine::ProjectionType::Perspective;
-    camera.fovYDeg = fovYDeg;
-    camera.nearPlane = 0.05f;
-    camera.farPlane = 1000.0f;
-    camera.isMainCamera = isMainCamera;
-    state.world->Add<engine::CameraComponent>(entity, camera);
-    return entity;
+    return internal::CreateCamera(Get().world.get(), name, position, fovYDeg, isMainCamera);
 }
 
 LPENTITY CreateDirectionalLight(const char* name,
@@ -2113,25 +1614,7 @@ LPENTITY CreateDirectionalLight(const char* name,
                                 const engine::math::Vec3& color,
                                 float intensity)
 {
-    State& state = Get();
-    const LPENTITY entity = CreateEntity(name);
-    if (!entity.IsValid())
-        return NULL_LPENTITY;
-
-    SetPosition(entity, position);
-    SetRotationEulerDeg(entity, eulerDeg.x, eulerDeg.y, eulerDeg.z);
-
-    engine::LightComponent light{};
-    light.type = engine::LightType::Directional;
-    light.color = color;
-    light.intensity = intensity;
-    light.castShadows = true;
-    light.shadowSettings.enabled = true;
-    light.shadowSettings.resolution = 2048u;
-    light.shadowSettings.bias = 0.0015f;
-    engine::ApplyDirectionalShadowDefaults(light.shadowSettings);
-    state.world->Add<engine::LightComponent>(entity, light);
-    return entity;
+    return internal::CreateDirectionalLight(Get().world.get(), name, position, eulerDeg, color, intensity);
 }
 
 LPENTITY CreatePointLight(const char* name,
@@ -2140,25 +1623,7 @@ LPENTITY CreatePointLight(const char* name,
                           float intensity,
                           float range)
 {
-    State& state = Get();
-    const LPENTITY entity = CreateEntity(name);
-    if (!entity.IsValid())
-        return NULL_LPENTITY;
-
-    SetPosition(entity, position);
-
-    engine::LightComponent light{};
-    light.type = engine::LightType::Point;
-    light.color = color;
-    light.intensity = intensity;
-    light.range = range;
-    light.castShadows = true;
-    light.shadowSettings.enabled = true;
-    light.shadowSettings.resolution = 1024u;
-    light.shadowSettings.bias = 0.0015f;
-    light.shadowSettings.maxDistance = range;
-    state.world->Add<engine::LightComponent>(entity, light);
-    return entity;
+    return internal::CreatePointLight(Get().world.get(), name, position, color, intensity, range);
 }
 
 LPENTITY CreateSpotLight(const char* name,
@@ -2170,28 +1635,7 @@ LPENTITY CreateSpotLight(const char* name,
                          float innerDeg,
                          float outerDeg)
 {
-    State& state = Get();
-    const LPENTITY entity = CreateEntity(name);
-    if (!entity.IsValid())
-        return NULL_LPENTITY;
-
-    SetPosition(entity, position);
-    SetRotationEulerDeg(entity, eulerDeg.x, eulerDeg.y, eulerDeg.z);
-
-    engine::LightComponent light{};
-    light.type = engine::LightType::Spot;
-    light.color = color;
-    light.intensity = intensity;
-    light.range = range;
-    light.spotInnerDeg = innerDeg;
-    light.spotOuterDeg = outerDeg;
-    light.castShadows = true;
-    light.shadowSettings.enabled = true;
-    light.shadowSettings.resolution = 1024u;
-    light.shadowSettings.bias = 0.0015f;
-    light.shadowSettings.maxDistance = range;
-    state.world->Add<engine::LightComponent>(entity, light);
-    return entity;
+    return internal::CreateSpotLight(Get().world.get(), name, position, eulerDeg, color, intensity, range, innerDeg, outerDeg);
 }
 
 LPENTITY CreateEntityFromAsset(const char* path, const char* name)
@@ -3396,39 +2840,12 @@ void SetScenePersistent(LPSCENE scene)
 
 LPENTITY FindEntity(const char* name)
 {
-    State& state = Get();
-    if (!state.world || !name)
-        return NULL_LPENTITY;
-
-    LPENTITY found = NULL_LPENTITY;
-    state.world->ForEachAlive([&](engine::EntityID id)
-    {
-        if (found.IsValid()) return;
-        if (const auto* nc = state.world->Get<engine::NameComponent>(id))
-            if (nc->name == name)
-                found = id;
-    });
-    return found;
+    return internal::FindEntity(Get().world.get(), name);
 }
 
 LPENTITY GetMainCamera()
 {
-    State& state = Get();
-    if (!state.world)
-        return NULL_LPENTITY;
-
-    LPENTITY mainCamera = NULL_LPENTITY;
-    LPENTITY fallbackCamera = NULL_LPENTITY;
-    state.world->View<engine::CameraComponent>(
-        [&](LPENTITY entity, const engine::CameraComponent& camera)
-        {
-            if (!fallbackCamera.IsValid())
-                fallbackCamera = entity;
-            if (camera.isMainCamera && !mainCamera.IsValid())
-                mainCamera = entity;
-        });
-
-    return mainCamera.IsValid() ? mainCamera : fallbackCamera;
+    return internal::GetMainCamera(Get().world.get());
 }
 
 LPENTITY FindEntityInScene(LPSCENE scene, const char* name)

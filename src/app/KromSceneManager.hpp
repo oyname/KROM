@@ -113,13 +113,6 @@ struct SceneContext
     RuntimeMaterialContext materials;
 };
 
-// --- Hierarchy helpers (also used by DestroyEntity, SetParent and the script hooks) ---
-
-// Destroys entity and all its children; detaches it from its parent first.
-void DestroyEntityRecursive(engine::ecs::World& world, LPENTITY entity);
-// Removes the ParentComponent of entity and the entity from the parent's children.
-void DetachEntityFromParent(engine::ecs::World& world, LPENTITY entity);
-
 // Script spawns belong to the scene of the calling object (found through its
 // parent chain); spawns of a persistent object become persistent too.
 void RegisterScriptSpawn(const SceneContext& ctx, LPENTITY owner, LPENTITY root);

@@ -434,6 +434,7 @@ endif()
 if(TARGET engine_platform_win32)
     add_library(engine_krom_wrapper_win32 STATIC
         src/app/KromWrapper.cpp
+        src/app/KromEntityApi.cpp
         src/app/KromRenderSettings.cpp
         src/app/KromRuntimeMaterials.cpp
         src/app/KromSceneManager.cpp
@@ -485,6 +486,7 @@ endif()
 if(TARGET engine_platform_glfw)
     add_library(engine_krom_wrapper_glfw STATIC
         src/app/KromWrapper.cpp
+        src/app/KromEntityApi.cpp
         src/app/KromRenderSettings.cpp
         src/app/KromRuntimeMaterials.cpp
         src/app/KromSceneManager.cpp
@@ -881,6 +883,9 @@ if(TARGET engine_krom_wrapper_win32 AND TARGET engine_dx11)
     add_executable(krom_scene_api_tests EXCLUDE_FROM_ALL tests/test_runtime_scene_api.cpp)
     target_link_libraries(krom_scene_api_tests PRIVATE engine_krom_wrapper_win32)
     krom_link_self_registering_addon(krom_scene_api_tests engine_dx11)
+    add_executable(krom_entity_api_tests EXCLUDE_FROM_ALL tests/test_runtime_entity_api.cpp)
+    target_link_libraries(krom_entity_api_tests PRIVATE engine_krom_wrapper_win32)
+    krom_link_self_registering_addon(krom_entity_api_tests engine_dx11)
     add_executable(krom_surface_tests EXCLUDE_FROM_ALL tests/test_runtime_surfaces.cpp)
     target_link_libraries(krom_surface_tests PRIVATE engine_krom_wrapper_win32)
     krom_link_self_registering_addon(krom_surface_tests engine_dx11)
