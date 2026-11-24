@@ -1702,6 +1702,15 @@ void DrawEditorPanels(EditorFrameContext& ctx)
     measureUi(g_uiTimings.inspector);
     DrawCameraPreviewWindow(ctx);
     measureUi(g_uiTimings.preview);
+    // KROM_PERF_UI=1: print the UI split every 120 frames (perf runs without a visible window).
+    {
+        static const bool print = std::getenv("KROM_PERF_UI") != nullptr;
+        static int frame = 0;
+        if (print && ++frame % 120 == 0)
+            std::printf("PERF ui materials=%.2f menus=%.2f gizmos=%.2f assets=%.2f hierarchy=%.2f inspector=%.2f preview=%.2f ms\n",
+                        g_uiTimings.materials, g_uiTimings.menus, g_uiTimings.gizmos, g_uiTimings.assets,
+                        g_uiTimings.hierarchy, g_uiTimings.inspector, g_uiTimings.preview);
+    }
     DrawProfilerWindow(ctx, g_uiTimings);
     DrawPerfMiniOverlay(ctx);
     DrawEditorStatusBar(ctx);
