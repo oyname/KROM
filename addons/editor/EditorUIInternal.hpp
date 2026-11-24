@@ -196,6 +196,13 @@ struct EditorUiTimings { double materials = 0, menus = 0, gizmos = 0, assets = 0
 void DrawProfilerWindow(EditorFrameContext& ctx, const EditorUiTimings& ui);
 void DrawPerfMiniOverlay(const EditorFrameContext& ctx);
 
+// ── EditorUIInspector.cpp ─────────────────────────────────────────────────
+// True while C++ script files are being dragged from the asset browser.
+bool IsScriptFileDragActive();
+// Call inside an open drag-drop target: adds every script class of the dropped
+// files to the entity. Returns true if something was dropped.
+bool AcceptScriptFileDrop(EditorFrameContext& ctx, EntityID entity);
+
 // ── EditorUIProject.cpp ───────────────────────────────────────────────────
 // targetDir empty: Assets/Prefabs of the current project.
 bool SaveEntityAsPrefab(EditorFrameContext& ctx, EntityID entity,

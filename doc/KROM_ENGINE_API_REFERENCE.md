@@ -947,15 +947,35 @@ public:
             ctx.Destroy();
     }
 };
-
-// KROM_SCRIPT(Jumper)
-// KROM_FIELD(Jumper, jumpImpulse, Float)
 ```
 
 ### Registration
 
-The editor scans project scripts for `KROM_SCRIPT` / `KROM_FIELD` markers and generates
-`generated/ScriptBindings.cpp`, which defines `KromRegisterGameScripts`. By hand:
+The editor reads the script headers (`.hpp` / `.h`) under `Assets/Scripts` as text:
+
+- A class at global scope that derives directly from `engine::script::ComponentScript`
+  is a script.
+- Each public variable of type `float`, `int`, `bool`, `engine::math::Vec3`,
+  `std::string` or `engine::EntityID` is a field: it is shown in the inspector and
+  saved with the scene. Private and protected variables are not fields.
+- `KROM_HIDE float cached = 0.f;` keeps a public variable from becoming a field.
+- `KROM_PREFAB std::string effect;` makes a string a prefab reference.
+
+This is a text scan, not a compiler: declare one variable per statement
+(`float a, b;` is skipped), and use the types by name rather than through an alias.
+Classes inside a namespace and classes that derive from a script base class of your
+own are not found automatically.
+
+The older marker comments still work and cover those cases. A class that has them
+gets exactly the fields they list:
+
+```cpp
+// KROM_SCRIPT(Jumper)
+// KROM_FIELD(Jumper, jumpImpulse, Float)
+```
+
+From this the editor generates `generated/ScriptBindings.cpp`, which defines
+`KromRegisterGameScripts`. By hand:
 
 ```cpp
 script::ScriptRegistry registry;

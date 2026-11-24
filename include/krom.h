@@ -636,6 +636,21 @@ bool GetPhysicsInterpolation();
 #define KROM_SCRIPT(Type)
 #endif
 
+// The editor reads scripts from their declarations: a class deriving directly
+// from engine::script::ComponentScript is a script, and its public variables of
+// type float, int, bool, engine::math::Vec3, std::string or engine::EntityID are
+// fields (shown in the inspector, saved with the scene). One variable per line.
+//   KROM_HIDE   float cached = 0.f;      // public, but not a field
+//   KROM_PREFAB std::string effect;      // a prefab reference instead of text
+// The older marker comments (// KROM_SCRIPT(Name), // KROM_FIELD(Name, field, Type))
+// still work; a class that has them gets exactly the fields they list.
+#ifndef KROM_HIDE
+#define KROM_HIDE
+#endif
+#ifndef KROM_PREFAB
+#define KROM_PREFAB
+#endif
+
 // Klassen-basiertes Script-System. Scripts werden in .kscene (SceneSerializer-
 // Format) als "ScriptList"-Komponente des Entities serialisiert.
 //

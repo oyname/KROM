@@ -20,6 +20,8 @@ struct AssetBrowserState
 {
     std::filesystem::path currentDir;
     std::filesystem::path selectedPath;
+    // C++ script files picked with Ctrl+click, to drag several onto an object at once.
+    std::vector<std::filesystem::path> selectedScripts;
     double lastFolderClickTime = -1.0;
 
     // Inhalt von currentDir, einmal eingelesen statt in jedem Bild mehrfach.

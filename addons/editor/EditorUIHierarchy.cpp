@@ -361,11 +361,25 @@ void DrawEntityList(EditorFrameContext& ctx)
         return pc && pc->parent == parent;
     };
 
+    // Children per parent in display order. Scanning all entities for every row
+    // instead costs entities^2 per frame (10000 entities: 3 fps).
+    std::unordered_map<uint32_t, std::vector<EntityID>> childrenByParent;
+    for (EntityID id : entities)
+    {
+        if (const auto* pc = ctx.world.Get<ParentComponent>(id); pc && pc->parent.IsValid())
+            childrenByParent[pc->parent.value].push_back(id);
+    }
+    const std::vector<EntityID> noChildren;
+    auto childrenOf = [&](EntityID parent) -> const std::vector<EntityID>& {
+        const auto it = childrenByParent.find(parent.value);
+        return it != childrenByParent.end() ? it->second : noChildren;
+    };
+
     auto hasVisibleDescendant = [&](auto&& self, EntityID parent, uint32_t depth) -> bool {
         if (depth > 32u)
             return false;
 
-        for (EntityID candidate : entities)
+        for (EntityID candidate : childrenOf(parent))
         {
             if (!isDirectChildOf(candidate, parent))
                 continue;
@@ -663,6 +677,7 @@ void DrawEntityList(EditorFrameContext& ctx)
                     });
                 }
             }
+            AcceptScriptFileDrop(ctx, id);
             ImGui::EndDragDropTarget();
         }
 
@@ -671,7 +686,9 @@ void DrawEntityList(EditorFrameContext& ctx)
 
         if (visibleDescendant && open)
         {
-            for (EntityID candidate : entities)
+            // The parent is checked again: a row drawn earlier in this frame may
+            // have moved the entity.
+            for (EntityID candidate : childrenOf(id))
             {
                 if (isDirectChildOf(candidate, id))
                     self(self, candidate, depth + 1u);

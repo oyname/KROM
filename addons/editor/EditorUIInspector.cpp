@@ -31,6 +31,7 @@
 #include <array>
 #include <limits>
 #include "imgui_internal.h"
+#include <sstream>
 
 namespace engine::renderer::addons::editor {
 
@@ -721,6 +722,43 @@ static void RevealScriptAsset(EditorFrameContext& ctx, const std::string& classN
     ctx.state.consoleFocusRequest = false;
 }
 
+// Adds one script class to the entity (one undo step). Without a built factory
+// only the name and the header's field defaults are stored until the next build.
+static void AddScriptClassToEntity(EditorFrameContext& ctx, EntityID entity, const std::string& name)
+{
+    using namespace engine::script;
+
+    EditComponents<ScriptList>(ctx, "history.add_script", entity, [&] {
+        auto* sl = ctx.world.Get<ScriptList>(entity);
+        if (!sl)
+        {
+            ScriptList newList;
+            newList.SetOwnerEntity(entity);
+            ctx.world.Add<ScriptList>(entity, std::move(newList));
+            sl = ctx.world.Get<ScriptList>(entity);
+        }
+        if (!sl)
+            return;
+
+        if (ctx.scriptRegistry && ctx.scriptRegistry->Has(name))
+        {
+            sl->Add(name, entity, *ctx.scriptRegistry);
+            return;
+        }
+        sl->AddNameOnly(name);
+        ScriptInstance& inst = sl->Instances_Mutable().back();
+        for (const EditorScriptFieldMarker& field : FindCppScriptFields(ctx, name))
+        {
+            ScriptFieldValue value{};
+            value.type = field.type;
+            if (field.hasDefaultValue)
+                value = field.defaultValue;
+            inst.fieldValues[field.name] = std::move(value);
+        }
+        ctx.lastFileMessage = TranslateWithValue("script.added_build_needed", name);
+    });
+}
+
 static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
 {
     using namespace engine::script;
@@ -965,46 +1003,64 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
 
         if (ImGui::BeginPopup("AddScriptPopup"))
         {
-            value_ui::TextDisabled(Translate("script.select_class"));
-            ImGui::Separator();
+            // Search box on top, the matching classes in a scrolling list below, so
+            // the popup stays the same size however many scripts the project has.
+            static char filter[64] = {};
+            constexpr float kListWidth = 280.f;
+            constexpr int kVisibleRows = 12;
 
-            for (const auto& name : scriptClassNames)
+            if (ImGui::IsWindowAppearing())
             {
-                if (ImGui::MenuItem(name.c_str()))
+                filter[0] = '\0';
+                ImGui::SetKeyboardFocusHere();
+            }
+            const std::string hint = std::string(ICON_LC_SEARCH "  ") + Translate("script.search_hint");
+            ImGui::SetNextItemWidth(kListWidth);
+            const bool enterPressed = ImGui::InputTextWithHint(
+                "##script_search", hint.c_str(), filter, sizeof(filter), ImGuiInputTextFlags_EnterReturnsTrue);
+
+            auto lower = [](std::string text) {
+                std::transform(text.begin(), text.end(), text.begin(),
+                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                return text;
+            };
+            const std::string needle = lower(filter);
+            std::vector<const std::string*> matches;
+            for (const std::string& name : scriptClassNames)
+            {
+                if (needle.empty() || lower(name).find(needle) != std::string::npos)
+                    matches.push_back(&name);
+            }
+
+            const std::string* chosen = nullptr;
+            if (matches.empty())
+            {
+                value_ui::TextDisabled(Translate("script.search_none"));
+            }
+            else
+            {
+                const int rows = std::min(static_cast<int>(matches.size()), kVisibleRows);
+                const float listHeight = rows * ImGui::GetTextLineHeightWithSpacing() +
+                                         ImGui::GetStyle().WindowPadding.y;
+                if (ImGui::BeginChild("##script_list", ImVec2(kListWidth, listHeight)))
                 {
-                    EditComponents<ScriptList>(ctx, "history.add_script", entity, [&] {
-                        if (!sl)
-                        {
-                            engine::script::ScriptList newList;
-                            newList.SetOwnerEntity(entity);
-                            ctx.world.Add<ScriptList>(entity, std::move(newList));
-                            sl = ctx.world.Get<ScriptList>(entity);
-                        }
-                        if (sl)
-                        {
-                            const bool hasLiveFactory = ctx.scriptRegistry && ctx.scriptRegistry->Has(name);
-                            if (hasLiveFactory)
-                            {
-                                sl->Add(name, entity, *ctx.scriptRegistry);
-                            }
-                            else
-                            {
-                                sl->AddNameOnly(name);
-                                ScriptInstance& inst = sl->Instances_Mutable().back();
-                                for (const EditorScriptFieldMarker& field : FindCppScriptFields(ctx, name))
-                                {
-                                    ScriptFieldValue value{};
-                                    value.type = field.type;
-                                    if (field.hasDefaultValue)
-                                        value = field.defaultValue;
-                                    inst.fieldValues[field.name] = std::move(value);
-                                }
-                                ctx.lastFileMessage =
-                                    TranslateWithValue("script.added_build_needed", name);
-                            }
-                        }
-                    });
+                    for (size_t i = 0; i < matches.size(); ++i)
+                    {
+                        // While searching, the first match is the one Enter picks.
+                        const bool enterTarget = i == 0u && !needle.empty();
+                        if (ImGui::Selectable(matches[i]->c_str(), enterTarget))
+                            chosen = matches[i];
+                    }
                 }
+                ImGui::EndChild();
+                if (enterPressed)
+                    chosen = matches.front();
+            }
+
+            if (chosen)
+            {
+                AddScriptClassToEntity(ctx, entity, *chosen);
+                ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
         }
@@ -4189,6 +4245,62 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
 
 namespace detail {
 
+namespace {
+// Single file: the browser's move payload. Several files: one path per line.
+constexpr const char* kScriptFilesPayload = "KROM_SCRIPT_FILES";
+
+bool IsCppScriptFile(const std::filesystem::path& path)
+{
+    const std::string ext = PathToUtf8(path.extension());
+    return ext == ".hpp" || ext == ".h" || ext == ".cpp" || ext == ".cxx";
+}
+} // namespace
+
+bool IsScriptFileDragActive()
+{
+    const ImGuiPayload* active = ImGui::GetDragDropPayload();
+    if (!active || !active->Data)
+        return false;
+    if (active->IsDataType(kScriptFilesPayload))
+        return true;
+    return active->IsDataType("KROM_MOVE_FILE") &&
+           IsCppScriptFile(PathFromUtf8(static_cast<const char*>(active->Data)));
+}
+
+bool AcceptScriptFileDrop(EditorFrameContext& ctx, EntityID entity)
+{
+    if (!IsScriptFileDragActive())
+        return false;
+    const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kScriptFilesPayload);
+    if (!payload)
+        payload = ImGui::AcceptDragDropPayload("KROM_MOVE_FILE");
+    if (!payload || !payload->Data)
+        return false;
+
+    // Header and source of one script may both be in the selection: add each class once.
+    std::vector<std::string> classNames;
+    std::istringstream lines(std::string(static_cast<const char*>(payload->Data)));
+    for (std::string line; std::getline(lines, line);)
+    {
+        if (line.empty())
+            continue;
+        for (std::string& name : FindCppScriptClassNamesInFile(ctx, PathFromUtf8(line)))
+        {
+            if (std::find(classNames.begin(), classNames.end(), name) == classNames.end())
+                classNames.push_back(std::move(name));
+        }
+    }
+
+    if (classNames.empty())
+    {
+        ctx.lastFileMessage = Translate("script.drop_no_class");
+        return true;
+    }
+    for (const std::string& name : classNames)
+        AddScriptClassToEntity(ctx, entity, name);
+    return true;
+}
+
 // ── Physik (Rigidbody) ───────────────────────────────────────────────────────
 // Regel wie im Physics-Addon: der oberste Rigidbody einer Hierarchie besitzt
 // alle Collider darunter; Collider ohne Rigidbody sind statische Hindernisse.
@@ -4974,6 +5086,15 @@ void DrawInspector(EditorFrameContext& ctx)
             if (ImGui::IsItemHovered() && ImGui::IsMouseClicked(ImGuiMouseButton_Right))
                 ImGui::OpenPopup("AddComponentPopup##inspector");
         }
+    }
+
+    // Script files from the asset browser can be dropped anywhere on the inspector.
+    if (IsScriptFileDragActive() && !ctx.state.prefabModeReadOnly &&
+        ImGui::BeginDragDropTargetCustom(ImGui::GetCurrentWindow()->InnerRect,
+                                         ImGui::GetID("##InspectorScriptDrop")))
+    {
+        AcceptScriptFileDrop(ctx, selected);
+        ImGui::EndDragDropTarget();
     }
 
     // "+" Button — am unteren Rand wenn Platz ist, aber niemals ueber Inhalt zeichnen.

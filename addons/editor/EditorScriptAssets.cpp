@@ -13,6 +13,7 @@
 #include <regex>
 #include <set>
 #include <sstream>
+#include <string_view>
 #include <cstdlib>
 #include <system_error>
 #include <unordered_map>
@@ -101,14 +102,12 @@ std::string HeaderTemplate(const std::string& className)
         "class " << className << " final : public engine::script::ComponentScript\n"
         "{\n"
         "public:\n"
+        "    // Public variables show up in the inspector and are saved with the scene.\n"
         "    float speedDegPerSecond = 90.0f;\n"
         "\n"
         "    void OnStart(engine::script::IScriptContext& ctx) override;\n"
         "    void OnUpdate(engine::script::IScriptContext& ctx) override;\n"
-        "};\n"
-        "\n"
-        "// KROM_SCRIPT(" << className << ")\n"
-        "// KROM_FIELD(" << className << ", speedDegPerSecond, Float)\n";
+        "};\n";
     return out.str();
 }
 
@@ -143,6 +142,379 @@ struct ScriptMarker
     std::vector<Field> fields;
 };
 
+// ── Declaration parser ───────────────────────────────────────────────────────
+// Reads script classes and their fields straight from the declarations, so a
+// script needs no marker comments:
+//   - a class at global scope that derives directly from ComponentScript is a script;
+//   - each public data member of a supported type is a field, in declaration order;
+//   - KROM_HIDE in front of a member keeps it out, KROM_PREFAB turns a
+//     std::string into a prefab reference.
+// This is a text scan, not a C++ front end: one member per declaration, no
+// macros that expand to members, no type aliases.
+
+// Blanks comments, string and character literals and preprocessor lines, keeping
+// every offset and line break, so braces and semicolons can be matched by position.
+std::string BlankNonCode(const std::string& text)
+{
+    std::string out = text;
+    const size_t n = out.size();
+    bool lineStart = true;
+    for (size_t i = 0; i < n;)
+    {
+        const char c = out[i];
+        if (c == '\n') { lineStart = true; ++i; continue; }
+        if (lineStart && c == '#')
+        {
+            while (i < n && out[i] != '\n')
+            {
+                if (out[i] == '\\' && i + 1 < n && (out[i + 1] == '\n' || out[i + 1] == '\r'))
+                {
+                    out[i] = ' ';
+                    i += out[i + 1] == '\r' ? 3 : 2;   // continued onto the next line
+                    continue;
+                }
+                out[i++] = ' ';
+            }
+            continue;
+        }
+        if (!std::isspace(static_cast<unsigned char>(c)))
+            lineStart = false;
+
+        if (c == '/' && i + 1 < n && out[i + 1] == '/')
+        {
+            while (i < n && out[i] != '\n')
+                out[i++] = ' ';
+        }
+        else if (c == '/' && i + 1 < n && out[i + 1] == '*')
+        {
+            out[i] = out[i + 1] = ' ';
+            i += 2;
+            while (i < n && !(out[i] == '*' && i + 1 < n && out[i + 1] == '/'))
+            {
+                if (out[i] != '\n') out[i] = ' ';
+                ++i;
+            }
+            if (i < n) { out[i] = ' '; if (i + 1 < n) out[i + 1] = ' '; i += 2; }
+        }
+        else if (c == '"' || (c == '\'' && (i == 0 || !std::isalnum(static_cast<unsigned char>(out[i - 1])))))
+        {
+            const char quote = c;
+            ++i;
+            while (i < n && out[i] != quote && out[i] != '\n')
+            {
+                if (out[i] == '\\' && i + 1 < n && out[i + 1] != '\n')
+                    out[i++] = ' ';
+                out[i++] = ' ';
+            }
+            if (i < n && out[i] == quote) ++i;
+        }
+        else
+        {
+            ++i;
+        }
+    }
+    return out;
+}
+
+bool IsIdentChar(char c)
+{
+    return std::isalnum(static_cast<unsigned char>(c)) || c == '_';
+}
+
+// Position of the bracket closing the one at `open`, or npos.
+size_t MatchBracket(const std::string& code, size_t open, size_t end)
+{
+    const char openCh = code[open];
+    const char closeCh = openCh == '(' ? ')' : openCh == '[' ? ']' : '}';
+    int depth = 0;
+    for (size_t i = open; i < end; ++i)
+    {
+        if (code[i] == openCh) ++depth;
+        else if (code[i] == closeCh && --depth == 0) return i;
+    }
+    return std::string::npos;
+}
+
+// Whitespace-separated words; "::" joins its neighbours ("std :: string" is one word).
+std::vector<std::string> SplitWords(std::string_view text)
+{
+    std::vector<std::string> words;
+    std::string current;
+    bool joinNext = false;
+    auto flush = [&] {
+        if (!current.empty()) { words.push_back(std::move(current)); current.clear(); }
+    };
+    for (size_t i = 0; i < text.size(); ++i)
+    {
+        const char c = text[i];
+        if (std::isspace(static_cast<unsigned char>(c)))
+        {
+            if (!joinNext) flush();
+            continue;
+        }
+        if (c == ':' && i + 1 < text.size() && text[i + 1] == ':')
+        {
+            if (current.empty() && !words.empty()) { current = std::move(words.back()); words.pop_back(); }
+            current += "::";
+            ++i;
+            joinNext = true;
+            continue;
+        }
+        current += c;
+        joinNext = false;
+    }
+    flush();
+    return words;
+}
+
+bool HasWord(const std::vector<std::string>& words, std::string_view word)
+{
+    return std::find(words.begin(), words.end(), word) != words.end();
+}
+
+// Maps a C++ member type to the field type name used in the bindings; false if unsupported.
+bool FieldTypeFromCppType(std::string_view cppType, bool prefab, std::string& outType)
+{
+    if (const size_t scope = cppType.rfind("::"); scope != std::string_view::npos)
+    {
+        const std::string_view qualifier = cppType.substr(0, scope);
+        cppType = cppType.substr(scope + 2);
+        // "string" from another namespace is not std::string.
+        if (cppType == "string" && qualifier != "std" && qualifier != "::std")
+            return false;
+    }
+    if (prefab)
+    {
+        if (cppType != "string") return false;
+        outType = "Prefab";
+        return true;
+    }
+    if (cppType == "float")                            outType = "Float";
+    else if (cppType == "int" || cppType == "int32_t") outType = "Int";
+    else if (cppType == "bool")                        outType = "Bool";
+    else if (cppType == "Vec3")                        outType = "Vec3";
+    else if (cppType == "string")                      outType = "String";
+    else if (cppType == "EntityID" || cppType == "LPENTITY") outType = "Entity";   // LPENTITY: krom.h alias
+    else return false;
+    return true;
+}
+
+// One member declaration without its initializer ("engine::math::Vec3 axis").
+bool ParseFieldDeclarator(std::string_view declarator, ScriptMarker::Field& outField)
+{
+    for (const char c : declarator)
+    {
+        if (!IsIdentChar(c) && c != ':' && !std::isspace(static_cast<unsigned char>(c)))
+            return false;   // pointer, reference, array, template, function, attribute
+    }
+
+    std::vector<std::string> words = SplitWords(declarator);
+    static constexpr std::string_view kNotAField[] = {
+        "static", "const", "constexpr", "using", "typedef", "friend", "virtual", "explicit",
+        "template", "enum", "class", "struct", "union", "operator", "volatile", "extern",
+        "thread_local", "KROM_HIDE" };
+    for (const std::string_view word : kNotAField)
+        if (HasWord(words, word))
+            return false;
+
+    const bool prefab = HasWord(words, "KROM_PREFAB");
+    std::erase_if(words, [](const std::string& word) {
+        return word == "KROM_PREFAB" || word == "mutable" || word == "inline";
+    });
+    if (words.size() != 2u)
+        return false;   // "unsigned int x", a bare expression, ...
+
+    const std::string& name = words[1];
+    if (name.find(':') != std::string::npos || std::isdigit(static_cast<unsigned char>(name.front())))
+        return false;   // bit field or a qualified name
+    if (!FieldTypeFromCppType(words[0], prefab, outField.type))
+        return false;
+    outField.name = name;
+    return true;
+}
+
+// Public data members of the class body code[bodyBegin, bodyEnd) (without the braces).
+void ParseClassFields(const std::string& code, size_t bodyBegin, size_t bodyEnd,
+                      bool isStruct, std::vector<ScriptMarker::Field>& outFields)
+{
+    bool isPublic = isStruct;
+    size_t stmtBegin = bodyBegin;
+    size_t initAt = std::string::npos;   // where "= ..." or "{ ... }" starts
+    bool isFunction = false;             // "(" before any initializer
+    bool hasTopComma = false;            // "float a, b;"
+
+    auto reset = [&](size_t next) {
+        stmtBegin = next;
+        initAt = std::string::npos;
+        isFunction = hasTopComma = false;
+    };
+    auto finish = [&](size_t stmtEnd) {
+        if (!isPublic || isFunction || hasTopComma)
+            return;
+        const size_t declEnd = std::min(initAt, stmtEnd);
+        ScriptMarker::Field field;
+        if (ParseFieldDeclarator(std::string_view(code).substr(stmtBegin, declEnd - stmtBegin), field))
+        {
+            const bool known = std::any_of(outFields.begin(), outFields.end(),
+                [&](const ScriptMarker::Field& f) { return f.name == field.name; });
+            if (!known)
+                outFields.push_back(std::move(field));
+        }
+    };
+
+    for (size_t i = bodyBegin; i < bodyEnd;)
+    {
+        const char c = code[i];
+        if (c == '(' || c == '[')
+        {
+            if (c == '(' && initAt == std::string::npos)
+                isFunction = true;
+            const size_t close = MatchBracket(code, i, bodyEnd);
+            if (close == std::string::npos) return;
+            i = close + 1;
+        }
+        else if (c == '{')
+        {
+            const size_t close = MatchBracket(code, i, bodyEnd);
+            if (close == std::string::npos) return;
+            if (isFunction)
+                reset(close + 1);   // function body: the declaration ends here, without ';'
+            else if (initAt == std::string::npos)
+                initAt = i;         // brace initializer or the body of a nested type
+            i = close + 1;
+        }
+        else if (c == '=')
+        {
+            if (initAt == std::string::npos)
+            {
+                // "operator==" is a function name, not an initializer.
+                const std::string_view head = std::string_view(code).substr(stmtBegin, i - stmtBegin);
+                if (head.find("operator") == std::string_view::npos)
+                    initAt = i;
+            }
+            ++i;
+        }
+        else if (c == ',')
+        {
+            hasTopComma = true;
+            ++i;
+        }
+        else if (c == ':')
+        {
+            if (i + 1 < bodyEnd && code[i + 1] == ':') { i += 2; continue; }
+            const std::vector<std::string> words =
+                SplitWords(std::string_view(code).substr(stmtBegin, i - stmtBegin));
+            if (words.size() == 1u && (words[0] == "public" || words[0] == "private" || words[0] == "protected"))
+            {
+                isPublic = words[0] == "public";
+                reset(i + 1);
+            }
+            ++i;
+        }
+        else if (c == ';')
+        {
+            finish(i);
+            reset(i + 1);
+            ++i;
+        }
+        else
+        {
+            ++i;
+        }
+    }
+}
+
+struct ParsedClass
+{
+    std::string name;
+    std::vector<ScriptMarker::Field> fields;
+};
+
+// Script classes declared at global scope in `text`.
+std::vector<ParsedClass> ParseScriptClasses(const std::string& text)
+{
+    std::vector<ParsedClass> classes;
+    const std::string code = BlankNonCode(text);
+    const size_t n = code.size();
+    size_t stmtBegin = 0;   // start of the current global-scope declaration
+
+    for (size_t i = 0; i < n;)
+    {
+        const char c = code[i];
+        if (c == ';' || c == '}') { stmtBegin = ++i; continue; }
+        if (c == '{' || c == '(' || c == '[')
+        {
+            // Namespaces, function bodies, initializers: nothing in there is registered
+            // (the bindings refer to classes by their unqualified name).
+            const size_t close = MatchBracket(code, i, n);
+            if (close == std::string::npos) break;
+            i = close + 1;
+            if (c == '{') stmtBegin = i;
+            continue;
+        }
+        if (!IsIdentChar(c)) { ++i; continue; }
+
+        size_t wordEnd = i;
+        while (wordEnd < n && IsIdentChar(code[wordEnd])) ++wordEnd;
+        const std::string_view word = std::string_view(code).substr(i, wordEnd - i);
+        if (word != "class" && word != "struct")
+        {
+            i = wordEnd;
+            continue;
+        }
+
+        const size_t headEnd = code.find_first_of("{;", wordEnd);
+        if (headEnd == std::string::npos) break;
+        const std::string_view before = std::string_view(code).substr(stmtBegin, i - stmtBegin);
+        const bool plainClass = code[headEnd] == '{' &&
+            before.find("template") == std::string_view::npos &&
+            before.find("enum") == std::string_view::npos;
+        if (!plainClass)
+        {
+            i = wordEnd;   // forward declaration, template or "enum class": plain code
+            continue;
+        }
+
+        const size_t bodyEnd = MatchBracket(code, headEnd, n);
+        if (bodyEnd == std::string::npos) break;
+
+        // "Name final : public engine::script::ComponentScript"
+        const std::string_view head = std::string_view(code).substr(wordEnd, headEnd - wordEnd);
+        size_t colon = std::string_view::npos;
+        for (size_t k = 0; k < head.size(); ++k)
+        {
+            if (head[k] != ':') continue;
+            if (k + 1 < head.size() && head[k + 1] == ':') { ++k; continue; }
+            colon = k;
+            break;
+        }
+        if (colon != std::string_view::npos)
+        {
+            std::vector<std::string> nameWords = SplitWords(head.substr(0, colon));
+            std::erase(nameWords, "final");
+            bool derivesFromScript = false;
+            for (const std::string& base : SplitWords(head.substr(colon + 1)))
+            {
+                std::string_view baseName = base;
+                if (!baseName.empty() && baseName.back() == ',') baseName.remove_suffix(1);
+                if (const size_t scope = baseName.rfind("::"); scope != std::string_view::npos)
+                    baseName = baseName.substr(scope + 2);
+                derivesFromScript |= baseName == "ComponentScript";
+            }
+            if (derivesFromScript && !nameWords.empty() && IsValidCppScriptClassName(nameWords.back()))
+            {
+                ParsedClass parsed;
+                parsed.name = nameWords.back();
+                ParseClassFields(code, headEnd + 1, bodyEnd, word == "struct", parsed.fields);
+                classes.push_back(std::move(parsed));
+            }
+        }
+        i = bodyEnd + 1;
+        stmtBegin = i;
+    }
+    return classes;
+}
+
 void ScanFileForMarkers(const std::filesystem::path& file,
                         std::vector<ScriptMarker>& markers)
 {
@@ -173,6 +545,19 @@ void ScanFileForMarkers(const std::filesystem::path& file,
             markerIt = std::prev(markers.end());
         }
         markerIt->fields.push_back({fieldName, fieldType});
+    }
+
+    // Classes without a marker comment are read from their declaration. A class
+    // that has markers keeps exactly the fields its markers list.
+    for (ParsedClass& parsed : ParseScriptClasses(text))
+    {
+        const bool hasMarker = std::any_of(markers.begin(), markers.end(),
+            [&](const ScriptMarker& marker) { return marker.className == parsed.name; });
+        if (hasMarker)
+            continue;
+        ScriptMarker marker{ parsed.name, file };
+        marker.fields = std::move(parsed.fields);
+        markers.push_back(std::move(marker));
     }
 }
 
@@ -360,6 +745,15 @@ bool ReadSimpleFieldDefault(const std::filesystem::path& headerPath,
         return true;
     }
     case engine::script::ScriptFieldType::Vec3:
+    {
+        // "axis{ 0.f, 1.f, 0.f }", "axis = { ... }", "axis = Vec3(...)"
+        const std::string number = R"(\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))[fF]?\s*)";
+        const std::regex rx(R"(\b)" + fieldName + R"(\s*(?:=\s*)?(?:[A-Za-z_][\w:]*\s*)?[{(])" +
+                            number + "," + number + "," + number + R"([})])");
+        if (!std::regex_search(text, match, rx)) return false;
+        outValue.vec3Value = { std::stof(match[1].str()), std::stof(match[2].str()), std::stof(match[3].str()) };
+        return true;
+    }
     case engine::script::ScriptFieldType::Entity:
         return false;
     }
@@ -545,6 +939,28 @@ std::vector<std::string> FindCppScriptClassNames(const EditorFrameContext& ctx)
             result.push_back(marker.className);
     }
     std::sort(result.begin(), result.end());
+    return result;
+}
+
+std::vector<std::string> FindCppScriptClassNamesInFile(
+    const EditorFrameContext& ctx,
+    const std::filesystem::path& file)
+{
+    std::error_code ec;
+    const std::string stem = PathToGenericUtf8(
+        std::filesystem::absolute(file, ec).lexically_normal().replace_extension());
+
+    std::vector<std::string> result;
+    for (const ScriptMarker& marker : FindScriptMarkers(ctx))
+    {
+        const std::string markerStem = PathToGenericUtf8(
+            std::filesystem::absolute(marker.headerPath, ec).lexically_normal().replace_extension());
+        if (markerStem == stem && !marker.className.empty() &&
+            std::find(result.begin(), result.end(), marker.className) == result.end())
+        {
+            result.push_back(marker.className);
+        }
+    }
     return result;
 }
 

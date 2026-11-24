@@ -4285,6 +4285,142 @@ static void TestMaterialPreviewMouseWheel(test::TestContext& ctx)
     ImGui::SetCurrentContext(previous);
 }
 
+static void TestScriptsAreReadFromDeclarations(test::TestContext& ctx)
+{
+    using script::ScriptFieldType;
+    const auto root = std::filesystem::absolute("out/script-declarations/" +
+        std::to_string(std::chrono::steady_clock::now().time_since_epoch().count()));
+    const auto scripts = root / "Assets" / "Scripts";
+    std::filesystem::create_directories(scripts);
+    {
+        std::ofstream out(scripts / "Auto.hpp");
+        out << R"cpp(#pragma once
+#include "krom.h"
+#define NOT_CODE class Fake : public engine::script::ComponentScript {};
+
+class Helper;                       // forward declaration
+enum class Mode : int { A, B };
+/* class Commented : public engine::script::ComponentScript { public: float x; }; */
+namespace detail { class Hidden : public engine::script::ComponentScript { public: float x; }; }
+class NotAScript { public: float value = 1.f; };
+
+class Auto final : public engine::script::ComponentScript
+{
+public:
+    float speed = 15.0f;   // text with ; and { in a comment
+    int   count = 3;
+    bool  enabled = true;
+    engine::math::Vec3 axis{ 0.f, 1.f, 0.f };
+    std::string label = "a;b{c";
+    KROM_PREFAB std::string effect = "Prefabs/Dust.prefab";
+    engine::EntityID target{};
+
+    KROM_HIDE float hidden = 1.f;
+    static constexpr float kLimit = 2.f;
+    const float fixed = 1.f;
+    float* pointer = nullptr;
+    float a = 1.f, b = 2.f;
+    double unsupported = 0.0;
+    std::vector<int> list;
+    struct Nested { float inner = 0.f; };
+    enum class Kind { One, Two };
+
+    Auto() : count(4) {}
+    void OnUpdate(engine::script::IScriptContext& ctx) override { if (enabled) { speed += 1.f; } }
+    float Helper(float value = 1.f) const;
+    bool operator==(const Auto& other) const { return count == other.count; }
+
+    float afterFunctions = 0.5f;
+
+protected:
+    float protectedValue = 0.f;
+private:
+    float privateValue = 0.f;
+public:
+    float last = 2.f;
+};
+
+struct AutoStruct : engine::script::ComponentScript
+{
+    float open = 1.f;
+private:
+    float closed = 1.f;
+};
+)cpp";
+    }
+    {
+        // A class with marker comments keeps exactly the fields its markers list.
+        std::ofstream out(scripts / "Marked.hpp");
+        out << R"cpp(class Marked final : public engine::script::ComponentScript
+{
+public:
+    float listed = 1.f;
+    float notListed = 2.f;
+};
+// KROM_SCRIPT(Marked)
+// KROM_FIELD(Marked, listed, Float)
+)cpp";
+    }
+
+    auto meta = CreateEditorCommandsRegistry();
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry registry;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, registry, state);
+    editor.currentProjectRoot = PathToUtf8(root);
+
+    const std::vector<std::string> classes = FindCppScriptClassNames(editor);
+    CHECK_EQ(ctx, classes.size(), size_t{3});
+    if (classes.size() == 3u)
+    {
+        CHECK_EQ(ctx, classes[0], std::string("Auto"));
+        CHECK_EQ(ctx, classes[1], std::string("AutoStruct"));
+        CHECK_EQ(ctx, classes[2], std::string("Marked"));
+    }
+
+    const auto fields = FindCppScriptFields(editor, "Auto");
+    const std::pair<const char*, ScriptFieldType> expected[] = {
+        {"speed", ScriptFieldType::Float}, {"count", ScriptFieldType::Int},
+        {"enabled", ScriptFieldType::Bool}, {"axis", ScriptFieldType::Vec3},
+        {"label", ScriptFieldType::String}, {"effect", ScriptFieldType::Prefab},
+        {"target", ScriptFieldType::Entity}, {"afterFunctions", ScriptFieldType::Float},
+        {"last", ScriptFieldType::Float} };
+    CHECK_EQ(ctx, fields.size(), std::size(expected));
+    for (size_t i = 0; i < std::min(fields.size(), std::size(expected)); ++i)
+    {
+        CHECK_EQ(ctx, fields[i].name, std::string(expected[i].first));
+        CHECK(ctx, fields[i].type == expected[i].second);
+    }
+    if (fields.size() == std::size(expected))
+    {
+        CHECK(ctx, fields[0].hasDefaultValue && fields[0].defaultValue.floatValue == 15.0f);
+        CHECK(ctx, fields[3].hasDefaultValue && fields[3].defaultValue.vec3Value == math::Vec3(0.f, 1.f, 0.f));
+        CHECK(ctx, fields[5].hasDefaultValue && fields[5].defaultValue.stringValue == "Prefabs/Dust.prefab");
+    }
+
+    const auto structFields = FindCppScriptFields(editor, "AutoStruct");
+    CHECK_EQ(ctx, structFields.size(), size_t{1});
+    if (!structFields.empty())
+        CHECK_EQ(ctx, structFields[0].name, std::string("open"));
+
+    const auto markedFields = FindCppScriptFields(editor, "Marked");
+    CHECK_EQ(ctx, markedFields.size(), size_t{1});
+    if (!markedFields.empty())
+        CHECK_EQ(ctx, markedFields[0].name, std::string("listed"));
+
+    // The generated bindings register the same classes and fields.
+    const EditorScriptAssetResult bindings = GenerateCppScriptBindings(editor);
+    CHECK(ctx, bindings.ok);
+    std::ifstream in(bindings.primaryPath, std::ios::binary);
+    const std::string generated((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CHECK(ctx, generated.find("registry.Register<Auto>(\"Auto\");") != std::string::npos);
+    CHECK(ctx, generated.find("\"effect\", engine::script::ScriptFieldType::Prefab, &Auto::effect") != std::string::npos);
+    CHECK(ctx, generated.find("&Auto::hidden") == std::string::npos);
+    CHECK(ctx, generated.find("&Marked::notListed") == std::string::npos);
+    CHECK(ctx, generated.find("Hidden") == std::string::npos);
+}
+
 static void TestInspectorRevealsScriptAsset(test::TestContext& ctx)
 {
     const auto root = std::filesystem::absolute("out/script-reveal/" +
@@ -6117,6 +6253,7 @@ int RunEditorCommandTests()
     test::TestSuite suite("EditorCommands");
     suite.Add("PBR Specular input defaults, serialization and graph links", TestPbrSpecularMaterialInput);
     suite.Add("Hierarchy state and folder focus", TestHierarchyStateAndFolderFocus);
+    suite.Add("Scripts are read from their declarations", TestScriptsAreReadFromDeclarations);
     suite.Add("Inspector reveals script asset in browser", TestInspectorRevealsScriptAsset);
     suite.Add("Inspector entity reference reveals target and preserves dropdown assignment", TestInspectorRevealsEntityReference);
     suite.Add("Camera deletion requires confirmation", TestInspectorCameraDeleteConfirmation);
