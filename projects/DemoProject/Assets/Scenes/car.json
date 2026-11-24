@@ -1,12 +1,12 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 59,
+  "entityCount": 55,
   "entities": [
     {
-      "entityId": 2547715,
-      "entityIndex": 9952,
-      "entityGeneration": 3,
+      "entityId": 1,
+      "entityIndex": 0,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -18,7 +18,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -63,9 +63,9 @@
       ]
     },
     {
-      "entityId": 2547971,
-      "entityIndex": 9953,
-      "entityGeneration": 3,
+      "entityId": 257,
+      "entityIndex": 1,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -77,7 +77,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -134,9 +134,9 @@
       ]
     },
     {
-      "entityId": 2548227,
-      "entityIndex": 9954,
-      "entityGeneration": 3,
+      "entityId": 513,
+      "entityIndex": 2,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -148,7 +148,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -193,9 +193,9 @@
       ]
     },
     {
-      "entityId": 2548483,
-      "entityIndex": 9955,
-      "entityGeneration": 3,
+      "entityId": 769,
+      "entityIndex": 3,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -207,7 +207,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -252,9 +252,9 @@
       ]
     },
     {
-      "entityId": 2548739,
-      "entityIndex": 9956,
-      "entityGeneration": 3,
+      "entityId": 1025,
+      "entityIndex": 4,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -266,7 +266,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -311,9 +311,9 @@
       ]
     },
     {
-      "entityId": 2548995,
-      "entityIndex": 9957,
-      "entityGeneration": 3,
+      "entityId": 1281,
+      "entityIndex": 5,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -325,7 +325,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -370,9 +370,9 @@
       ]
     },
     {
-      "entityId": 2549251,
-      "entityIndex": 9958,
-      "entityGeneration": 3,
+      "entityId": 1537,
+      "entityIndex": 6,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -431,9 +431,9 @@
       ]
     },
     {
-      "entityId": 2549507,
-      "entityIndex": 9959,
-      "entityGeneration": 3,
+      "entityId": 1793,
+      "entityIndex": 7,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -445,7 +445,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -490,9 +490,9 @@
       ]
     },
     {
-      "entityId": 2549763,
-      "entityIndex": 9960,
-      "entityGeneration": 3,
+      "entityId": 2049,
+      "entityIndex": 8,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -504,7 +504,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2551555
+          "parentId": 3841
         },
         {
           "type": "ActiveComponent",
@@ -550,9 +550,9 @@
       ]
     },
     {
-      "entityId": 2550019,
-      "entityIndex": 9961,
-      "entityGeneration": 3,
+      "entityId": 2305,
+      "entityIndex": 9,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -564,7 +564,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2557187
+          "parentId": 9473
         },
         {
           "type": "ActiveComponent",
@@ -611,9 +611,9 @@
       ]
     },
     {
-      "entityId": 2550275,
-      "entityIndex": 9962,
-      "entityGeneration": 3,
+      "entityId": 2561,
+      "entityIndex": 10,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -625,7 +625,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -670,9 +670,9 @@
       ]
     },
     {
-      "entityId": 2550531,
-      "entityIndex": 9963,
-      "entityGeneration": 3,
+      "entityId": 2817,
+      "entityIndex": 11,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -684,7 +684,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -729,9 +729,9 @@
       ]
     },
     {
-      "entityId": 2550787,
-      "entityIndex": 9964,
-      "entityGeneration": 3,
+      "entityId": 3073,
+      "entityIndex": 12,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -743,7 +743,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -788,9 +788,9 @@
       ]
     },
     {
-      "entityId": 2551043,
-      "entityIndex": 9965,
-      "entityGeneration": 3,
+      "entityId": 3329,
+      "entityIndex": 13,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -802,7 +802,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2559235
+          "parentId": 11521
         },
         {
           "type": "ActiveComponent",
@@ -836,9 +836,9 @@
       ]
     },
     {
-      "entityId": 2551299,
-      "entityIndex": 9966,
-      "entityGeneration": 3,
+      "entityId": 3585,
+      "entityIndex": 14,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -850,7 +850,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -895,9 +895,9 @@
       ]
     },
     {
-      "entityId": 2551555,
-      "entityIndex": 9967,
-      "entityGeneration": 3,
+      "entityId": 3841,
+      "entityIndex": 15,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -953,9 +953,9 @@
       ]
     },
     {
-      "entityId": 2551811,
-      "entityIndex": 9968,
-      "entityGeneration": 3,
+      "entityId": 4097,
+      "entityIndex": 16,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1011,9 +1011,9 @@
       ]
     },
     {
-      "entityId": 2552067,
-      "entityIndex": 9969,
-      "entityGeneration": 3,
+      "entityId": 4353,
+      "entityIndex": 17,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1025,7 +1025,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -1070,9 +1070,9 @@
       ]
     },
     {
-      "entityId": 2552323,
-      "entityIndex": 9970,
-      "entityGeneration": 3,
+      "entityId": 4609,
+      "entityIndex": 18,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1084,7 +1084,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -1129,9 +1129,9 @@
       ]
     },
     {
-      "entityId": 2552579,
-      "entityIndex": 9971,
-      "entityGeneration": 3,
+      "entityId": 4865,
+      "entityIndex": 19,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1143,7 +1143,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -1188,9 +1188,9 @@
       ]
     },
     {
-      "entityId": 2552835,
-      "entityIndex": 9972,
-      "entityGeneration": 3,
+      "entityId": 5121,
+      "entityIndex": 20,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1202,7 +1202,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -1247,9 +1247,9 @@
       ]
     },
     {
-      "entityId": 2553091,
-      "entityIndex": 9973,
-      "entityGeneration": 3,
+      "entityId": 5377,
+      "entityIndex": 21,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1261,7 +1261,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -1306,9 +1306,9 @@
       ]
     },
     {
-      "entityId": 2553347,
-      "entityIndex": 9974,
-      "entityGeneration": 3,
+      "entityId": 5633,
+      "entityIndex": 22,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1364,9 +1364,9 @@
       ]
     },
     {
-      "entityId": 2553603,
-      "entityIndex": 9975,
-      "entityGeneration": 3,
+      "entityId": 5889,
+      "entityIndex": 23,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1378,7 +1378,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2551811
+          "parentId": 4097
         },
         {
           "type": "ActiveComponent",
@@ -1425,9 +1425,9 @@
       ]
     },
     {
-      "entityId": 2553859,
-      "entityIndex": 9976,
-      "entityGeneration": 3,
+      "entityId": 6145,
+      "entityIndex": 24,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1439,7 +1439,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2558723
+          "parentId": 11009
         },
         {
           "type": "ActiveComponent",
@@ -1485,9 +1485,9 @@
       ]
     },
     {
-      "entityId": 2554115,
-      "entityIndex": 9977,
-      "entityGeneration": 3,
+      "entityId": 6401,
+      "entityIndex": 25,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1499,7 +1499,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -1544,9 +1544,9 @@
       ]
     },
     {
-      "entityId": 2554371,
-      "entityIndex": 9978,
-      "entityGeneration": 3,
+      "entityId": 6657,
+      "entityIndex": 26,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1558,7 +1558,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -1603,9 +1603,9 @@
       ]
     },
     {
-      "entityId": 2554627,
-      "entityIndex": 9979,
-      "entityGeneration": 3,
+      "entityId": 6913,
+      "entityIndex": 27,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1617,7 +1617,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -1674,9 +1674,9 @@
       ]
     },
     {
-      "entityId": 2554883,
-      "entityIndex": 9980,
-      "entityGeneration": 3,
+      "entityId": 7169,
+      "entityIndex": 28,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1688,7 +1688,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -1733,9 +1733,9 @@
       ]
     },
     {
-      "entityId": 2555139,
-      "entityIndex": 9981,
-      "entityGeneration": 3,
+      "entityId": 7425,
+      "entityIndex": 29,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1747,7 +1747,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -1792,9 +1792,9 @@
       ]
     },
     {
-      "entityId": 2555395,
-      "entityIndex": 9982,
-      "entityGeneration": 3,
+      "entityId": 7681,
+      "entityIndex": 30,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1806,7 +1806,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -1851,9 +1851,9 @@
       ]
     },
     {
-      "entityId": 2555651,
-      "entityIndex": 9983,
-      "entityGeneration": 3,
+      "entityId": 7937,
+      "entityIndex": 31,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1865,7 +1865,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -1910,9 +1910,9 @@
       ]
     },
     {
-      "entityId": 2555907,
-      "entityIndex": 9984,
-      "entityGeneration": 3,
+      "entityId": 8193,
+      "entityIndex": 32,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1924,7 +1924,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2560516
+          "parentId": 12801
         },
         {
           "type": "ActiveComponent",
@@ -1970,9 +1970,9 @@
       ]
     },
     {
-      "entityId": 2556163,
-      "entityIndex": 9985,
-      "entityGeneration": 3,
+      "entityId": 8449,
+      "entityIndex": 33,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -1984,7 +1984,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -2029,9 +2029,9 @@
       ]
     },
     {
-      "entityId": 2556419,
-      "entityIndex": 9986,
-      "entityGeneration": 3,
+      "entityId": 8705,
+      "entityIndex": 34,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2043,7 +2043,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -2088,9 +2088,9 @@
       ]
     },
     {
-      "entityId": 2556675,
-      "entityIndex": 9987,
-      "entityGeneration": 3,
+      "entityId": 8961,
+      "entityIndex": 35,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2102,7 +2102,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2558723
+          "parentId": 11009
         },
         {
           "type": "ActiveComponent",
@@ -2148,9 +2148,9 @@
       ]
     },
     {
-      "entityId": 2556931,
-      "entityIndex": 9988,
-      "entityGeneration": 3,
+      "entityId": 9217,
+      "entityIndex": 36,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2162,7 +2162,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -2207,9 +2207,9 @@
       ]
     },
     {
-      "entityId": 2557187,
-      "entityIndex": 9989,
-      "entityGeneration": 3,
+      "entityId": 9473,
+      "entityIndex": 37,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2241,9 +2241,9 @@
       ]
     },
     {
-      "entityId": 2557443,
-      "entityIndex": 9990,
-      "entityGeneration": 3,
+      "entityId": 9729,
+      "entityIndex": 38,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2255,7 +2255,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -2300,9 +2300,9 @@
       ]
     },
     {
-      "entityId": 2557699,
-      "entityIndex": 9991,
-      "entityGeneration": 3,
+      "entityId": 9985,
+      "entityIndex": 39,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2314,7 +2314,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2553347
+          "parentId": 5633
         },
         {
           "type": "ActiveComponent",
@@ -2366,9 +2366,9 @@
       ]
     },
     {
-      "entityId": 2557955,
-      "entityIndex": 9992,
-      "entityGeneration": 3,
+      "entityId": 10241,
+      "entityIndex": 40,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2380,7 +2380,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -2425,9 +2425,9 @@
       ]
     },
     {
-      "entityId": 2558211,
-      "entityIndex": 9993,
-      "entityGeneration": 3,
+      "entityId": 10497,
+      "entityIndex": 41,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2459,9 +2459,9 @@
       ]
     },
     {
-      "entityId": 2558467,
-      "entityIndex": 9994,
-      "entityGeneration": 3,
+      "entityId": 10753,
+      "entityIndex": 42,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2485,9 +2485,9 @@
       ]
     },
     {
-      "entityId": 2558723,
-      "entityIndex": 9995,
-      "entityGeneration": 3,
+      "entityId": 11009,
+      "entityIndex": 43,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2499,7 +2499,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2558467
+          "parentId": 10753
         },
         {
           "type": "ActiveComponent",
@@ -2547,9 +2547,9 @@
       ]
     },
     {
-      "entityId": 2558979,
-      "entityIndex": 9996,
-      "entityGeneration": 3,
+      "entityId": 11265,
+      "entityIndex": 44,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2561,7 +2561,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -2606,9 +2606,9 @@
       ]
     },
     {
-      "entityId": 2559235,
-      "entityIndex": 9997,
-      "entityGeneration": 3,
+      "entityId": 11521,
+      "entityIndex": 45,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2632,9 +2632,9 @@
       ]
     },
     {
-      "entityId": 2559491,
-      "entityIndex": 9998,
-      "entityGeneration": 3,
+      "entityId": 11777,
+      "entityIndex": 46,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2646,7 +2646,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -2691,9 +2691,9 @@
       ]
     },
     {
-      "entityId": 2559747,
-      "entityIndex": 9999,
-      "entityGeneration": 3,
+      "entityId": 12033,
+      "entityIndex": 47,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2705,7 +2705,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2558723
+          "parentId": 11009
         },
         {
           "type": "ActiveComponent",
@@ -2751,9 +2751,9 @@
       ]
     },
     {
-      "entityId": 2560004,
-      "entityIndex": 10000,
-      "entityGeneration": 4,
+      "entityId": 12289,
+      "entityIndex": 48,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2765,7 +2765,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -2810,9 +2810,9 @@
       ]
     },
     {
-      "entityId": 2560260,
-      "entityIndex": 10001,
-      "entityGeneration": 4,
+      "entityId": 12545,
+      "entityIndex": 49,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2872,9 +2872,9 @@
       ]
     },
     {
-      "entityId": 2560516,
-      "entityIndex": 10002,
-      "entityGeneration": 4,
+      "entityId": 12801,
+      "entityIndex": 50,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2929,9 +2929,9 @@
       ]
     },
     {
-      "entityId": 2560772,
-      "entityIndex": 10003,
-      "entityGeneration": 4,
+      "entityId": 13057,
+      "entityIndex": 51,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -2943,7 +2943,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2549251
+          "parentId": 1537
         },
         {
           "type": "ActiveComponent",
@@ -2988,9 +2988,9 @@
       ]
     },
     {
-      "entityId": 2561028,
-      "entityIndex": 10004,
-      "entityGeneration": 4,
+      "entityId": 13313,
+      "entityIndex": 52,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3040,9 +3040,9 @@
       ]
     },
     {
-      "entityId": 2561284,
-      "entityIndex": 10005,
-      "entityGeneration": 4,
+      "entityId": 13569,
+      "entityIndex": 53,
+      "entityGeneration": 1,
       "components": [
         {
           "type": "NameComponent",
@@ -3054,7 +3054,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2558723
+          "parentId": 11009
         },
         {
           "type": "ActiveComponent",
