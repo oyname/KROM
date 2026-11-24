@@ -14,7 +14,8 @@ public:
     float lookHeight = 0.0f;     // aims this far above the target's origin
 
     void OnStart(engine::script::IScriptContext& ctx) override;
-    void OnUpdate(engine::script::IScriptContext& ctx) override;
+    // Late: after physics, so it follows the helicopter's pose of this frame.
+    void OnLateUpdate(engine::script::IScriptContext& ctx) override;
 
 private:
     [[nodiscard]] float TargetHeadingDeg(engine::script::IScriptContext& ctx);

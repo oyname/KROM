@@ -1,4 +1,5 @@
 #include "HelicopterControl.hpp"
+#include "addons/physics/PhysicsComponents.hpp"
 
 #include <algorithm>
 #include <cmath>
@@ -14,6 +15,12 @@ namespace
         rate += (kStiffness * (target - value) - kDamping * rate) * dt;
         value += rate * dt;
     }
+}
+
+bool HelicopterControl::HasDynamicBody(engine::script::IScriptContext& ctx)
+{
+    const auto* body = ctx.Get<engine::RigidBodyComponent>();
+    return body && body->enabled && body->type == engine::RigidBodyType::Dynamic;
 }
 
 void HelicopterControl::OnStart(engine::script::IScriptContext& ctx)
@@ -34,8 +41,8 @@ void HelicopterControl::OnUpdate(engine::script::IScriptContext& ctx)
 
     const float forwardInput = std::clamp(ctx.Axis(Key::Down, Key::Up) + ctx.Axis(Key::S, Key::W), -1.0f, 1.0f);
     const float sideInput    = ctx.Axis(Key::A, Key::D);
-    const float climbInput   = ctx.Axis(Key::E, Key::Q);
     const float turnInput    = ctx.Axis(Key::Right, Key::Left);   // positive yaw turns left
+    climbInput               = ctx.Axis(Key::E, Key::Q);
 
     // The turn rate eases in and out instead of starting and stopping abruptly.
     turnRate += (turnInput * turnSpeedDegPerSecond - turnRate) * (1.0f - std::exp(-6.0f * dt));
@@ -51,11 +58,17 @@ void HelicopterControl::OnUpdate(engine::script::IScriptContext& ctx)
     const Vec3 forwardDir = heading.Rotate(nose);
     const Vec3 rightDir   = heading.Rotate(side);
 
+    // With a dynamic body the physics moves it (OnFixedUpdate): the height
+    // comes from the lift force, forward and sideways from this velocity.
+    const bool physical = HasDynamicBody(ctx);
     const Vec3 targetVelocity = forwardDir * (forwardInput * speed)
                               + rightDir * (sideInput * speed)
-                              + Vec3::Up() * (climbInput * climbSpeed);
+                              + Vec3::Up() * (physical ? 0.0f : climbInput * climbSpeed);
     velocity += (targetVelocity - velocity) * (1.0f - std::exp(-acceleration * dt));
-    ctx.Translate(velocity * dt, engine::script::Space::World);
+    if (physical)
+        velocity.y = 0.0f;
+    else
+        ctx.Translate(velocity * dt, engine::script::Space::World);
 
     // Lean into the movement, level out when the keys are released.
     Spring(pitchDeg, pitchRate, forwardInput * maxTiltDeg, dt);
@@ -65,4 +78,28 @@ void HelicopterControl::OnUpdate(engine::script::IScriptContext& ctx)
 
     const Quat tilt = Quat::FromAxisAngleDeg(side, -pitchDeg) * Quat::FromAxisAngleDeg(nose, bankDeg);
     ctx.SetRotation((heading * tilt).Normalized());
+}
+
+void HelicopterControl::OnFixedUpdate(engine::script::IScriptContext& ctx)
+{
+    const auto* body = ctx.Get<engine::RigidBodyComponent>();
+    if (!body || !body->enabled || body->type != engine::RigidBodyType::Dynamic)
+        return;
+
+    // Weight of the helicopter: what the lift has to carry to hold the height.
+    const float weight = std::max(body->mass, 0.0f) * gravity * body->gravityScale;
+
+    // Lift = weight + whatever is needed to reach the wanted climb rate.
+    // Positive extra lift climbs, negative (less than the weight) sinks.
+    const float wantedClimbRate = climbInput * climbSpeed;
+    const float climbRate = ctx.GetVelocity().y;
+
+    // Forward and sideways: the body takes the flight velocity, the vertical
+    // part stays with the physics.
+    ctx.SetVelocity(engine::math::Vec3{ velocity.x, climbRate, velocity.z });
+
+    const float extraLift = std::max(body->mass, 0.0f) * liftResponse * (wantedClimbRate - climbRate);
+    const float lift = std::clamp(weight + extraLift, 0.0f, weight * std::max(maxLiftFactor, 1.0f));
+
+    ctx.AddForce(engine::math::Vec3{ 0.f, lift, 0.f });
 }

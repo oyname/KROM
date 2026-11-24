@@ -11,7 +11,7 @@ void HelicopterCamera::OnStart(engine::script::IScriptContext& ctx)
     startHeadingDeg = TargetHeadingDeg(ctx);
 }
 
-void HelicopterCamera::OnUpdate(engine::script::IScriptContext& ctx)
+void HelicopterCamera::OnLateUpdate(engine::script::IScriptContext& ctx)
 {
     using engine::math::Quat;
     using engine::math::Vec3;
