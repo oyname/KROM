@@ -25,10 +25,3 @@ private:
     float yawDeg = 0.0f;
     float pitchDeg = -15.0f;
 };
-
-// KROM_SCRIPT(ThirdPersonCamera)
-// KROM_FIELD(ThirdPersonCamera, target, Entity)
-// KROM_FIELD(ThirdPersonCamera, distance, Float)
-// KROM_FIELD(ThirdPersonCamera, pivotHeight, Float)
-// KROM_FIELD(ThirdPersonCamera, mouseSensitivity, Float)
-// KROM_FIELD(ThirdPersonCamera, turnSpeedDegPerSecond, Float)

@@ -1,45 +1,11 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 4,
+  "entityCount": 6,
   "entities": [
     {
-      "entityId": 28418,
-      "entityIndex": 111,
-      "entityGeneration": 2,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "sphere"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-184522712264500-1"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, -4.25],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-0"
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 1
-        }
-      ]
-    },
-    {
-      "entityId": 28674,
-      "entityIndex": 112,
+      "entityId": 2560258,
+      "entityIndex": 10001,
       "entityGeneration": 2,
       "components": [
         {
@@ -81,14 +47,62 @@
           ]
         },
         {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "CameraController",
+              "fields": {
+                "mouseSensitivity": 0.12,
+                "moveSpeed": 12,
+                "fastMultiplier": 4,
+                "turnSpeedDegPerSecond": 55
+              }
+            }
+          ]
+        },
+        {
           "type": "EditorHierarchyComponent",
           "order": 0
         }
       ]
     },
     {
-      "entityId": 28930,
-      "entityIndex": 113,
+      "entityId": 2560514,
+      "entityIndex": 10002,
+      "entityGeneration": 2,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "sphere"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-184522712264500-1"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, -4.25],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-0"
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 1
+        }
+      ]
+    },
+    {
+      "entityId": 2560770,
+      "entityIndex": 10003,
       "entityGeneration": 2,
       "components": [
         {
@@ -101,7 +115,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 28418
+          "parentId": 2560514
         },
         {
           "type": "ActiveComponent",
@@ -145,13 +159,109 @@
           "order": 0
         }
       ]
+    },
+    {
+      "entityId": 2561026,
+      "entityIndex": 10004,
+      "entityGeneration": 2,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Sun"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "c3f4a8d1-27b6-4e95-b0a8-1f7d53e6c902"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 30, 0],
+          "localRotation": [-0.408218, -0.23457, -0.109382, 0.875426],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 0,
+          "color": [1, 0.98, 0.94],
+          "intensity": 5,
+          "range": 100,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": false,
+          "layerMask": 4294967295,
+          "shadowEnabled": false,
+          "shadowFilter": 2,
+          "shadowResolution": 2048,
+          "shadowBias": 0.0005,
+          "shadowNormalBiasTexels": 1,
+          "shadowMaxDistance": 46.5,
+          "shadowStrength": 1,
+          "shadowCascadeCount": 2,
+          "shadowCascadeLambda": 0.9,
+          "shadowLightSize": 0.1,
+          "contactShadows": false
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 3
+        }
+      ]
+    },
+    {
+      "entityId": 2561282,
+      "entityIndex": 10005,
+      "entityGeneration": 2,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Stresstest"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "5b1e7c42-9a3d-4f60-8c21-6d0e2f9a4b17"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "StressSpawner",
+              "fields": {
+                "cubePrefab": "Prefabs/StressCube.prefab",
+                "seed": 1,
+                "count": 5000,
+                "areaSize": [120, 40, 120]
+              }
+            }
+          ]
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 2
+        }
+      ]
     }
   ]
 ,
   "editorCamera":{
-    "position":[0.858289957, 0.973034382, 3.10612273],
-    "pitchDeg":-12.7514067,
-    "yawDeg":8.54749203,
+    "position":[1.19987643, 3.86589479, 11.2055912],
+    "pitchDeg":-13.851429,
+    "yawDeg":1.12249267,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,

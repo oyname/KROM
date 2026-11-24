@@ -7,12 +7,18 @@
 #include "../Assets/Scripts/ZeitTest/FollowCamera.hpp"
 #include "../Assets/Scripts/Testraum/GameControls.hpp"
 #include "../Assets/Scripts/Testraum/GameManager.hpp"
+#include "../Assets/Scripts/Helicopter/HelicopterCamera.hpp"
+#include "../Assets/Scripts/Helicopter/HelicopterControl.hpp"
+#include "../Assets/Scripts/Helicopter/HelicopterHover.hpp"
 #include "../Assets/Scripts/Wuerfel/Move.hpp"
 #include "../Assets/Scripts/Wuerfel/MoveX.hpp"
 #include "../Assets/Scripts/Testraum/PlayerController.hpp"
 #include "../Assets/Scripts/Testraum/PressurePlate.hpp"
 #include "../Assets/Scripts/Wuerfel/Rotate.hpp"
+#include "../Assets/Scripts/Helicopter/RotorSpin.hpp"
 #include "../Assets/Scripts/ZeitTest/Shuttle.hpp"
+#include "../Assets/Scripts/Stresstest/StressSpawner.hpp"
+#include "../Assets/Scripts/Stresstest/StressSpin.hpp"
 #include "../Assets/Scripts/Testraum/ThirdPersonCamera.hpp"
 #include "../Assets/Scripts/Thruster.hpp"
 #include "../Assets/Scripts/ZeitTest/TimeControl.hpp"
@@ -45,6 +51,20 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
     registry.RegisterField<GameManager>("GameManager", "lampPrefix", engine::script::ScriptFieldType::String, &GameManager::lampPrefix);
     registry.RegisterField<GameManager>("GameManager", "collectSound", engine::script::ScriptFieldType::String, &GameManager::collectSound);
     registry.RegisterField<GameManager>("GameManager", "unlockSound", engine::script::ScriptFieldType::String, &GameManager::unlockSound);
+    registry.Register<HelicopterCamera>("HelicopterCamera");
+    registry.RegisterField<HelicopterCamera>("HelicopterCamera", "target", engine::script::ScriptFieldType::Entity, &HelicopterCamera::target);
+    registry.RegisterField<HelicopterCamera>("HelicopterCamera", "followSpeed", engine::script::ScriptFieldType::Float, &HelicopterCamera::followSpeed);
+    registry.RegisterField<HelicopterCamera>("HelicopterCamera", "lookHeight", engine::script::ScriptFieldType::Float, &HelicopterCamera::lookHeight);
+    registry.Register<HelicopterControl>("HelicopterControl");
+    registry.RegisterField<HelicopterControl>("HelicopterControl", "speed", engine::script::ScriptFieldType::Float, &HelicopterControl::speed);
+    registry.RegisterField<HelicopterControl>("HelicopterControl", "climbSpeed", engine::script::ScriptFieldType::Float, &HelicopterControl::climbSpeed);
+    registry.RegisterField<HelicopterControl>("HelicopterControl", "turnSpeedDegPerSecond", engine::script::ScriptFieldType::Float, &HelicopterControl::turnSpeedDegPerSecond);
+    registry.RegisterField<HelicopterControl>("HelicopterControl", "maxTiltDeg", engine::script::ScriptFieldType::Float, &HelicopterControl::maxTiltDeg);
+    registry.RegisterField<HelicopterControl>("HelicopterControl", "acceleration", engine::script::ScriptFieldType::Float, &HelicopterControl::acceleration);
+    registry.RegisterField<HelicopterControl>("HelicopterControl", "noseAxis", engine::script::ScriptFieldType::Vec3, &HelicopterControl::noseAxis);
+    registry.Register<HelicopterHover>("HelicopterHover");
+    registry.RegisterField<HelicopterHover>("HelicopterHover", "height", engine::script::ScriptFieldType::Float, &HelicopterHover::height);
+    registry.RegisterField<HelicopterHover>("HelicopterHover", "cyclesPerSecond", engine::script::ScriptFieldType::Float, &HelicopterHover::cyclesPerSecond);
     registry.Register<Move>("Move");
     registry.RegisterField<Move>("Move", "speedPerSecond", engine::script::ScriptFieldType::Float, &Move::speedPerSecond);
     registry.RegisterField<Move>("Move", "target", engine::script::ScriptFieldType::Entity, &Move::target);
@@ -64,9 +84,18 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
     registry.Register<Rotate>("Rotate");
     registry.RegisterField<Rotate>("Rotate", "speedDegPerSecond", engine::script::ScriptFieldType::Float, &Rotate::speedDegPerSecond);
     registry.RegisterField<Rotate>("Rotate", "spawnCount", engine::script::ScriptFieldType::Int, &Rotate::spawnCount);
+    registry.Register<RotorSpin>("RotorSpin");
+    registry.RegisterField<RotorSpin>("RotorSpin", "speedDegPerSecond", engine::script::ScriptFieldType::Float, &RotorSpin::speedDegPerSecond);
+    registry.RegisterField<RotorSpin>("RotorSpin", "axis", engine::script::ScriptFieldType::Vec3, &RotorSpin::axis);
     registry.Register<Shuttle>("Shuttle");
     registry.RegisterField<Shuttle>("Shuttle", "speed", engine::script::ScriptFieldType::Float, &Shuttle::speed);
     registry.RegisterField<Shuttle>("Shuttle", "range", engine::script::ScriptFieldType::Float, &Shuttle::range);
+    registry.Register<StressSpawner>("StressSpawner");
+    registry.RegisterField<StressSpawner>("StressSpawner", "cubePrefab", engine::script::ScriptFieldType::Prefab, &StressSpawner::cubePrefab);
+    registry.RegisterField<StressSpawner>("StressSpawner", "count", engine::script::ScriptFieldType::Int, &StressSpawner::count);
+    registry.RegisterField<StressSpawner>("StressSpawner", "areaSize", engine::script::ScriptFieldType::Vec3, &StressSpawner::areaSize);
+    registry.RegisterField<StressSpawner>("StressSpawner", "seed", engine::script::ScriptFieldType::Int, &StressSpawner::seed);
+    registry.Register<StressSpin>("StressSpin");
     registry.Register<ThirdPersonCamera>("ThirdPersonCamera");
     registry.RegisterField<ThirdPersonCamera>("ThirdPersonCamera", "target", engine::script::ScriptFieldType::Entity, &ThirdPersonCamera::target);
     registry.RegisterField<ThirdPersonCamera>("ThirdPersonCamera", "distance", engine::script::ScriptFieldType::Float, &ThirdPersonCamera::distance);

@@ -232,7 +232,7 @@
           "shadowFilter": 2,
           "shadowResolution": 2048,
           "shadowBias": 0.0005,
-          "shadowNormalBias": 0.001,
+          "shadowNormalBiasTexels": 1,
           "shadowMaxDistance": 46.5,
           "shadowStrength": 1,
           "shadowCascadeCount": 2,

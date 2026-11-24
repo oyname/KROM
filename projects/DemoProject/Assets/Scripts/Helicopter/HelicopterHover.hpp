@@ -1,0 +1,19 @@
+#pragma once
+#include "krom.h"
+
+// Lets the entity bob gently up and down, like a helicopter holding a hover.
+// Two sine waves with different periods are combined so the motion does not
+// look like a perfect pendulum. The bobbing is added on top of whatever else
+// moves the entity, so it works together with HelicopterControl.
+class HelicopterHover final : public engine::script::ComponentScript
+{
+public:
+    float height = 0.6f;          // maximum offset above/below the resting height
+    float cyclesPerSecond = 0.25f; // one full up-and-down takes 4 seconds
+
+    void OnUpdate(engine::script::IScriptContext& ctx) override;
+
+private:
+    float phase = 0.0f;
+    float lastOffset = 0.0f;
+};

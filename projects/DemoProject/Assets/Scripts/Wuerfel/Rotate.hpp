@@ -10,7 +10,3 @@ public:
     void OnStart(engine::script::IScriptContext& ctx) override;
     void OnUpdate(engine::script::IScriptContext& ctx) override;
 };
-
-// KROM_SCRIPT(Rotate)
-// KROM_FIELD(Rotate, speedDegPerSecond, Float)
-// KROM_FIELD(Rotate, spawnCount, Int)

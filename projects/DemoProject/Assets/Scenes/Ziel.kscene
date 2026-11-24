@@ -79,10 +79,10 @@
             {
               "class": "ThirdPersonCamera",
               "fields": {
-                "target": "c42e6b59-ee92-5534-a87a-eda935637b41",
                 "pivotHeight": 1.5,
-                "distance": 5,
+                "target": "c42e6b59-ee92-5534-a87a-eda935637b41",
                 "turnSpeedDegPerSecond": 90,
+                "distance": 5,
                 "mouseSensitivity": 0.15
               }
             }
@@ -391,8 +391,8 @@
             {
               "class": "GameControls",
               "fields": {
-                "restartScene": "Scenes/Room 2.kscene",
-                "message": "Glückwunsch, Ziel erreicht!"
+                "message": "Glückwunsch, Ziel erreicht!",
+                "restartScene": "Scenes/Room 2.kscene"
               }
             }
           ]
@@ -493,7 +493,7 @@
           "shadowFilter": 2,
           "shadowResolution": 2048,
           "shadowBias": 0.0005,
-          "shadowNormalBias": 0.001,
+          "shadowNormalBiasTexels": 1,
           "shadowMaxDistance": 40,
           "shadowStrength": 0.85,
           "shadowCascadeCount": 2,
@@ -658,7 +658,7 @@
           "shadowFilter": 2,
           "shadowResolution": 1024,
           "shadowBias": 0.0005,
-          "shadowNormalBias": 0.001,
+          "shadowNormalBiasTexels": 1,
           "shadowMaxDistance": 20,
           "shadowStrength": 0.8,
           "shadowCascadeCount": 1,

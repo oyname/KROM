@@ -13,6 +13,3 @@ public:
 private:
     bool triggered = false;
 };
-
-// KROM_SCRIPT(ExitZone)
-// KROM_FIELD(ExitZone, nextScene, String)

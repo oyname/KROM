@@ -13,7 +13,3 @@ public:
 
     void OnUpdate(engine::script::IScriptContext& ctx) override;
 };
-
-// KROM_SCRIPT(GameControls)
-// KROM_FIELD(GameControls, restartScene, String)
-// KROM_FIELD(GameControls, message, String)

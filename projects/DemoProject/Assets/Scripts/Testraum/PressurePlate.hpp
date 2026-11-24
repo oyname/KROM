@@ -12,7 +12,7 @@ public:
     engine::EntityID door{};
     engine::EntityID sparks{};   // Partikel-Emitter, laeuft solange gedrueckt
     std::string clickSound = "Audio/Testraum/click.wav";
-    std::string dustEffect = "Prefabs/Testraum/Staubwolke.prefab";   // leer = kein Staub
+    KROM_PREFAB std::string dustEffect = "Prefabs/Testraum/Staubwolke.prefab";   // leer = kein Staub
     float pressDepth = 0.04f;
 
     void OnStart(engine::script::IScriptContext& ctx) override;
@@ -23,10 +23,3 @@ private:
     engine::math::Vec3 restPosition{};
     int occupants = 0;
 };
-
-// KROM_SCRIPT(PressurePlate)
-// KROM_FIELD(PressurePlate, door, Entity)
-// KROM_FIELD(PressurePlate, sparks, Entity)
-// KROM_FIELD(PressurePlate, clickSound, String)
-// KROM_FIELD(PressurePlate, dustEffect, Prefab)
-// KROM_FIELD(PressurePlate, pressDepth, Float)
