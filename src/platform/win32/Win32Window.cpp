@@ -416,9 +416,15 @@ LRESULT CALLBACK Win32Window::WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM
                 // monitor by the frame size, so clamp to the work area then.
                 if (IsZoomed(hwnd))
                 {
+                    // Pick the monitor from the proposed window rect, not from
+                    // the window: while it is restored from minimized it still
+                    // sits at (-32000,-32000), and the nearest monitor to that
+                    // is the leftmost one, which puts the client area outside
+                    // the window on a multi-monitor setup.
+                    RECT& proposed = reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam)->rgrc[0];
                     MONITORINFO mi{}; mi.cbSize = sizeof(mi);
-                    if (GetMonitorInfoW(MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST), &mi))
-                        reinterpret_cast<NCCALCSIZE_PARAMS*>(lParam)->rgrc[0] = mi.rcWork;
+                    if (GetMonitorInfoW(MonitorFromRect(&proposed, MONITOR_DEFAULTTONEAREST), &mi))
+                        proposed = mi.rcWork;
                 }
                 return 0;
             }
