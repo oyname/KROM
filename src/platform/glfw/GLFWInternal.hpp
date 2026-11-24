@@ -111,6 +111,7 @@ public:
     [[nodiscard]] uint32_t GetFramebufferWidth() const override { return m_fbWidth; }
     [[nodiscard]] uint32_t GetFramebufferHeight() const override { return m_fbHeight; }
     [[nodiscard]] float GetDPIScale() const override { return m_dpiScale; }
+    [[nodiscard]] double GetRefreshRateHz() const override;
     [[nodiscard]] const char* GetBackendName() const override { return "GLFWWindow"; }
     std::vector<std::filesystem::path> ConsumeDroppedFiles() override;
 

@@ -36,6 +36,14 @@ public:
     // Event eines anderen Scripts (ctx.SendEvent / ctx.BroadcastEvent).
     virtual void OnEvent(IScriptContext&, const ScriptEvent& /*event*/) {}
 
+    // Einmal pro Frame nach allen OnUpdate, der Physik (inkl. interpolierter
+    // Pose) und der Animation, vor dem TransformSystem. Der richtige Ort fuer
+    // Kameras und alles, was einem physikalisch oder animiert bewegten Objekt
+    // folgen soll: GetWorldPosition/GetRotation liefern hier dessen Pose in
+    // genau diesem Frame. ctx.DeltaTime() wie in OnUpdate. Nur fuer gestartete
+    // Scripts.
+    virtual void OnLateUpdate(IScriptContext&) {}
+
     [[nodiscard]] EntityID GetEntity() const noexcept { return m_entity; }
     void SetEntity(EntityID id) noexcept { m_entity = id; }
 

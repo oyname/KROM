@@ -158,8 +158,9 @@ void GameSimulation::SetAssetRoot(const std::filesystem::path& assetRoot)
 #endif
 }
 
-float GameSimulation::BeginFrame(float unscaledDeltaSeconds)
+float GameSimulation::BeginFrame(float measuredDeltaSeconds)
 {
+    const float unscaledDeltaSeconds = m_frameClock.Next(measuredDeltaSeconds);
     // Spielzeit: alles Gameplay (Scripts, Physik, Animation) laeuft mit dem
     // skalierten Delta; TimeScale aus dem letzten Frame.
     m_deltaSeconds = unscaledDeltaSeconds * m_clock.timeScale;
@@ -196,6 +197,9 @@ float GameSimulation::RunFrame(ecs::World& world, float unscaledDeltaSeconds,
                                        math::Vec3{0.f, 0.f, 0.f}, fired.event->text});
     }
 
+    // Nach Physik und Animation: Kameras folgen der Pose dieses Frames.
+    LateUpdateScripts(world, input, hooks);
+
     if (steps.beforeTransforms)
         steps.beforeTransforms();
 
@@ -208,21 +212,10 @@ float GameSimulation::RunFrame(ecs::World& world, float unscaledDeltaSeconds,
     return deltaSeconds;
 }
 
-void GameSimulation::UpdateScripts(ecs::World& world, const platform::IInput* input,
-                                   const GameSimulationHooks& hooks)
+template<typename Fn>
+void GameSimulation::WithScriptServices(ecs::World& world, const platform::IInput* input,
+                                        const GameSimulationHooks& hooks, Fn&& fn)
 {
-    const float deltaSeconds = m_deltaSeconds;
-
-    for (size_t i = 0; i < m_actionStates.size(); ++i)
-    {
-        auto& state = m_actionStates[i];
-        const auto& binding = m_projectSettings.actions[i];
-        const bool keyBound = input && binding.key != platform::Key::Unknown;
-        const bool down = (keyBound && input->KeyDown(binding.key)) ||
-                          (input && binding.button != platform::GamepadButton::None && input->GamepadDown(binding.button));
-        state.hit = !state.down && (down || (keyBound && input->KeyHit(binding.key)));
-        state.down = down;
-    }
     const std::function<bool(std::string_view, bool)> action = [this](std::string_view name, bool hit) {
         return hit ? ActionHit(name) : ActionDown(name);
     };
@@ -250,7 +243,6 @@ void GameSimulation::UpdateScripts(ecs::World& world, const platform::IInput* in
         animationService.emplace(*m_animation, world);
         services.animation = &*animationService;
     }
-    m_materialInstances.CollectDestroyed(world);
     std::optional<MaterialScriptService> materialService;
     if (hooks.materials)
     {
@@ -269,11 +261,7 @@ void GameSimulation::UpdateScripts(ecs::World& world, const platform::IInput* in
     }
     PhysicsScriptService physicsService(physicsWorld);
     services.physics = &physicsService;
-    if (!m_fixedStepConfigured)
-        m_fixedStep.Configure(physicsWorld.FixedTimeStep(), physicsWorld.MaxSubSteps());
 #endif
-    m_fixedStepConfigured = true;
-    m_clock.fixedDeltaTime = m_fixedStep.Step();
 #if KROM_GAMEPLAY_HAS_AUDIO
     audio::AudioSystem& audioSystem = m_backends->audio;
     if (!audioSystem.IsInitialized())
@@ -286,80 +274,126 @@ void GameSimulation::UpdateScripts(ecs::World& world, const platform::IInput* in
     AudioScriptService audioService(audioSystem);
     services.audio = &audioService;
 #endif
+    fn(services);
+}
 
-    m_scriptEntities.clear();
-    world.ForEachAlive([&](EntityID id)
-    {
-        if (world.Has<script::ScriptList>(id))
-            m_scriptEntities.push_back(id);
-    });
-    // Kollisionssicht fuer Raycast/Overlap — Stand: Transforms/Bounds des letzten Frames.
-    if (!m_scriptEntities.empty())
-        m_sceneQueries.BuildColliders(world);
-    for (const EntityID id : m_scriptEntities)
-    {
-        if (!world.IsAlive(id))
-            continue;
-        if (auto* scripts = world.Get<script::ScriptList>(id))
-            scripts->Update(deltaSeconds, id, services);
-    }
-    // Events aus OnUpdate zustellen (neu entstehende Events: naechster Frame).
-    script::DispatchScriptEvents(world, services);
-    m_triggers.Update(world, services);
-#if KROM_GAMEPLAY_HAS_PHYSICS
-    {
-        const std::vector<physics::CollisionEvent> collisions = std::move(m_backends->pendingCollisions);
-        m_backends->pendingCollisions.clear();
-        for (const physics::CollisionEvent& event : collisions)
-            script::DispatchCollision(world, event.enter, event.a, event.b, services);
-    }
-#endif
-    // Destroy()/LoadScene() aus Scripts erst nach allen Updates ausfuehren —
-    // sonst wuerden ScriptLists zerstoert, waehrend andere Scripts noch auf sie
-    // zugreifen. Laeuft nach OnUpdate und nochmals nach OnFixedUpdate.
-    ApplyScriptRequests(world, hooks);
+void GameSimulation::UpdateScripts(ecs::World& world, const platform::IInput* input,
+                                   const GameSimulationHooks& hooks)
+{
+    const float deltaSeconds = m_deltaSeconds;
 
-    // Feste Schritte: pro Schritt OnFixedUpdate, dann ein Physikschritt.
-    // Nach Scripts/Destroy/Szenenwechsel, vor dem TransformSystem: Sync liest
-    // die von Scripts gesetzten Transforms, WriteBack markiert sie dirty.
-    const uint32_t fixedSteps = m_fixedStep.Advance(deltaSeconds);
-#if KROM_GAMEPLAY_HAS_PHYSICS
-    physicsWorld.Sync(world);
-#endif
-    for (uint32_t step = 0; step < fixedSteps; ++step)
+    for (size_t i = 0; i < m_actionStates.size(); ++i)
     {
-        if (!m_scriptEntities.empty())
+        auto& state = m_actionStates[i];
+        const auto& binding = m_projectSettings.actions[i];
+        const bool keyBound = input && binding.key != platform::Key::Unknown;
+        const bool down = (keyBound && input->KeyDown(binding.key)) ||
+                          (input && binding.button != platform::GamepadButton::None && input->GamepadDown(binding.button));
+        state.hit = !state.down && (down || (keyBound && input->KeyHit(binding.key)));
+        state.down = down;
+    }
+    m_materialInstances.CollectDestroyed(world);
+
+    WithScriptServices(world, input, hooks, [&](script::ScriptServices& services) {
+#if KROM_GAMEPLAY_HAS_PHYSICS
+        physics::PhysicsWorld& physicsWorld = m_backends->physics;
+        if (!m_fixedStepConfigured)
+            m_fixedStep.Configure(physicsWorld.FixedTimeStep(), physicsWorld.MaxSubSteps());
+#endif
+        m_fixedStepConfigured = true;
+        m_clock.fixedDeltaTime = m_fixedStep.Step();
+
+        m_scriptEntities.clear();
+        world.ForEachAlive([&](EntityID id)
         {
+            if (world.Has<script::ScriptList>(id))
+                m_scriptEntities.push_back(id);
+        });
+        // Kollisionssicht fuer Raycast/Overlap — Stand: Transforms/Bounds des letzten Frames.
+        if (!m_scriptEntities.empty())
+            m_sceneQueries.BuildColliders(world);
+        for (const EntityID id : m_scriptEntities)
+        {
+            if (!world.IsAlive(id))
+                continue;
+            if (auto* scripts = world.Get<script::ScriptList>(id))
+                scripts->Update(deltaSeconds, id, services);
+        }
+        // Events aus OnUpdate zustellen (neu entstehende Events: naechster Frame).
+        script::DispatchScriptEvents(world, services);
+        m_triggers.Update(world, services);
 #if KROM_GAMEPLAY_HAS_PHYSICS
-            // OnFixedUpdate sieht die echte Physik-Pose, nicht die interpolierte.
-            if (step > 0u || m_clock.physicsInterpolation)
-                physicsWorld.WriteBack(world);
+        {
+            const std::vector<physics::CollisionEvent> collisions = std::move(m_backends->pendingCollisions);
+            m_backends->pendingCollisions.clear();
+            for (const physics::CollisionEvent& event : collisions)
+                script::DispatchCollision(world, event.enter, event.a, event.b, services);
+        }
 #endif
-            for (const EntityID id : m_scriptEntities)
+        // Destroy()/LoadScene() aus Scripts erst nach allen Updates ausfuehren —
+        // sonst wuerden ScriptLists zerstoert, waehrend andere Scripts noch auf sie
+        // zugreifen. Laeuft nach OnUpdate und nochmals nach OnFixedUpdate.
+        ApplyScriptRequests(world, hooks);
+
+        // Feste Schritte: pro Schritt OnFixedUpdate, dann ein Physikschritt.
+        // Nach Scripts/Destroy/Szenenwechsel, vor dem TransformSystem: Sync liest
+        // die von Scripts gesetzten Transforms, WriteBack markiert sie dirty.
+        const uint32_t fixedSteps = m_fixedStep.Advance(deltaSeconds);
+#if KROM_GAMEPLAY_HAS_PHYSICS
+        physicsWorld.Sync(world);
+#endif
+        for (uint32_t step = 0; step < fixedSteps; ++step)
+        {
+            if (!m_scriptEntities.empty())
             {
-                if (!world.IsAlive(id))
-                    continue;
-                if (auto* scripts = world.Get<script::ScriptList>(id))
-                    scripts->FixedUpdate(m_clock.fixedDeltaTime, id, services);
+#if KROM_GAMEPLAY_HAS_PHYSICS
+                // OnFixedUpdate sieht die echte Physik-Pose, nicht die interpolierte.
+                if (step > 0u || m_clock.physicsInterpolation)
+                    physicsWorld.WriteBack(world);
+#endif
+                for (const EntityID id : m_scriptEntities)
+                {
+                    if (!world.IsAlive(id))
+                        continue;
+                    if (auto* scripts = world.Get<script::ScriptList>(id))
+                        scripts->FixedUpdate(m_clock.fixedDeltaTime, id, services);
+                }
+#if KROM_GAMEPLAY_HAS_PHYSICS
+                physicsWorld.Sync(world);
+#endif
             }
 #if KROM_GAMEPLAY_HAS_PHYSICS
-            physicsWorld.Sync(world);
+            physicsWorld.StepFixed(fixedSteps - step);
 #endif
         }
 #if KROM_GAMEPLAY_HAS_PHYSICS
-        physicsWorld.StepFixed(fixedSteps - step);
+        physicsWorld.WriteBack(world, m_clock.physicsInterpolation ? m_fixedStep.Alpha() : 1.f);
+        {
+            std::vector<physics::CollisionEvent> collisions = physicsWorld.TakeCollisionEvents();
+            m_backends->pendingCollisions.insert(m_backends->pendingCollisions.end(),
+                                                 collisions.begin(), collisions.end());
+        }
 #endif
-    }
-#if KROM_GAMEPLAY_HAS_PHYSICS
-    physicsWorld.WriteBack(world, m_clock.physicsInterpolation ? m_fixedStep.Alpha() : 1.f);
-    {
-        std::vector<physics::CollisionEvent> collisions = physicsWorld.TakeCollisionEvents();
-        m_backends->pendingCollisions.insert(m_backends->pendingCollisions.end(),
-                                             collisions.begin(), collisions.end());
-    }
-#endif
-    // Events aus OnFixedUpdate kommen mit der naechsten Zustellung (naechster Frame).
-    ApplyScriptRequests(world, hooks);
+        // Events aus OnFixedUpdate kommen mit der naechsten Zustellung (naechster Frame).
+        ApplyScriptRequests(world, hooks);
+    });
+}
+
+void GameSimulation::LateUpdateScripts(ecs::World& world, const platform::IInput* input,
+                                       const GameSimulationHooks& hooks)
+{
+    if (m_scriptEntities.empty())
+        return;
+    WithScriptServices(world, input, hooks, [&](script::ScriptServices& services) {
+        for (const EntityID id : m_scriptEntities)
+        {
+            if (!world.IsAlive(id))
+                continue;
+            if (auto* scripts = world.Get<script::ScriptList>(id))
+                scripts->LateUpdate(m_deltaSeconds, id, services);
+        }
+        ApplyScriptRequests(world, hooks);
+    });
 }
 
 void GameSimulation::UpdateLate(ecs::World& world, const GameSimulationHooks& hooks)
@@ -433,6 +467,7 @@ void GameSimulation::Shutdown()
     m_text.Clear();
     m_fixedStep.Reset();
     m_fixedStepConfigured = false;
+    m_frameClock.Reset();
     m_clock = script::ScriptClock{};
     m_deltaSeconds = 0.f;
 }

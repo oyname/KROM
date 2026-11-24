@@ -862,6 +862,13 @@ public:
 
     // Events from other scripts (ctx.SendEvent / ctx.BroadcastEvent).
     virtual void OnEvent(IScriptContext&, const ScriptEvent& event) {}
+
+    // Once per frame after all OnUpdate calls, the physics (including the
+    // interpolated pose) and animation, before the TransformSystem. The place
+    // for cameras and anything that follows a physics-driven or animated
+    // object: GetWorldPosition/GetRotation return its pose of this frame.
+    // ctx.DeltaTime() as in OnUpdate. Only for started scripts.
+    virtual void OnLateUpdate(IScriptContext&) {}
 };
 ```
 

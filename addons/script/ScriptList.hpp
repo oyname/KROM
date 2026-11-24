@@ -175,6 +175,8 @@ public:
 
     // OnFixedUpdate an alle gestarteten Scripts (ein fester Physikschritt).
     void FixedUpdate(float fixedDeltaTime, EntityID entity, const ScriptServices& services = {});
+    // OnLateUpdate an alle gestarteten Scripts (nach Physik und Animation).
+    void LateUpdate(float deltaTime, EntityID entity, const ScriptServices& services = {});
 
     // OnTriggerEnter/OnTriggerExit an alle gestarteten Scripts.
     void NotifyTrigger(bool enter, EntityID entity, EntityID other, const ScriptServices& services = {});

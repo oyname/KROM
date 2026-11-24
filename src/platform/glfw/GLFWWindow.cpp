@@ -359,4 +359,32 @@ void GLFWWindow::HandleWindowResize(int w, int h)
     m_resizePending = true;
 }
 
+
+// Refresh rate of the monitor under the window centre (GLFW reports whole hertz).
+double GLFWWindow::GetRefreshRateHz() const
+{
+    if (!m_handle)
+        return 0.0;
+    int wx = 0, wy = 0, ww = 0, wh = 0;
+    glfwGetWindowPos(m_handle, &wx, &wy);
+    glfwGetWindowSize(m_handle, &ww, &wh);
+    const int cx = wx + ww / 2, cy = wy + wh / 2;
+    int count = 0;
+    GLFWmonitor** monitors = glfwGetMonitors(&count);
+    GLFWmonitor* best = glfwGetPrimaryMonitor();
+    for (int i = 0; i < count; ++i)
+    {
+        int mx = 0, my = 0;
+        glfwGetMonitorPos(monitors[i], &mx, &my);
+        const GLFWvidmode* mode = glfwGetVideoMode(monitors[i]);
+        if (mode && cx >= mx && cx < mx + mode->width && cy >= my && cy < my + mode->height)
+        {
+            best = monitors[i];
+            break;
+        }
+    }
+    const GLFWvidmode* mode = best ? glfwGetVideoMode(best) : nullptr;
+    return (mode && mode->refreshRate > 1) ? static_cast<double>(mode->refreshRate) : 0.0;
+}
+
 } // namespace engine::platform

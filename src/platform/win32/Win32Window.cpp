@@ -6,6 +6,7 @@
 #include <dwmapi.h>
 #include <algorithm>
 #include <mutex>
+#include <vector>
 
 namespace engine::platform::win32 {
 
@@ -343,6 +344,68 @@ NativeWindowHandle Win32Window::GetNativeWindowHandle() const
 uint32_t Win32Window::GetWidth() const { return m_width; }
 uint32_t Win32Window::GetHeight() const { return m_height; }
 const char* Win32Window::GetBackendName() const { return "Win32Window"; }
+
+namespace {
+
+// Exact refresh rate of a monitor (e.g. 59.94 or 143.998 Hz) from its active
+// display path; EnumDisplaySettings only reports whole hertz.
+double QueryMonitorRefreshRate(HMONITOR monitor)
+{
+    MONITORINFOEXW info{};
+    info.cbSize = sizeof(info);
+    if (!monitor || !GetMonitorInfoW(monitor, &info))
+        return 0.0;
+
+    UINT32 pathCount = 0u, modeCount = 0u;
+    if (GetDisplayConfigBufferSizes(QDC_ONLY_ACTIVE_PATHS, &pathCount, &modeCount) == ERROR_SUCCESS)
+    {
+        std::vector<DISPLAYCONFIG_PATH_INFO> paths(pathCount);
+        std::vector<DISPLAYCONFIG_MODE_INFO> modes(modeCount);
+        if (QueryDisplayConfig(QDC_ONLY_ACTIVE_PATHS, &pathCount, paths.data(),
+                               &modeCount, modes.data(), nullptr) == ERROR_SUCCESS)
+        {
+            for (UINT32 i = 0u; i < pathCount; ++i)
+            {
+                DISPLAYCONFIG_SOURCE_DEVICE_NAME source{};
+                source.header.type      = DISPLAYCONFIG_DEVICE_INFO_GET_SOURCE_NAME;
+                source.header.size      = sizeof(source);
+                source.header.adapterId = paths[i].sourceInfo.adapterId;
+                source.header.id        = paths[i].sourceInfo.id;
+                if (DisplayConfigGetDeviceInfo(&source.header) != ERROR_SUCCESS ||
+                    wcscmp(source.viewGdiDeviceName, info.szDevice) != 0)
+                    continue;
+                const DISPLAYCONFIG_RATIONAL rate = paths[i].targetInfo.refreshRate;
+                if (rate.Numerator != 0u && rate.Denominator != 0u)
+                    return static_cast<double>(rate.Numerator) / static_cast<double>(rate.Denominator);
+            }
+        }
+    }
+
+    DEVMODEW mode{};
+    mode.dmSize = sizeof(mode);
+    if (EnumDisplaySettingsW(info.szDevice, ENUM_CURRENT_SETTINGS, &mode) && mode.dmDisplayFrequency > 1u)
+        return static_cast<double>(mode.dmDisplayFrequency);
+    return 0.0;
+}
+
+} // namespace
+
+double Win32Window::GetRefreshRateHz() const
+{
+    if (!m_hwnd)
+        return 0.0;
+    // Re-read when the window moves to another monitor and once per second
+    // (display settings can change while running).
+    const HMONITOR monitor = MonitorFromWindow(m_hwnd, MONITOR_DEFAULTTONEAREST);
+    const ULONGLONG now = GetTickCount64();
+    if (monitor != m_refreshMonitor || now - m_refreshQueriedMs >= 1000u)
+    {
+        m_refreshMonitor   = monitor;
+        m_refreshQueriedMs = now;
+        m_refreshHz        = QueryMonitorRefreshRate(monitor);
+    }
+    return m_refreshHz;
+}
 
 std::vector<std::filesystem::path> Win32Window::ConsumeDroppedFiles()
 {

@@ -548,6 +548,47 @@ void TestInterpolationSmoothsHighFramerate(test::TestContext& ctx)
     }
 }
 
+// Ein Script setzt jedes Frame nur die Drehung (Hubschrauber neigt sich): die
+// interpolierte Position muss trotzdem gleichmaessig weiterlaufen, auch in
+// Frames ohne Physikschritt (144 FPS, 60-Hz-Physik).
+void TestRotationEveryFrameKeepsSmoothInterpolation(test::TestContext& ctx)
+{
+    auto reg = MakePhysicsRegistry();
+    ecs::World world(reg);
+    const EntityID box = SpawnFloatingBox(world, { 0.f, 0.f, 0.f });
+    PhysicsWorld physics;
+    physics.Initialize();
+    physics.Update(world, 0.f);
+    physics.SetLinearVelocity(box, { 6.f, 0.f, 0.f });
+
+    FixedTimestep clock(physics.FixedTimeStep(), physics.MaxSubSteps());
+    float lastX = world.Get<TransformComponent>(box)->localPosition.x;
+    int stalls = 0;
+    float minStep = 1e9f, maxStep = 0.f;
+    for (int f = 0; f < 144; ++f)
+    {
+        world.Get<TransformComponent>(box)->SetEulerDeg(0.f, static_cast<float>(f), 0.f);
+        physics.Sync(world);
+        const uint32_t steps = clock.Advance(1.f / 144.f);
+        for (uint32_t s = 0; s < steps; ++s)
+            physics.StepFixed(steps - s);
+        physics.WriteBack(world, clock.Alpha());
+        world.Get<TransformComponent>(box)->dirty = false;   // wie TransformSystem
+        const float x = world.Get<TransformComponent>(box)->localPosition.x;
+        if (f > 2)
+        {
+            if (x - lastX < 1e-5f)
+                ++stalls;
+            minStep = std::min(minStep, x - lastX);
+            maxStep = std::max(maxStep, x - lastX);
+        }
+        lastX = x;
+    }
+    CHECK_EQ(ctx, stalls, 0);
+    CHECK(ctx, minStep > 0.f);                       // nie zurueck
+    CHECK(ctx, maxStep < 6.f / 144.f * 1.5f);        // gleichmaessige Schritte
+}
+
 void TestRotationChangeKeepsPhysicsPositionWhenInterpolated(test::TestContext& ctx)
 {
     auto reg = MakePhysicsRegistry();
@@ -774,6 +815,7 @@ int RunPhysicsTests()
         .Add("Continuous force fps-independent", TestContinuousForceIsFramerateIndependent)
         .Add("Interpolation smooths high fps", TestInterpolationSmoothsHighFramerate)
         .Add("Rotation keeps interpolated pos", TestRotationChangeKeepsPhysicsPositionWhenInterpolated)
+        .Add("Rotation every frame stays smooth", TestRotationEveryFrameKeepsSmoothInterpolation)
         .Add("Kinematic spread over steps",    TestKinematicTargetSpreadOverFrameSteps)
         .Add("Serialization roundtrip",        TestSerializationRoundtrip);
     return suite.Run();

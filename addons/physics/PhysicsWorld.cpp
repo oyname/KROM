@@ -1313,14 +1313,20 @@ void PhysicsWorld::Sync(ecs::World& world)
                     JPH::RVec3 joltPosition;
                     JPH::Quat  joltRotation;
                     bodies.GetPositionAndRotation(record.id, joltPosition, joltRotation);
-                    const math::Vec3 position = NearlyEqual(desc.pose.position, record.lastPosition)
-                        ? FromJolt(joltPosition) : desc.pose.position;
-                    const math::Quat rotation = NearlyEqual(desc.pose.rotation, record.lastRotation)
-                        ? FromJolt(joltRotation).Normalized() : desc.pose.rotation;
+                    const bool positionSet = !NearlyEqual(desc.pose.position, record.lastPosition);
+                    const bool rotationSet = !NearlyEqual(desc.pose.rotation, record.lastRotation);
+                    const math::Vec3 position = positionSet ? desc.pose.position : FromJolt(joltPosition);
+                    const math::Quat rotation = rotationSet ? desc.pose.rotation : FromJolt(joltRotation).Normalized();
                     bodies.SetPositionAndRotation(record.id, ToJolt(position), ToJolt(rotation),
                                                   JPH::EActivation::Activate);
-                    record.prevPosition = position;   // Teleport nicht interpolieren
-                    record.prevRotation = rotation;
+                    // Teleport nicht interpolieren - aber nur den gesetzten Teil.
+                    // Setzt ein Script jedes Frame nur die Drehung (z.B. Neigen),
+                    // gleitet die Position sonst in Frames ohne Physikschritt
+                    // nicht weiter und springt danach zurueck (Zittern).
+                    if (positionSet)
+                        record.prevPosition = position;
+                    if (rotationSet)
+                        record.prevRotation = rotation;
                     if (tc)
                         record.writtenLocalVersion = tc->localVersion;
                 }

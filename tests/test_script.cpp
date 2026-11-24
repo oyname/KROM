@@ -2,6 +2,8 @@
 #include "addons/animation/AnimationComponents.hpp"
 #include "addons/animation/AnimationSystem.hpp"
 #include "addons/gameplay/GameSimulation.hpp"
+#include "core/FrameDeltaSmoother.hpp"
+#include "addons/physics/PhysicsComponents.hpp"
 #include "assets/AssetRegistry.hpp"
 #include "addons/script/ScriptList.hpp"
 #include "addons/script/ScriptSerialization.hpp"
@@ -13,6 +15,7 @@
 #include "scene/TransformSystem.hpp"
 #include "serialization/SceneSerializer.hpp"
 #include "jobs/JobSystem.hpp"
+#include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <limits>
@@ -99,6 +102,177 @@ void TestRunFrameOrder(test::TestContext& ctx)
     CHECK(ctx, std::abs(hookDelta - dt) < 1e-6f);
     const auto* wt = world.Get<WorldTransformComponent>(entity);
     CHECK(ctx, wt && std::abs(wt->position.x - 5.f) < 1e-5f);
+}
+
+// OnLateUpdate runs after OnUpdate, OnFixedUpdate and the physics write-back,
+// before the TransformSystem: a camera reading a falling body there sees the
+// pose of this frame, not the one of the previous frame.
+class LatePoseProbe : public engine::script::ComponentScript
+{
+public:
+    std::vector<std::string> calls;
+    float updateY = 0.f;
+    float lateY = 0.f;
+    void OnUpdate(engine::script::IScriptContext& c) override
+    {
+        calls.push_back("update");
+        updateY = c.GetWorldPosition().y;
+    }
+    void OnFixedUpdate(engine::script::IScriptContext&) override { calls.push_back("fixed"); }
+    void OnLateUpdate(engine::script::IScriptContext& c) override
+    {
+        calls.push_back("late");
+        lateY = c.GetWorldPosition().y;
+    }
+};
+
+void TestLateUpdateSeesPhysicsPoseOfFrame(test::TestContext& ctx)
+{
+    ecs::ComponentMetaRegistry registry;
+    RegisterCoreComponents(registry);
+    RegisterPhysicsComponents(registry);
+    ecs::RegisterComponent<ScriptList>(registry, "ScriptList");
+    ecs::World world(registry);
+    const EntityID body = world.CreateEntity();
+    world.Add<TransformComponent>(body).localPosition = {0.f, 10.f, 0.f};
+    world.Add<WorldTransformComponent>(body);
+    world.Add<RigidBodyComponent>(body);
+    world.Add<ColliderComponent>(body).shapes.emplace_back();
+    auto probe = std::make_unique<LatePoseProbe>();
+    LatePoseProbe* raw = probe.get();
+    ScriptList list;
+    list.Add("LatePoseProbe", std::move(probe), body);
+    world.Add<ScriptList>(body, std::move(list));
+
+    gameplay::GameSimulation game;
+    game.SetAudioDevice(false);
+    TransformSystem transforms;
+    gameplay::GameFrameSteps steps{};
+    steps.transforms = &transforms;
+    float transformYBeforeSystem = 0.f;
+    steps.beforeTransforms = [&]() { transformYBeforeSystem = world.Get<TransformComponent>(body)->localPosition.y; };
+
+    for (int frame = 0; frame < 30; ++frame)
+        game.RunFrame(world, 1.f / 60.f, nullptr, {}, steps);
+
+    // Order within the last frame: update, (fixed steps), late.
+    CHECK(ctx, raw->calls.size() >= 3u);
+    if (raw->calls.size() >= 3u)
+    {
+        CHECK_EQ(ctx, raw->calls.back(), std::string("late"));
+        const auto lastUpdate = std::find(raw->calls.rbegin(), raw->calls.rend(), std::string("update"));
+        CHECK(ctx, lastUpdate != raw->calls.rend());
+        CHECK(ctx, std::find(raw->calls.rbegin(), lastUpdate, std::string("fixed")) != lastUpdate);
+    }
+    // The body fell during the frame: late sees the new height, update the old one.
+    CHECK(ctx, raw->lateY < raw->updateY - 1e-4f);
+    CHECK(ctx, std::abs(raw->lateY - transformYBeforeSystem) < 1e-5f);
+    game.Shutdown();
+}
+
+// Alternating measured deltas (vsync, measured in the editor: 2.8 / 14.5 ms)
+// come out nearly constant, and in total game time still equals real time.
+void TestFrameDeltaSmootherEvensOutAlternation(test::TestContext& ctx)
+{
+    FrameDeltaSmoother smoother;
+    double rawSum = 0.0, smoothSum = 0.0;
+    float minOut = 1.f, maxOut = 0.f;
+    for (int i = 0; i < 400; ++i)
+    {
+        const float raw = (i % 2) ? 0.0145f : 0.0028f;
+        const float out = smoother.Smooth(raw);
+        rawSum += raw;
+        smoothSum += out;
+        if (i >= 16)
+        {
+            minOut = std::min(minOut, out);
+            maxOut = std::max(maxOut, out);
+        }
+    }
+    CHECK(ctx, maxOut - minOut < 1e-5f);
+    CHECK(ctx, std::abs(minOut - 0.00865f) < 1e-5f);
+    // Only the first window can differ from real time.
+    CHECK(ctx, std::abs(smoothSum - rawSum) < 0.0145 * FrameDeltaSmoother::kWindow);
+
+    // A long frame is spread over the window instead of one jump.
+    smoother.Reset();
+    for (int i = 0; i < 16; ++i)
+        (void)smoother.Smooth(1.f / 144.f);
+    const float hitch = smoother.Smooth(0.15f);
+    CHECK(ctx, hitch < 0.03f);
+}
+
+// With vsync every frame advances by whole refresh periods, however much the
+// measured CPU time jumps; a missed vblank gives two periods; game time stays
+// with real time. Without vsync or off refresh multiples (variable refresh)
+// the smoothed delta is used.
+void TestFrameDeltaClockLocksToDisplay(test::TestContext& ctx)
+{
+    constexpr double hz = 143.998;
+    const float period = static_cast<float>(1.0 / hz);
+    FrameDeltaClock clock;
+    clock.SetDisplay(hz, true);
+    double realSum = 0.0, gameSum = 0.0;
+    int offPeriod = 0;
+    for (int i = 0; i < 600; ++i)
+    {
+        // Measured: 2.8 ms and the rest of two periods, alternating.
+        const float raw = (i % 2) ? 2.f * period - 0.0028f : 0.0028f;
+        const float out = clock.Next(raw);
+        realSum += raw;
+        gameSum += out;
+        if (i >= 16 && std::abs(out - period) > 0.005f * period)
+            ++offPeriod;
+    }
+    CHECK(ctx, clock.IsLockedToDisplay());
+    CHECK_EQ(ctx, offPeriod, 0);
+    CHECK(ctx, std::abs(gameSum - realSum) < 5.0 * period);
+
+    // A missed vblank: that frame took two periods.
+    const float missed = clock.Next(2.f * period + 0.0003f);
+    CHECK(ctx, std::abs(missed - 2.f * period) < 0.01f * period);
+
+    // The platform reports whole hertz (60 or 59 for 59.94 Hz): the clock
+    // measures the real period and never makes a double step out of it.
+    for (const double reported : { 60.0, 59.0 })
+    {
+        const double real = 1.0 / 59.94;
+        FrameDeltaClock rounded;
+        rounded.SetDisplay(reported, true);
+        int doubles = 0;
+        double realTotal = 0.0, gameTotal = 0.0;
+        for (int i = 0; i < 20000; ++i)
+        {
+            const float raw = static_cast<float>((i % 2) ? 2.0 * real - 0.003 : 0.003);
+            const float out = rounded.Next(raw);
+            realTotal += raw;
+            gameTotal += out;
+            if (i >= 600 && out > 1.5 * real)
+                ++doubles;
+        }
+        CHECK(ctx, rounded.IsLockedToDisplay());
+        CHECK_EQ(ctx, doubles, 0);
+        CHECK(ctx, std::abs(rounded.RefreshPeriodSeconds() / real - 1.0) < 0.001);
+        CHECK(ctx, std::abs(gameTotal - realTotal) < 5.0 * real);
+    }
+
+    // Without vsync: smoothed measured time.
+    FrameDeltaClock free;
+    free.SetDisplay(hz, false);
+    float lastFree = 0.f;
+    for (int i = 0; i < 32; ++i)
+        lastFree = free.Next((i % 2) ? 0.004f : 0.006f);
+    CHECK(ctx, !free.IsLockedToDisplay());
+    CHECK(ctx, std::abs(lastFree - 0.005f) < 1e-5f);
+
+    // Variable refresh rate: 100 fps on a 144 Hz monitor is not a refresh multiple.
+    FrameDeltaClock vrr;
+    vrr.SetDisplay(hz, true);
+    float lastVrr = 0.f;
+    for (int i = 0; i < 32; ++i)
+        lastVrr = vrr.Next(0.010f);
+    CHECK(ctx, !vrr.IsLockedToDisplay());
+    CHECK(ctx, std::abs(lastVrr - 0.010f) < 1e-5f);
 }
 
 // ─── Hilftypen ───────────────────────────────────────────────────────────────
@@ -1785,6 +1959,9 @@ int RunScriptTests()
         .Add("Context: input",                   TestContextInput)
         .Add("Project action: keyboard and gamepad", TestProjectActionBindings)
         .Add("Game frame: RunFrame order",       TestRunFrameOrder)
+        .Add("Game frame: delta smoothing",      TestFrameDeltaSmootherEvensOutAlternation)
+        .Add("Game frame: delta locks to display", TestFrameDeltaClockLocksToDisplay)
+        .Add("Game frame: late update sees physics pose", TestLateUpdateSeesPhysicsPoseOfFrame)
         .Add("Game frame: animation events",     TestRunFrameAnimationEvents)
         .Add("Script reaches the job system",    TestScriptReachesJobSystem)
         .Add("Context: no services is neutral",  TestContextWithoutServicesIsNeutral)

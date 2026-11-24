@@ -70,6 +70,8 @@ public:
     }
 
     [[nodiscard]] bool IsInitialized() const noexcept { return m_device != nullptr; }
+    // Frames are presented with vsync (shown on refresh boundaries).
+    [[nodiscard]] bool IsPresentVsync() const noexcept { return m_presentVsync; }
     [[nodiscard]] const RenderStats& GetStats() const noexcept { return m_stats; }
     [[nodiscard]] const RenderSceneSnapshot& GetRenderSnapshot() const noexcept { return m_lastRenderSnapshot; }
     [[nodiscard]] IDevice* GetDevice() const noexcept { return m_device.get(); }

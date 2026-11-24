@@ -6343,6 +6343,9 @@ void KromEditorApp::TickEditorPlay(float unscaledDeltaSeconds, const std::functi
     steps.bounds           = &m_boundsSystem;
     steps.animation        = m_playAnimation.get();
     steps.beforeTransforms = editorSync;
+    // Frame time follows the display (vsync on the editor's monitor).
+    if (const platform::IWindow* window = m_renderLoop.GetWindow())
+        m_game.SetDisplay(window->GetRefreshRateHz(), m_renderLoop.GetRenderSystem().IsPresentVsync());
     m_game.RunFrame(*m_world, unscaledDeltaSeconds, input, MakeEditorPlayHooks(), steps);
 }
 
