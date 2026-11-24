@@ -245,4 +245,15 @@ private:
     std::unordered_map<std::string, HandlerFn> m_handlers;
 };
 
+// ColliderComponent fields in the currently open JSON object (shared by scenes
+// and prefabs). Read replaces the shape list when "shapes" is present.
+void WriteColliderFields(JsonWriter& w, const ColliderComponent& c);
+void ReadColliderFields(const JsonValue& v, ColliderComponent& c);
+
+// Older files stored each shape as its own component. These read one such
+// shape and append it to the collider (showInEditor is OR-ed in).
+void AppendLegacyBoxCollider(const OBBComponent& obb, ColliderComponent& c);
+void AppendLegacySphereCollider(const JsonValue& v, ColliderComponent& c);
+void AppendLegacyCapsuleCollider(const JsonValue& v, ColliderComponent& c);
+
 } // namespace engine::serialization

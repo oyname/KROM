@@ -132,6 +132,38 @@ struct OBBComponent
     bool isTrigger = false;
 };
 
+// Collision shapes of an entity. Any number of boxes, spheres and capsules,
+// all in entity-local space. A rigid body combines them (plus the colliders of
+// its children) into one compound body. Trigger zones stay OBBComponent.
+enum class ColliderShapeType : uint8_t { Box = 0, Sphere = 1, Capsule = 2 };
+enum class ColliderAxis : uint8_t { X = 0, Y = 1, Z = 2 };
+
+struct ColliderShape
+{
+    ColliderShapeType type = ColliderShapeType::Box;
+    Vec3         centerOffset{ 0.f, 0.f, 0.f };
+    Quat         orientation = Quat::Identity();
+    Vec3         halfExtents{ 0.5f, 0.5f, 0.5f };   // Box
+    float        radius = 0.5f;                     // Sphere, Capsule (largest scale axis)
+    float        height = 2.f;                      // Capsule: total height including both caps
+    ColliderAxis axis = ColliderAxis::Y;            // Capsule
+
+    bool operator==(const ColliderShape& o) const noexcept
+    {
+        return type == o.type && centerOffset == o.centerOffset && halfExtents == o.halfExtents &&
+               orientation.x == o.orientation.x && orientation.y == o.orientation.y &&
+               orientation.z == o.orientation.z && orientation.w == o.orientation.w &&
+               radius == o.radius && height == o.height && axis == o.axis;
+    }
+};
+
+struct ColliderComponent
+{
+    std::vector<ColliderShape> shapes;
+    bool showInEditor = true;
+    bool operator==(const ColliderComponent&) const = default;
+};
+
 // =============================================================================
 // Script / Behaviour
 // =============================================================================
@@ -181,6 +213,7 @@ inline void RegisterCoreComponents(ecs::ComponentMetaRegistry& registry)
     RegisterComponent<VisibilityComponent>(registry, "VisibilityComponent");
     RegisterComponent<TagComponent>(registry, "TagComponent");
     RegisterComponent<FolderComponent>(registry, "FolderComponent");
+    RegisterComponent<ColliderComponent>(registry, "ColliderComponent");
 }
 
 } // namespace engine

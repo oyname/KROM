@@ -250,6 +250,9 @@ struct EditorState
     math::Vec2   obbDragStartMouse  = {};   // Mausposition beim Drag-Start (Screen-Pixel)
     float        obbDragStartExtent = 0.f;  // halfExtents[axis] beim Drag-Start
     float        obbDragStartCenter = 0.f;  // centerOffset[axis] beim Drag-Start
+    // Form der ColliderComponent, die im Inspector aufgeklappt ist; ist es eine
+    // Box, bekommt sie im Viewport die Ziehgriffe.
+    int          colliderEditShape  = 0;
 
     // Snap-Achsen-Erkennung
     math::Vec3   snapLastPos        = {};

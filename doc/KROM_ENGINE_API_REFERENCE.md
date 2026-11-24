@@ -399,7 +399,8 @@ struct BoundsComponent
 ```
 
 Other core components: `ParentComponent`, `ChildrenComponent`, `NameComponent`,
-`GuidComponent`, `OBBComponent`, `ActiveComponent`, `TagComponent`.
+`GuidComponent`, `OBBComponent`, `ColliderComponent` (see section 16), `ActiveComponent`,
+`TagComponent`.
 
 ---
 
@@ -1028,31 +1029,41 @@ struct RigidBodyComponent
     bool  lockRotationX = false, lockRotationY = false, lockRotationZ = false;
 };
 
-struct SphereColliderComponent
-{
-    Vec3  centerOffset;
-    float radius       = 0.5f;      // non-uniform scale: largest axis
-    bool  showInEditor = false;
-};
-
-enum class CapsuleAxis : uint8_t { X, Y, Z };
-
-struct CapsuleColliderComponent
-{
-    Vec3        centerOffset;
-    float       radius       = 0.5f;
-    float       height       = 2.f;  // total height including both caps
-    CapsuleAxis axis         = CapsuleAxis::Y;
-    bool        showInEditor = false;
-};
-
 void RegisterPhysicsComponents(ecs::ComponentMetaRegistry&);
 ```
 
-The box collider is the core `OBBComponent` with `isTrigger = false`.
+Collision shapes are the core `ColliderComponent` (`ecs/Components.hpp`): any number of
+boxes, spheres and capsules on one entity, all in entity-local space.
 
-**Body rule.** The topmost `RigidBodyComponent` of a hierarchy owns every collider on its
-entity and on its children; together they form one compound body, and only the
+```cpp
+enum class ColliderShapeType : uint8_t { Box, Sphere, Capsule };
+enum class ColliderAxis : uint8_t { X, Y, Z };
+
+struct ColliderShape
+{
+    ColliderShapeType type = ColliderShapeType::Box;
+    Vec3         centerOffset;
+    Quat         orientation = Quat::Identity();
+    Vec3         halfExtents{0.5f, 0.5f, 0.5f};  // Box
+    float        radius = 0.5f;                  // Sphere, Capsule (largest scale axis)
+    float        height = 2.f;                   // Capsule: total height including both caps
+    ColliderAxis axis   = ColliderAxis::Y;        // Capsule
+};
+
+struct ColliderComponent
+{
+    std::vector<ColliderShape> shapes;
+    bool showInEditor = true;
+};
+```
+
+Trigger zones stay `OBBComponent` with `isTrigger = true`. A solid `OBBComponent`
+(`isTrigger = false`) still collides as a single box. Scenes and prefabs that stored one,
+or the former `SphereColliderComponent` / `CapsuleColliderComponent`, load as a
+`ColliderComponent`.
+
+**Body rule.** The topmost `RigidBodyComponent` of a hierarchy owns every collider shape on
+its entity and on its children; together they form one compound body, and only the
 rigid-body entity's transform is written by physics. Colliders without a rigid body in
 their hierarchy are static obstacles. A rigid body nested below another one is ignored
 (with a warning).

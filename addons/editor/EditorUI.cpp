@@ -644,7 +644,7 @@ static bool IntersectRayLocalBox(const collision::Ray& ray, const math::Mat4& lo
     return true;
 }
 
-// Collider ohne Mesh (z.B. Kollisions-Kinder "Collider") trifft der
+// Collider ohne Mesh (z.B. leere Objekte mit Kollision) trifft der
 // Mesh-Raycast nicht — sie werden hier ueber ihre Form anklickbar.
 static bool PickMeshlessColliders(EditorFrameContext& ctx, const collision::Ray& ray,
                                   float maxDistance, EntityID& outEntity, float& outT)
@@ -674,28 +674,35 @@ static bool PickMeshlessColliders(EditorFrameContext& ctx, const collision::Ray&
             consider(id, wt->matrix * math::Mat4::TRS(obb.centerOffset, obb.orientation, {1.f, 1.f, 1.f}),
                      obb.halfExtents);
     });
-    ctx.world.View<SphereColliderComponent>([&](EntityID id, const SphereColliderComponent& sphere) {
+    ctx.world.View<ColliderComponent>([&](EntityID id, const ColliderComponent& collider) {
         const auto* wt = eligible(id);
         if (!wt)
             return;
         const float s = std::max({ std::fabs(wt->scale.x), std::fabs(wt->scale.y), std::fabs(wt->scale.z) });
-        float t = 0.f;
-        if (collision::SceneQueries::IntersectRaySphere(
-                ray, { wt->matrix.TransformPoint(sphere.centerOffset), sphere.radius * s }, best, t))
+        for (const ColliderShape& shape : collider.shapes)
         {
-            best = t;
-            bestEntity = id;
-        }
-    });
-    ctx.world.View<CapsuleColliderComponent>([&](EntityID id, const CapsuleColliderComponent& capsule) {
-        if (const auto* wt = eligible(id))
-        {
-            // Naeherung als Box um die Kapsel.
-            const float h = std::max(capsule.radius, capsule.height * 0.5f);
-            math::Vec3 half{ capsule.radius, capsule.radius, capsule.radius };
-            (&half.x)[static_cast<int>(capsule.axis)] = h;
-            consider(id, wt->matrix * math::Mat4::TRS(capsule.centerOffset, math::Quat::Identity(), {1.f, 1.f, 1.f}),
-                     half);
+            const math::Mat4 shapeWorld = wt->matrix * math::Mat4::TRS(shape.centerOffset, shape.orientation, {1.f, 1.f, 1.f});
+            if (shape.type == ColliderShapeType::Box)
+            {
+                consider(id, shapeWorld, shape.halfExtents);
+            }
+            else if (shape.type == ColliderShapeType::Sphere)
+            {
+                float t = 0.f;
+                if (collision::SceneQueries::IntersectRaySphere(
+                        ray, { wt->matrix.TransformPoint(shape.centerOffset), shape.radius * s }, best, t))
+                {
+                    best = t;
+                    bestEntity = id;
+                }
+            }
+            else
+            {
+                // Naeherung als Box um die Kapsel.
+                math::Vec3 half{ shape.radius, shape.radius, shape.radius };
+                (&half.x)[static_cast<int>(shape.axis)] = std::max(shape.radius, shape.height * 0.5f);
+                consider(id, shapeWorld, half);
+            }
         }
     });
 

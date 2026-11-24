@@ -310,7 +310,12 @@ void TestRaycastHitsExactShapes(test::TestContext& ctx)
     // Kugel bei x=5, z=10 (Radius 1).
     const EntityID ball = world.CreateEntity();
     world.Add<TransformComponent>(ball).localPosition = { 5.f, 0.f, 10.f };
-    world.Add<SphereColliderComponent>(ball).radius = 1.f;
+    {
+        ColliderShape sphere{};
+        sphere.type = ColliderShapeType::Sphere;
+        sphere.radius = 1.f;
+        world.Add<ColliderComponent>(ball).shapes.push_back(sphere);
+    }
     // Rigidbody mit Kollisions-Kind: Treffer meldet die Rigidbody-Entity.
     const EntityID crate = world.CreateEntity();
     world.Add<TransformComponent>(crate).localPosition = { 0.f, 0.f, 20.f };
@@ -614,13 +619,23 @@ void TestSerializationRoundtrip(test::TestContext& ctx)
     rb.mass = 7.5f;
     rb.lockRotationY = true;
     world.Add<RigidBodyComponent>(e, rb);
-    SphereColliderComponent sphere{};
+    ColliderComponent collider{};
+    collider.showInEditor = false;
+    ColliderShape sphere{};
+    sphere.type = ColliderShapeType::Sphere;
     sphere.radius = 1.25f;
-    world.Add<SphereColliderComponent>(e, sphere);
-    CapsuleColliderComponent capsule{};
-    capsule.axis = CapsuleAxis::Z;
+    collider.shapes.push_back(sphere);
+    ColliderShape capsule{};
+    capsule.type = ColliderShapeType::Capsule;
+    capsule.axis = ColliderAxis::Z;
     capsule.height = 3.f;
-    world.Add<CapsuleColliderComponent>(e, capsule);
+    collider.shapes.push_back(capsule);
+    ColliderShape box{};
+    box.centerOffset = { 0.f, 2.f, 0.f };
+    box.halfExtents = { 0.25f, 0.5f, 0.75f };
+    box.orientation = math::Quat::FromEulerDeg(0.f, 30.f, 0.f);
+    collider.shapes.push_back(box);
+    world.Add<ColliderComponent>(e, collider);
 
     serialization::SceneSerializer ser(world);
     ser.RegisterDefaultHandlers();
@@ -643,12 +658,96 @@ void TestSerializationRoundtrip(test::TestContext& ctx)
         CHECK(ctx, rb2->type == RigidBodyType::Kinematic);
         CHECK(ctx, std::fabs(rb2->mass - 7.5f) < 1e-5f);
         CHECK(ctx, rb2->lockRotationY && !rb2->lockRotationX);
-        const auto* s = world2.Get<SphereColliderComponent>(id);
-        CHECK(ctx, s && std::fabs(s->radius - 1.25f) < 1e-5f);
-        const auto* c = world2.Get<CapsuleColliderComponent>(id);
-        CHECK(ctx, c && c->axis == CapsuleAxis::Z && std::fabs(c->height - 3.f) < 1e-5f);
+        const auto* c = world2.Get<ColliderComponent>(id);
+        CHECK(ctx, c != nullptr);
+        if (!c) return;
+        CHECK(ctx, !c->showInEditor);
+        CHECK_EQ(ctx, c->shapes.size(), size_t{3});
+        if (c->shapes.size() != 3u) return;
+        CHECK(ctx, c->shapes[0].type == ColliderShapeType::Sphere && std::fabs(c->shapes[0].radius - 1.25f) < 1e-5f);
+        CHECK(ctx, c->shapes[1].type == ColliderShapeType::Capsule && c->shapes[1].axis == ColliderAxis::Z &&
+                   std::fabs(c->shapes[1].height - 3.f) < 1e-5f);
+        CHECK(ctx, c->shapes[2].type == ColliderShapeType::Box && c->shapes[2].centerOffset == box.centerOffset &&
+                   c->shapes[2].halfExtents == box.halfExtents);
+        CHECK(ctx, std::fabs(c->shapes[2].orientation.y - box.orientation.y) < 1e-4f);
     });
     CHECK_EQ(ctx, found, 1);
+}
+
+// Older scenes stored a solid OBB, SphereColliderComponent and
+// CapsuleColliderComponent separately; they load as one collider. A trigger
+// OBB stays an OBBComponent.
+void TestLegacyCollidersLoadIntoOneCollider(test::TestContext& ctx)
+{
+    const std::string json = R"({"scene":"Legacy","entities":[
+        {"entityId":1,"components":[
+            {"type":"OBBComponent","centerOffset":[0,1,0],"halfExtents":[1,2,3],"orientation":[0,0,0,1],"showInEditor":true,"isTrigger":false},
+            {"type":"SphereColliderComponent","centerOffset":[0,0,1],"radius":0.75,"showInEditor":false},
+            {"type":"CapsuleColliderComponent","centerOffset":[0,0,0],"radius":0.4,"height":2.5,"axis":0,"showInEditor":false}]},
+        {"entityId":2,"components":[
+            {"type":"OBBComponent","centerOffset":[0,0,0],"halfExtents":[2,2,2],"orientation":[0,0,0,1],"showInEditor":true,"isTrigger":true}]}]})";
+
+    auto reg = MakePhysicsRegistry();
+    ecs::World world(reg);
+    serialization::SceneDeserializer deser(world);
+    deser.RegisterDefaultHandlers();
+    RegisterPhysicsDeserializationHandlers(deser);
+    const auto result = deser.DeserializeFromJson(json);
+    CHECK(ctx, result.success);
+
+    const EntityID solid = result.entityRemap.at(1u);
+    const EntityID trigger = result.entityRemap.at(2u);
+    CHECK(ctx, !world.Has<OBBComponent>(solid));
+    const auto* collider = world.Get<ColliderComponent>(solid);
+    CHECK(ctx, collider != nullptr);
+    if (collider)
+    {
+        CHECK(ctx, collider->showInEditor);
+        CHECK_EQ(ctx, collider->shapes.size(), size_t{3});
+        if (collider->shapes.size() == 3u)
+        {
+            CHECK(ctx, collider->shapes[0].type == ColliderShapeType::Box &&
+                       collider->shapes[0].halfExtents == math::Vec3(1.f, 2.f, 3.f));
+            CHECK(ctx, collider->shapes[1].type == ColliderShapeType::Sphere &&
+                       std::fabs(collider->shapes[1].radius - 0.75f) < 1e-5f);
+            CHECK(ctx, collider->shapes[2].type == ColliderShapeType::Capsule &&
+                       collider->shapes[2].axis == ColliderAxis::X &&
+                       std::fabs(collider->shapes[2].height - 2.5f) < 1e-5f);
+        }
+    }
+    const auto* zone = world.Get<OBBComponent>(trigger);
+    CHECK(ctx, zone && zone->isTrigger);
+    CHECK(ctx, !world.Has<ColliderComponent>(trigger));
+}
+
+// Two boxes on one entity: one body, both shapes block.
+void TestSeveralShapesOnOneEntity(test::TestContext& ctx)
+{
+    auto reg = MakePhysicsRegistry();
+    ecs::World world(reg);
+    const EntityID wall = world.CreateEntity();
+    world.Add<TransformComponent>(wall).localPosition = { 0.f, 0.f, 0.f };
+    ColliderComponent collider{};
+    ColliderShape left{};
+    left.centerOffset = { -5.f, 0.f, 0.f };
+    collider.shapes.push_back(left);
+    ColliderShape right{};
+    right.centerOffset = { 5.f, 0.f, 0.f };
+    collider.shapes.push_back(right);
+    world.Add<ColliderComponent>(wall, collider);
+
+    PhysicsWorld physics;
+    physics.Initialize();
+    physics.Sync(world);
+    CHECK_EQ(ctx, physics.BodyCount(), size_t{1});
+
+    collision::RaycastHit hit{};
+    CHECK(ctx, physics.Raycast({ -5.f, 10.f, 0.f }, { 0.f, -1.f, 0.f }, 50.f, hit));
+    CHECK_EQ(ctx, hit.entity.value, wall.value);
+    CHECK(ctx, std::fabs(hit.distance - 9.5f) < 0.02f);
+    CHECK(ctx, physics.Raycast({ 5.f, 10.f, 0.f }, { 0.f, -1.f, 0.f }, 50.f, hit));
+    CHECK_EQ(ctx, hit.entity.value, wall.value);
+    CHECK(ctx, !physics.Raycast({ 0.f, 10.f, 0.f }, { 0.f, -1.f, 0.f }, 50.f, hit));
 }
 
 } // namespace
@@ -661,6 +760,8 @@ int RunPhysicsTests()
         .Add("Collision matrix uses body layers", TestCollisionMatrixUsesBodyLayers)
         .Add("Disabled and destroyed bodies",  TestDisabledAndDestroyedBodies)
         .Add("Child colliders form one body",  TestChildCollidersFormOneBody)
+        .Add("Several shapes on one entity",   TestSeveralShapesOnOneEntity)
+        .Add("Legacy colliders load into one", TestLegacyCollidersLoadIntoOneCollider)
         .Add("Impulse moves dynamic body",     TestImpulseMovesDynamicBody)
         .Add("Commands before first sync queued", TestCommandsBeforeFirstSyncAreQueued)
         .Add("Collision events once per pair", TestCollisionEventsEnterOncePerBodyPair)

@@ -144,11 +144,6 @@ EntityID FindOutermostPrefabInstanceRoot(EditorFrameContext& ctx, EntityID entit
 // plain entities, nested prefab instances inside stay linked. One undo step.
 bool UnpackPrefabInstance(EditorFrameContext& ctx, EntityID entity);
 
-// Legt unter parent ein leeres Kind "Collider" mit Box- oder Kugel-Kollision an
-// (lokale Pose = Parent-Ursprung, Groesse aus den Parent-Bounds). Damit lassen
-// sich zusammengesetzte Formen (z.B. L-Form) bauen. Selektiert das neue Kind.
-enum class ColliderChildShape { Box, Sphere };
-EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, ColliderChildShape shape);
 bool DestroySelectedEntityHierarchies(EditorFrameContext& ctx);
 
 // Prefab-Modus wie in Unity: Enter legt Szene, Editor-Kamera und

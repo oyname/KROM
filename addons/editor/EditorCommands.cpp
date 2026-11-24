@@ -1151,8 +1151,7 @@ static EntityID DuplicateEntitySelfRaw(EditorFrameContext& ctx, EntityID source)
     }
     copyIf(std::type_identity<PostProcessVolumeComponent>{});
     copyIf(std::type_identity<RigidBodyComponent>{});
-    copyIf(std::type_identity<SphereColliderComponent>{});
-    copyIf(std::type_identity<CapsuleColliderComponent>{});
+    copyIf(std::type_identity<ColliderComponent>{});
     copyIf(std::type_identity<CharacterControllerComponent>{});
     copyIf(std::type_identity<AudioSourceComponent>{});
     copyIf(std::type_identity<AudioListenerComponent>{});
@@ -2412,59 +2411,6 @@ bool UnpackPrefabInstance(EditorFrameContext& ctx, EntityID entity)
     return EditComponents(ctx, "history.unpack_prefab", targets, [&] {
         for (const auto& [target, typeId] : targets)
             ctx.world.Remove(target, typeId);
-    });
-}
-
-EntityID CreateColliderChildEntity(EditorFrameContext& ctx, EntityID parent, ColliderChildShape shape)
-{
-    if (!parent.IsValid() || !ctx.world.IsAlive(parent))
-        return NULL_ENTITY;
-
-    return CreateEntityTree(ctx, "history.create_collider_child", [&] {
-        const EntityID entity = ctx.world.CreateEntity();
-        ctx.world.Add<NameComponent>(entity, NameComponent{MakeUniqueEntityName(ctx, "Collider")});
-        ctx.world.Add<TransformComponent>(entity);
-        ctx.world.Add<WorldTransformComponent>(entity);
-        ctx.world.Add<ActiveComponent>(entity, ActiveComponent{true});
-        ReparentEntityRaw(ctx, entity, parent);
-
-        // Lokal am Parent-Ursprung — ReparentEntityRaw erhaelt sonst die Weltpose.
-        if (auto* transform = ctx.world.Get<TransformComponent>(entity))
-        {
-            transform->localPosition = {0.f, 0.f, 0.f};
-            transform->localRotation = math::Quat::Identity();
-            transform->localScale    = {1.f, 1.f, 1.f};
-            transform->dirty = true;
-            ++transform->localVersion;
-        }
-
-        math::Vec3 center{0.f, 0.f, 0.f};
-        math::Vec3 extents{0.5f, 0.5f, 0.5f};
-        if (const auto* bounds = ctx.world.Get<BoundsComponent>(parent))
-        {
-            center  = bounds->centerLocal;
-            extents = bounds->extentsLocal;
-        }
-        if (shape == ColliderChildShape::Box)
-        {
-            OBBComponent obb{};
-            obb.centerOffset = center;
-            obb.halfExtents  = {std::max(0.001f, extents.x * 0.5f),
-                                std::max(0.001f, extents.y * 0.5f),
-                                std::max(0.001f, extents.z * 0.5f)};
-            obb.showInEditor = true;
-            ctx.world.Add<OBBComponent>(entity, obb);
-        }
-        else
-        {
-            SphereColliderComponent sphere{};
-            sphere.centerOffset = center;
-            sphere.radius       = std::max(0.001f, std::max({extents.x, extents.y, extents.z}) * 0.5f);
-            sphere.showInEditor = true;
-            ctx.world.Add<SphereColliderComponent>(entity, sphere);
-        }
-        ctx.state.selectedEntity = entity;
-        return entity;
     });
 }
 
