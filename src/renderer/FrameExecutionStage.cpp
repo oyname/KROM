@@ -335,6 +335,18 @@ bool FrameExecutionStage::Execute(const FrameExecutionStageContext& context,
         }
     }
 
+    // Signal the queue semaphore only for submissions another submission waits on.
+    // On the fence path nobody waits, and a binary semaphore signalled again every
+    // frame without a wait breaks VUID-vkQueueSubmit-pSignalSemaphores-00067.
+    for (CommandSubmissionDesc& producer : effectivePlan.submissions)
+    {
+        bool waitedOn = false;
+        for (const CommandSubmissionDesc& consumer : effectivePlan.submissions)
+            waitedOn = waitedOn || std::find(consumer.waitSubmissionIds.begin(), consumer.waitSubmissionIds.end(),
+                                             producer.submissionId) != consumer.waitSubmissionIds.end();
+        producer.exportsQueueSignal = waitedOn;
+    }
+
     std::unordered_map<uint32_t, std::vector<const rendergraph::CompiledPassEntry*>> passesPerSubmission;
     std::unordered_map<uint32_t, uint64_t> submittedFencePerSubmission;
     std::vector<DeferredBufferTransition> deferredUploadTransitions;

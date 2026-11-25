@@ -641,10 +641,11 @@ Wirksamste Maßnahmen, falls nötig (nicht umgesetzt):
 
 Offen / Auffälligkeiten:
 
-- **Vulkan-Validierung meldet beim Instanziieren eines Prefabs während des Laufs** einen
-  Semaphor-Fehler (`vkQueueSubmit`: Semaphor zweimal signalisiert, nicht gewartet). Er tritt
-  auch bei ausgeschaltetem GI auf, kommt also nicht aus diesem Paket; nicht untersucht. Ohne
-  Prefab-Instanziierung: keine einzige Validierungsmeldung mit GI an.
+- Behoben (gleicher Branch, `src/renderer/FrameExecutionStage.cpp`): Die Vulkan-Validierung
+  meldete `VUID-vkQueueSubmit-pSignalSemaphores-00067`. Erzeuger einer Queue-Abhängigkeit
+  signalisierten jeden Frame ihr Semaphor (`exportsQueueSignal`), obwohl auf dem Fence-Weg
+  niemand darauf wartet. Jetzt wird nur noch signalisiert, wenn eine andere Submission wartet.
+  Der GI-Messlauf mit Prefab-Instanziierung läuft unter Validierung ohne Meldung.
 - Upload unter Vulkan geht über `ImmediateSubmit` mit `vkQueueWaitIdle`: bei jeder Bewegung
   ein kurzer Stillstand. Bei unbewegter Szene kein Upload. Für Paket 3 Upload über
   Staging-Ring im Frame erwägen.
