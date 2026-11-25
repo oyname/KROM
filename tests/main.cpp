@@ -32,6 +32,7 @@ int RunProbeTests();
 int RunPostProcessTests();
 int RunEditorCommandTests();
 int RunEditorCloseTests();
+int RunGiTests();
 #if defined(KROM_TESTS_HAVE_PHYSICS)
 int RunPhysicsTests();
 #endif
@@ -55,6 +56,8 @@ int main(int argc, char** argv)
         return RunECSReadPhaseDeathTest(deathCase);
     if (argc > 1 && std::strcmp(argv[1], "--probes") == 0)
         return RunProbeTests();
+    if (argc > 1 && std::strcmp(argv[1], "--gi") == 0)
+        return RunGiTests();
 
     std::fprintf(stdout, "TAP version 14\n");
     std::fprintf(stdout, "# KROM Engine Tests\n");
@@ -80,6 +83,7 @@ int main(int argc, char** argv)
     failures += RunPostProcessTests();
     failures += RunEditorCommandTests();
     failures += RunEditorCloseTests();
+    failures += RunGiTests();
 #if defined(KROM_TESTS_HAVE_PHYSICS)
     failures += RunPhysicsTests();
 #endif
