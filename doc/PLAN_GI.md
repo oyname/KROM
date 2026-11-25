@@ -409,7 +409,7 @@ Neues Addon `addons/surface_cache`:
 | Paket | Stand |
 |---|---|
 | 0 Vorprüfung | erledigt (2026-11-25), Test siehe unten |
-| 1 BVH auf der CPU | offen |
+| 1 BVH auf der CPU | erledigt (2026-11-25), siehe unten |
 | 2 Trace-Kern | offen |
 | 3 Radiance-Cache | offen |
 | 4 Resolve und Anbindung | offen |
@@ -425,3 +425,110 @@ Neues Addon `addons/surface_cache`:
 - Nicht geprüft: Ausführung unter Vulkan auf echter GPU (Paket 2), Editor-Start (kein
   Engine-Code geändert).
 
+### Paket 1 (2026-11-25, `feature/gi-bvh`, abgezweigt von `feature/gi-vorpruefung`)
+
+Neu:
+
+- `include/collision/MeshBvh.hpp`, `src/collision/MeshBvh.cpp` (in `engine_core`): BLAS pro
+  Submesh, Binned SAH mit 12 Bins, Blätter mit höchstens 4 Dreiecken, Dreiecke in
+  Blattreihenfolge. `BvhNode` 32 Byte (min, `a`, max, `count`; `count == 0` = innerer Knoten,
+  rechtes Kind = `a + 1`), `BvhTriangle` 48 Byte (drei Positionen, im freien Wort hinter `v0`
+  der Index des Quelldreiecks). Traversierung `BvhTraverseClosest`/`BvhTraverseAny` über
+  gepackte Arrays mit Offsets – genau die Form, die Paket 2 in HLSL braucht.
+- `include/collision/SceneBvh.hpp`, `src/collision/SceneBvh.cpp` (in `engine_core`): TLAS,
+  Instanztabelle `GpuBvhInstance` (144 Byte), BLAS-Pool, Änderungsliste, Versionsnummern,
+  `TraceClosest`/`TraceAny`. Kein ECS.
+- `addons/mesh_renderer/MeshSceneBvh.{hpp,cpp}`: sammelt die Instanzen aus dem ECS, BLAS-Cache
+  pro (Mesh-Handle, Submesh, `geometryRevision`), Aufbau über das Job-System.
+- `tests/test_gi.cpp`: 12 neue Tests (Suite „GI“), `krom_tests --gi` führt nur diese Suite aus.
+- `SceneQueries::Raycast` ist unverändert; die exakte Variante ist `SceneBvh::TraceClosest`.
+- Kein Schreiben in `.kmesh`. Niemand ruft `MeshSceneBvh::Update` bisher auf: ohne GI kostet
+  das nichts.
+
+Entscheidungen:
+
+- **Ort:** BLAS/TLAS/Traversierung im Kern (`include/collision`), wie vorgeschlagen. Das
+  Einsammeln aus dem ECS liegt in `addons/mesh_renderer`, weil `MeshComponent` dort definiert
+  ist (Befund 6) – wie `MeshSceneQueries`.
+- **TLAS-Blätter mit genau einer Instanz** (`a` = Instanzindex, `count = 1`). Spart auf der GPU
+  eine Indirektion, TLAS hat immer `2N - 1` Knoten.
+- **Instanz-AABB** = BLAS-Wurzelbox durch die Welt-Matrix (Arvo), pro Submesh. Enger als
+  `BoundsComponent` (die gilt für das ganze Mesh). Änderungen erkennt die TLAS über
+  `TransformComponent::worldVersion` (wie Befund 9): gleiche Version = unverändert ohne
+  Matrixvergleich; neue Version = Matrix vergleichen (nur echte Bewegung zählt). Ohne
+  `TransformComponent` wird jedes Update die Matrix verglichen.
+- **Schwellen** als Konstanten in `SceneBvh`: Refit bis 10 % bewegte Instanzen
+  (`kRefitMaxMovedFraction`), Neubau wenn die SAH-Kosten nach Refit 1,3-mal so hoch wie nach dem
+  letzten Neubau sind (`kRefitMaxSahGrowth`) oder nach 240 Refits in Folge (`kRefitMaxCount`).
+  Kommen oder gehen Instanzen, oder wechselt die BLAS einer Instanz: immer Neubau.
+- **Ruhend-Bit** (`kSceneBvhInstanceResting`) nach 30 unbewegten Updates (`kRestingFrames`),
+  automatisch, keine Komponente, keine Serialisierung (Befund 10). Wechselt das Bit, steigt
+  `Version()` einmal (die Instanztabelle hat sich geändert). Eine neue Szene ist deshalb nach
+  30 Frames einmal „geändert“, danach still.
+- **Versionen:** `Version()` steigt bei jeder Änderung an TLAS oder Instanztabelle (Bewegung,
+  Kommen/Gehen, Ruhend-Bit, Material-Kennung). `BlasPoolVersion()` steigt nur, wenn die
+  gepackten BLAS-Arrays sich ändern (neues Mesh, Verdichtung).
+- **BLAS-Pool:** jede BLAS liegt einmal im gemeinsamen Array, egal wie viele Instanzen sie
+  nutzen. Wird eine BLAS nicht mehr gebraucht, bleibt ihr Bereich zunächst als Loch liegen;
+  ist mehr als die Hälfte ungenutzt (`kBlasPoolMaxWaste`), wird verdichtet (beide Versionen
+  steigen). Abweichung vom Auftrag Paket 2 („Löcher dürfen liegen bleiben“): Verdichten ist
+  schon drin, weil es auf der CPU fast nichts kostet.
+- **Änderungsliste:** `Moved` (Transform oder Geometrie der Instanz geändert), `Added`,
+  `Removed`, jeweils mit alter und neuer Welt-AABB (ungültig = `min > max`).
+- **Traversierung:** ein gemeinsamer Stack mit 32 Einträgen (`kBvhTraversalStackSize`) für
+  TLAS und BLAS: die BLAS-Schleife eines Blatts nutzt die Einträge oberhalb der TLAS-Einträge.
+  Näheres Kind zuerst. Ist der Stack voll, wird der fernere Teilbaum übersprungen und
+  `stackOverflows` gezählt (kein undefiniertes Verhalten). In allen Tests: 0 Überläufe,
+  höchste Tiefe 12.
+- **Dreiecke:** beidseitig (kein Backface-Culling). Entartete Dreiecke (Fläche 0, NaN/Inf,
+  Index außerhalb) werden beim Aufbau verworfen und gezählt; Treffer melden den Index im
+  Quell-Indexbuffer. Die Treffer-Normale ist die geometrische Welt-Normale in
+  Wicklungsrichtung (nicht zum Strahl gedreht), aus den in den Weltraum transformierten
+  Ecken – stimmt auch bei Spiegelung.
+- **Ausgeschlossen:** Entities mit `SkinComponent` oder Meshes mit `HasSkinning()`, inaktive
+  und unsichtbare Meshes (gleiche Regel wie die Mesh-Extraktion), Assets, die nicht `Loaded`
+  sind.
+- **Job-System:** BLAS werden mit `JobPriority::Background` gebaut, auf Kopien der Positionen
+  und Indizes (das Asset darf sich derweil ändern). Fertige Ergebnisse holt `Update()` ab; bis
+  dahin fehlt die Instanz. Ohne Job-System wird sofort gebaut. Keine Device-Aufrufe in Jobs.
+  Unbenutzte BLAS fliegen nach 600 Updates aus dem Cache (`kBlasEvictAfterUpdates`).
+
+Messwerte (`krom_tests --gi`, x64-Release = RelWithDebInfo `/O2`, AMD Ryzen 5 2600, ein
+Kern; Debug ist etwa zehnmal langsamer):
+
+| Messung | Wert |
+|---|---|
+| BLAS Drache (`assets/Dragon/drache.glb`) | 592 Dreiecke, 401 Knoten, 201 Blätter, Tiefe 11, **0,39 ms** |
+| BLAS dichte Kugel 120 × 240 (Ersatz, weil der Drache sehr grob ist) | 57 352 Dreiecke (248 entartete an den Polen verworfen), 34 475 Knoten, Tiefe 19, **41,8 ms** |
+| CPU-Strahlen/s Drache | nächster Treffer **3,6 Mio.**, Any-Hit 4,6 Mio.; 8,4 Knoten und 3,5 Dreieckstests pro Strahl |
+| CPU-Strahlen/s Kugel | nächster Treffer **2,2 Mio.**, Any-Hit 2,6 Mio.; 16,1 Knoten und 3,9 Dreieckstests pro Strahl |
+| TLAS 1 000 Instanzen | erster Aufbau 0,65 ms, Neubau **0,38 ms**, Refit bei 1 % bewegt **0,05 ms** (ganzes Update 0,07 ms), unveränderte Szene 0,02 ms |
+| TLAS 10 000 Instanzen | erster Aufbau 8,0 ms, Neubau **5,3 ms**, Refit bei 1 % bewegt **0,25 ms** (ganzes Update 0,73 ms), unveränderte Szene 0,26 ms |
+| Höchste Stack-Tiefe | 12 von 32, keine Überläufe |
+
+Einordnung: Refit und „nichts geändert“ sind pro Frame vernachlässigbar. Ein TLAS-Neubau bei
+10 000 Instanzen (5 ms) fällt nur an, wenn Instanzen kommen/gehen oder mehr als 10 % sich
+bewegen; das ist ein einzelner Ruckler, kein Dauerzustand. Falls das in Paket 2/3 stört: den
+Neubau in einen Job verlagern (die alte TLAS bleibt bis dahin gültig) oder ein billigeres
+Verfahren (Morton-Sortierung) für die TLAS nehmen. Der Aufbau liegt bei etwa 2 Mio.
+Instanzen bzw. 1,4 Mio. Dreiecken pro Sekunde und Kern.
+
+Prüfung (2026-11-25):
+
+- `krom_tests` x64-Debug: „ALL TESTS PASSED“, 23 Suiten, davon „GI“ 14/14 (2 aus Paket 0,
+  12 neu). `krom_tests --gi` auch in x64-Release grün.
+- Gesamter x64-Debug-Build (Editor DX11 und Vulkan, Runtimes, Beispiele) ohne Fehler; nur
+  bekannte Warnungen in Dateien, die dieses Paket nicht anfasst.
+- Editor-Start: `krom_editor_loading_tests_dx11` und `krom_editor_loading_tests` (Vulkan)
+  laufen durch („editor loop completed without crash“, Exit 0).
+- Nicht geprüft: Editor von Hand gestartet; da noch niemand `MeshSceneBvh` aufruft, ändert
+  sich am laufenden Editor nichts.
+
+Offen für Paket 2:
+
+- Wer `MeshSceneBvh::Update` aufruft (das GI-Addon, nach `TransformSystem`/`BoundsSystem`)
+  und welches Job-System es bekommt (Erinnerung: der Job-Pool gehört den Hosts).
+- Material-Kennung ist der `MaterialHandle`-Wert so, wie die Extraktion ihn wählt; Registry-
+  oder Runtime-Raum wird erst in Paket 3 (Albedo pro Material) relevant.
+- Upload: `Version()` für TLAS-Knoten + Instanzen, `BlasPoolVersion()` für BLAS-Knoten +
+  Dreiecke.

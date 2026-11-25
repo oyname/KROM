@@ -185,6 +185,8 @@ add_library(engine_core STATIC
     src/serialization/SceneSerializer.cpp
     # Collision
     src/collision/SceneQueries.cpp
+    src/collision/MeshBvh.cpp
+    src/collision/SceneBvh.cpp
     # Platform
     src/platform/Window.cpp
     src/platform/DynamicModule.cpp
