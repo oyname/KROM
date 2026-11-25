@@ -158,7 +158,8 @@ void MeshSceneBvh::Update(const ecs::World& world, const assets::AssetRegistry& 
     world.View<WorldTransformComponent, MeshComponent>(
         [&](EntityID id, const WorldTransformComponent& wt, const MeshComponent& mesh)
         {
-            if (!mesh.mesh.IsValid() || !IsMeshShown(world, id))
+            if (!mesh.mesh.IsValid() || (mesh.layerMask & kExcludedLayers) != 0u || mesh.layerMask == 0u ||
+                !IsMeshShown(world, id))
                 return;
             if (world.Get<SkinComponent>(id))
                 return;   // skinned meshes stay out (doc/PLAN_GI.md)

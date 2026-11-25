@@ -9,11 +9,14 @@
 // whose BLAS is not ready yet is left out of the TLAS until it is.
 //
 // Nothing runs unless Update() is called: a project without GI pays nothing.
+// Editor gizmos and previews (kExcludedLayers) are left out: they are not part
+// of the scene, and gizmos rescale with the camera every frame.
 // Instance keys are (EntityID::value << 32) | submesh; the material id is the
 // MaterialHandle value the renderer would use for that submesh.
 // =============================================================================
 #include "collision/SceneBvh.hpp"
 #include "core/Types.hpp"
+#include "renderer/RenderLayers.hpp"
 #include <condition_variable>
 #include <cstdint>
 #include <memory>
@@ -32,6 +35,10 @@ class MeshSceneBvh
 public:
     // A cached BLAS no instance used for this many updates is dropped.
     static constexpr uint32_t kBlasEvictAfterUpdates = 600u;
+    // Meshes with any of these layer bits are not scene geometry.
+    static constexpr uint32_t kExcludedLayers = renderer::LAYER_EDITOR_GIZMO | renderer::LAYER_EDITOR_GIZMO_DEPTH |
+                                                renderer::LAYER_EDITOR_ANIMATION_GIZMO |
+                                                renderer::LAYER_EDITOR_PREVIEW_MASK;
 
     explicit MeshSceneBvh(jobs::JobSystem* jobs = nullptr);
     ~MeshSceneBvh();

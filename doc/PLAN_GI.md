@@ -646,6 +646,12 @@ Offen / Auffälligkeiten:
   signalisierten jeden Frame ihr Semaphor (`exportsQueueSignal`), obwohl auf dem Fence-Weg
   niemand darauf wartet. Jetzt wird nur noch signalisiert, wenn eine andere Submission wartet.
   Der GI-Messlauf mit Prefab-Instanziierung läuft unter Validierung ohne Meldung.
+- Behoben nach der Abnahme im Editor: `MeshSceneBvh` nahm die Editor-Gizmos (Licht- und
+  Kamerasymbole, Transform-Pfeile) mit in die BVH. Sie skalieren jeden Frame mit dem
+  Kameraabstand, dadurch änderte sich die BVH ständig (Statuszeile: Version und Uploads stiegen
+  jeden Frame). Jetzt sind alle Editor-Layer ausgeschlossen (`MeshSceneBvh::kExcludedLayers`);
+  der Messlauf prüft, dass eine ruhende Szene keinen Upload auslöst. Die GPU-Zeiten oben sind
+  davon nicht betroffen (Uploads laufen außerhalb der gemessenen Passes).
 - Upload unter Vulkan geht über `ImmediateSubmit` mit `vkQueueWaitIdle`: bei jeder Bewegung
   ein kurzer Stillstand. Bei unbewegter Szene kein Upload. Für Paket 3 Upload über
   Staging-Ring im Frame erwägen.

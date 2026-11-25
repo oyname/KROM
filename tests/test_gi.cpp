@@ -981,6 +981,9 @@ void TestMeshSceneBvhFromWorld(test::TestContext& ctx)
     world.Add<MeshComponent>(skinned, skinnedMesh);
     const EntityID hidden = scene.CreateEntity("Hidden");
     world.Add<MeshComponent>(hidden, cubeMesh).visible = false;
+    // Editor gizmo (light icon, transform arrows): not scene geometry.
+    const EntityID gizmo = scene.CreateEntity("Gizmo");
+    world.Add<MeshComponent>(gizmo, cubeMesh).layerMask = renderer::LAYER_EDITOR_GIZMO;
     scene.PropagateTransforms();
 
     jobs::JobSystem jobSystem;
@@ -995,6 +998,7 @@ void TestMeshSceneBvhFromWorld(test::TestContext& ctx)
     CHECK_EQ(ctx, meshBvh.PendingBlasBuilds(), 0u);
     CHECK_EQ(ctx, meshBvh.Scene().FindInstance(mesh_renderer::MeshSceneBvh::InstanceKey(skinned, 0u)), UINT32_MAX);
     CHECK_EQ(ctx, meshBvh.Scene().FindInstance(mesh_renderer::MeshSceneBvh::InstanceKey(hidden, 0u)), UINT32_MAX);
+    CHECK_EQ(ctx, meshBvh.Scene().FindInstance(mesh_renderer::MeshSceneBvh::InstanceKey(gizmo, 0u)), UINT32_MAX);
 
     SceneRayHit hit{};
     CHECK(ctx, meshBvh.Scene().TraceClosest(Vec3{ 6.f, 5.f, 0.f }, Vec3{ 0.f, -1.f, 0.f }, 0.f, 100.f, hit));
@@ -1007,6 +1011,8 @@ void TestMeshSceneBvhFromWorld(test::TestContext& ctx)
         meshBvh.Update(world, registry);
     }
     const uint64_t settled = meshBvh.Scene().Version();
+    // A gizmo rescaled every frame (as the editor does) must not touch the BVH.
+    scene.SetLocalScale(gizmo, Vec3{ 3.f, 3.f, 3.f });
     scene.PropagateTransforms();
     meshBvh.Update(world, registry);
     CHECK_EQ(ctx, meshBvh.Scene().Version(), settled);

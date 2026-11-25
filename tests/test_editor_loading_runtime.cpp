@@ -2377,6 +2377,7 @@ struct EditorLoadingSmokeTest final : IAppScene
     int giStage = 0;
     int giWait = 0;
     std::string giLabel;
+    uint32_t giUploads = 0u;
 
     bool UpdateGiBench(AppSceneContext& context)
     {
@@ -2432,11 +2433,12 @@ struct EditorLoadingSmokeTest final : IAppScene
             giWait = 0;
             break;
         }
-        case 1:   // BVH complete: instances present, no BLAS building, for 20 frames
+        case 1:   // BVH complete and settled (resting bits set): instances present, no BLAS building
             if (res.lastInstances == 0u || res.lastPendingBlas != 0u)
                 giWait = 0;
-            if (giWait >= 20)
+            if (giWait >= 45)
             {
+                giUploads = res.lastUploads;
                 std::printf("GIBENCH scene=%s instances=%u triangles=%llu\n", giLabel.c_str(), res.lastInstances,
                             static_cast<unsigned long long>(res.lastTriangles));
                 sc::RequestSurfaceCacheValidation(res);
@@ -2454,6 +2456,10 @@ struct EditorLoadingSmokeTest final : IAppScene
             {
                 std::printf("GIBENCH %s\n", res.validation.result.c_str());
                 Check(res.validation.result.find(" 0 mismatches") != std::string::npos, "GI bench: GPU matches CPU");
+                // Nothing moved meanwhile (editor gizmos rescale every frame but are no scene
+                // geometry): the BVH must not have been uploaded again.
+                std::printf("GIBENCH uploads while the scene rested: %u\n", res.lastUploads - giUploads);
+                Check(res.lastUploads == giUploads, "GI bench: resting scene causes no BVH upload");
                 giStage = 6;
                 giWait = 0;
             }
