@@ -2651,6 +2651,44 @@ static void DrawEditorViewportSettings(EditorFrameContext& ctx)
         int probeView = static_cast<int>(std::min(ctx.state.probeDebugView, 3u));
         if (value_ui::Combo(LocalizedLabel("probe.debug_view").c_str(), &probeView, probeViews, IM_ARRAYSIZE(probeViews)))
             ctx.state.probeDebugView = static_cast<uint32_t>(probeView);
+        // Surface cache GI test (package 2): BVH trace on the GPU, debug view, measuring.
+        if (!ctx.surfaceCacheAvailable) ImGui::BeginDisabled();
+        value_ui::Checkbox(LocalizedLabel("surface_cache.enabled").c_str(), &ctx.state.surfaceCacheEnabled);
+        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+            ImGui::SetTooltip("%s", Translate("surface_cache.enabled_tip"));
+        if (ctx.state.surfaceCacheEnabled && ctx.surfaceCacheAvailable)
+        {
+            const char* giViews[] = { Translate("surface_cache.view_none"), Translate("surface_cache.view_normal"),
+                                      Translate("surface_cache.view_distance"), Translate("surface_cache.view_instance"),
+                                      Translate("surface_cache.view_nodes") };
+            int giView = static_cast<int>(std::min(ctx.state.surfaceCacheDebugView, 4u));
+            if (value_ui::Combo(LocalizedLabel("surface_cache.debug_view").c_str(), &giView, giViews, IM_ARRAYSIZE(giViews)))
+                ctx.state.surfaceCacheDebugView = static_cast<uint32_t>(giView);
+            value_ui::SliderFloat(LocalizedLabel("surface_cache.overlay").c_str(), &ctx.state.surfaceCacheOverlay,
+                                  0.f, 1.f, "%.2f", ImGuiSliderFlags_AlwaysClamp);
+            if (ctx.state.surfaceCacheDebugView == 2u)
+                value_ui::SliderFloat(LocalizedLabel("surface_cache.distance").c_str(), &ctx.state.surfaceCacheDistance,
+                                      1.f, 500.f, "%.0f m", ImGuiSliderFlags_Logarithmic | ImGuiSliderFlags_AlwaysClamp);
+            value_ui::RowLabel("", nullptr, false);
+            if (ctx.surfaceCacheBenchRunning) ImGui::BeginDisabled();
+            if (ImGui::Button(LocalizedLabel("surface_cache.bench").c_str()) && ctx.startSurfaceCacheBench)
+                ctx.startSurfaceCacheBench();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s", Translate("surface_cache.bench_tip"));
+            ImGui::SameLine();
+            if (ImGui::Button(LocalizedLabel("surface_cache.check").c_str()) && ctx.checkSurfaceCache)
+                ctx.checkSurfaceCache();
+            if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+                ImGui::SetTooltip("%s", Translate("surface_cache.check_tip"));
+            if (ctx.surfaceCacheBenchRunning) ImGui::EndDisabled();
+            if (!ctx.surfaceCacheStatus.empty())
+                ImGui::TextDisabled("%s", ctx.surfaceCacheStatus.c_str());
+            if (!ctx.surfaceCacheCheckResult.empty())
+                ImGui::TextWrapped("%s", ctx.surfaceCacheCheckResult.c_str());
+            for (const std::string& line : ctx.surfaceCacheBenchResults)
+                ImGui::TextWrapped("%s", line.c_str());
+        }
+        if (!ctx.surfaceCacheAvailable) ImGui::EndDisabled();
         if (value_ui::ColorEdit3(LocalizedLabel("settings.background").c_str(), ctx.state.backgroundColor.data()))
         {
             if (ctx.setEditorBackgroundColor)

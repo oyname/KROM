@@ -2,6 +2,9 @@
 // KROM Engine - tests/test_gi.cpp
 // Tests for the surface cache GI series (doc/PLAN_GI.md).
 //
+// Package 2 (end of file): trace shaders compile for DX11 and Vulkan; the HLSL
+// trace kernel on WARP against SceneBvh (CPU reference).
+//
 // Package 1 (below): MeshBvh, SceneBvh and MeshSceneBvh against brute force,
 // refit/rebuild, change list, resting bit, timings.
 //
@@ -25,6 +28,7 @@
 #include "renderer/ShaderCompiler.hpp"
 #include "renderer/ShaderToolPaths.hpp"
 #include "scene/Scene.hpp"
+#include "SurfaceCachePass.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -828,6 +832,7 @@ void TestSceneBvhUnchangedScene(test::TestContext& ctx)
     }
     scene.Update(descs);
     CHECK_EQ(ctx, scene.LastUpdate().restingChanged, 10u);
+    CHECK_EQ(ctx, scene.GeometryVersion(), 1ull);   // the resting bit is no geometry change
     CHECK(ctx, scene.LastUpdate().kind == SceneBvhUpdateKind::None);
     CHECK_EQ(ctx, scene.Instances()[0].flags & collision::kSceneBvhInstanceResting, collision::kSceneBvhInstanceResting);
     const uint64_t settled = scene.Version();
@@ -1088,6 +1093,254 @@ void TestSceneBvhTimings(test::TestContext& ctx)
     }
 }
 
+// =============================================================================
+// Package 2: trace kernel on the GPU
+// =============================================================================
+
+void TestSurfaceCacheShadersCompile(test::TestContext& ctx)
+{
+    namespace sc = engine::renderer::addons::surface_cache;
+    const bool haveDxc = !FindShaderTool(ShaderTool::Dxc).path.empty();
+    const struct { const char* name; const char* source; assets::ShaderStage stage; } shaders[] = {
+        { "surface_cache_trace.cs", sc::kTraceCsHlsl, assets::ShaderStage::Compute },
+        { "surface_cache_overlay.ps", sc::kOverlayPsHlsl, assets::ShaderStage::Fragment },
+        { "surface_cache_fullscreen.vs", sc::kFullscreenVsHlsl, assets::ShaderStage::Vertex },
+    };
+    for (const auto& entry : shaders)
+    {
+        assets::ShaderAsset shader{};
+        shader.debugName = entry.name;
+        shader.stage = entry.stage;
+        shader.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+        shader.entryPoint = "main";
+        shader.sourceCode = entry.source;
+        for (const assets::ShaderTargetProfile target : { assets::ShaderTargetProfile::DirectX11_SM5,
+                                                          assets::ShaderTargetProfile::Vulkan_SPIRV })
+        {
+            if (target == assets::ShaderTargetProfile::Vulkan_SPIRV && !haveDxc)
+            {
+                std::fprintf(stdout, "  # test_gi.cpp: dxc.exe not found, Vulkan compile of %s skipped\n", entry.name);
+                continue;
+            }
+            assets::CompiledShaderArtifact artifact{};
+            std::string error;
+            const bool ok = ShaderCompiler::CompileForTarget(shader, target, artifact, &error);
+            if (!ok)
+                std::fprintf(stderr, "test_gi.cpp: %s (%s): %s\n", entry.name, ShaderCompiler::ToString(target), error.c_str());
+            CHECK(ctx, ok);
+            CHECK(ctx, !artifact.bytecode.empty());
+        }
+    }
+}
+
+// The trace kernel of shaders/surface_cache_trace.hlsl on WARP, against
+// SceneBvh::TraceClosest/TraceAny (package 1, the CPU reference).
+void TestSurfaceCacheTraceOnWarp(test::TestContext& ctx)
+{
+#if defined(_WIN32) && defined(KROM_DX11_BACKEND)
+    // A scene with shared BLAS, rotation, non-uniform and mirrored scale.
+    const TestMesh grid = MakeGrid(24u, 4.f);
+    const TestMesh cube = MakeCube(0.5f);
+    const TestMesh sphere = MakeSphere(12u, 24u, 0.7f);
+    const auto gridBlas = BuildShared(grid);
+    const auto cubeBlas = BuildShared(cube);
+    const auto sphereBlas = BuildShared(sphere);
+    std::vector<SceneBvhInstanceDesc> descs;
+    descs.push_back(MakeInstance(1u, gridBlas, Mat4::Identity()));
+    for (uint32_t i = 0u; i < 24u; ++i)
+    {
+        const float x = static_cast<float>(i % 6u) * 1.4f - 3.5f;
+        const float z = static_cast<float>(i / 6u) * 1.4f - 2.f;
+        const Vec3 scale = (i % 5u == 0u) ? Vec3{ -1.f, 0.6f, 1.3f } : Vec3{ 1.f, 1.f + 0.1f * static_cast<float>(i % 3u), 0.8f };
+        descs.push_back(MakeInstance(10u + i, (i % 2u) ? cubeBlas : sphereBlas,
+            Mat4::TRS(Vec3{ x, 0.8f + 0.2f * static_cast<float>(i % 4u), z },
+                      Quat::FromEulerDeg(10.f * static_cast<float>(i), 25.f * static_cast<float>(i), 5.f * static_cast<float>(i)), scale)));
+    }
+    SceneBvh scene;
+    scene.Update(descs);
+
+    // Rays into the scene from outside (every third one short), and upwards from
+    // between the objects.
+    struct GpuRay { float o[3]; float tMax; float d[3]; uint32_t pad; };
+    std::vector<GpuRay> rays;
+    std::mt19937 rng(77u);
+    std::uniform_real_distribution<float> u(-1.f, 1.f);
+    const std::vector<TestRay> random = MakeRays(SceneBounds(scene), 480u, 91u);
+    for (size_t i = 0u; i < random.size(); ++i)
+    {
+        const float tMax = (i % 3u == 0u) ? 3.f : 1e30f;
+        rays.push_back({ { random[i].origin.x, random[i].origin.y, random[i].origin.z }, tMax,
+                         { random[i].dir.x, random[i].dir.y, random[i].dir.z }, 0u });
+    }
+    for (int i = 0; i < 32; ++i)
+        rays.push_back({ { u(rng) * 3.f, 1.f, u(rng) * 2.f }, 1e30f, { 0.f, 1.f, 0.f }, 0u });
+    const uint32_t rayCount = static_cast<uint32_t>(rays.size());
+
+    static const char* const kTestCs = R"(#include "surface_cache_trace.hlsl"
+struct TestRay { float3 o; float tMax; float3 d; uint pad; };
+StructuredBuffer<TestRay> gRays : register(t5);
+cbuffer TestParams : register(b0) { uint gRayCount; uint gTlasNodeCount; uint2 gPad; };
+RWStructuredBuffer<uint4> gOut : register(u0);
+[numthreads(64, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID)
+{
+    if (id.x >= gRayCount)
+        return;
+    const TestRay r = gRays[id.x];
+    TraceStats s = TraceStatsZero();
+    TraceHit h;
+    const bool closest = TraceClosest(r.o, r.d, 0.0f, r.tMax, gTlasNodeCount, h, s);
+    const bool any = TraceAny(r.o, r.d, 0.0f, r.tMax, gTlasNodeCount, s);
+    gOut[id.x] = uint4(closest ? asuint(h.t) : 0xFFFFFFFFu,
+                       closest ? gInstances[h.instance].entity : 0xFFFFFFFFu,
+                       any ? 1u : 0u, s.overflows);
+}
+)";
+    assets::ShaderAsset cs{};
+    cs.debugName = "GiTraceWarpCS";
+    cs.stage = assets::ShaderStage::Compute;
+    cs.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    cs.entryPoint = "main";
+    cs.sourceCode = kTestCs;
+    assets::CompiledShaderArtifact compiled{};
+    std::string error;
+    const bool compiledOk = ShaderCompiler::CompileForTarget(cs, assets::ShaderTargetProfile::DirectX11_SM5, compiled, &error);
+    if (!compiledOk)
+        std::fprintf(stderr, "test_gi.cpp: trace test shader: %s\n", error.c_str());
+    CHECK(ctx, compiledOk);
+    if (!compiledOk)
+        return;
+
+    using Microsoft::WRL::ComPtr;
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> command;
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+                                   D3D11_SDK_VERSION, &device, nullptr, &command);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+    ComPtr<ID3D11ComputeShader> shader;
+    CHECK(ctx, SUCCEEDED(device->CreateComputeShader(compiled.bytecode.data(), compiled.bytecode.size(), nullptr, &shader)));
+
+    const auto makeSrv = [&](const void* data, uint32_t count, uint32_t stride, ComPtr<ID3D11Buffer>& buffer,
+                             ComPtr<ID3D11ShaderResourceView>& srv)
+    {
+        count = std::max(count, 1u);
+        std::vector<uint8_t> zero(static_cast<size_t>(count) * stride, 0u);
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = count * stride;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+        desc.StructureByteStride = stride;
+        D3D11_SUBRESOURCE_DATA init{ data ? data : zero.data(), 0u, 0u };
+        bool ok = SUCCEEDED(device->CreateBuffer(&desc, &init, &buffer));
+        D3D11_SHADER_RESOURCE_VIEW_DESC srvDesc{};
+        srvDesc.Format = DXGI_FORMAT_UNKNOWN;
+        srvDesc.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        srvDesc.Buffer.NumElements = count;
+        ok = ok && SUCCEEDED(device->CreateShaderResourceView(buffer.Get(), &srvDesc, &srv));
+        return ok;
+    };
+    ComPtr<ID3D11Buffer> b[5];
+    ComPtr<ID3D11ShaderResourceView> srv[5];
+    bool ok = makeSrv(scene.TlasNodes().data(), static_cast<uint32_t>(scene.TlasNodes().size()), sizeof(collision::BvhNode), b[0], srv[0]) &&
+              makeSrv(scene.BlasNodes().data(), static_cast<uint32_t>(scene.BlasNodes().size()), sizeof(collision::BvhNode), b[1], srv[1]) &&
+              makeSrv(scene.BlasTriangles().data(), static_cast<uint32_t>(scene.BlasTriangles().size()), sizeof(collision::BvhTriangle), b[2], srv[2]) &&
+              makeSrv(scene.Instances().data(), static_cast<uint32_t>(scene.Instances().size()), sizeof(collision::GpuBvhInstance), b[3], srv[3]) &&
+              makeSrv(rays.data(), rayCount, sizeof(GpuRay), b[4], srv[4]);
+    CHECK(ctx, ok);
+    if (!ok)
+        return;
+
+    D3D11_BUFFER_DESC outDesc{};
+    outDesc.ByteWidth = rayCount * 16u;
+    outDesc.Usage = D3D11_USAGE_DEFAULT;
+    outDesc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+    outDesc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    outDesc.StructureByteStride = 16u;
+    D3D11_UNORDERED_ACCESS_VIEW_DESC uavDesc{};
+    uavDesc.Format = DXGI_FORMAT_UNKNOWN;
+    uavDesc.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+    uavDesc.Buffer.NumElements = rayCount;
+    D3D11_BUFFER_DESC stagingDesc{};
+    stagingDesc.ByteWidth = rayCount * 16u;
+    stagingDesc.Usage = D3D11_USAGE_STAGING;
+    stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    const uint32_t paramsData[4] = { rayCount, static_cast<uint32_t>(scene.TlasNodes().size()), 0u, 0u };
+    D3D11_BUFFER_DESC paramsDesc{};
+    paramsDesc.ByteWidth = sizeof(paramsData);
+    paramsDesc.Usage = D3D11_USAGE_DEFAULT;
+    paramsDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    D3D11_SUBRESOURCE_DATA paramsInit{ paramsData, 0u, 0u };
+    ComPtr<ID3D11Buffer> out, staging, params;
+    ComPtr<ID3D11UnorderedAccessView> uav;
+    ok = SUCCEEDED(device->CreateBuffer(&outDesc, nullptr, &out)) &&
+         SUCCEEDED(device->CreateUnorderedAccessView(out.Get(), &uavDesc, &uav)) &&
+         SUCCEEDED(device->CreateBuffer(&stagingDesc, nullptr, &staging)) &&
+         SUCCEEDED(device->CreateBuffer(&paramsDesc, &paramsInit, &params));
+    CHECK(ctx, ok);
+    if (!ok)
+        return;
+
+    ID3D11ShaderResourceView* views[6] = { srv[0].Get(), srv[1].Get(), srv[2].Get(), srv[3].Get(), nullptr, srv[4].Get() };
+    ID3D11UnorderedAccessView* uavs[1] = { uav.Get() };
+    ID3D11Buffer* cbs[1] = { params.Get() };
+    command->CSSetShader(shader.Get(), nullptr, 0u);
+    command->CSSetShaderResources(0u, 6u, views);
+    command->CSSetUnorderedAccessViews(0u, 1u, uavs, nullptr);
+    command->CSSetConstantBuffers(0u, 1u, cbs);
+    command->Dispatch((rayCount + 63u) / 64u, 1u, 1u);
+    command->CopyResource(staging.Get(), out.Get());
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    CHECK(ctx, SUCCEEDED(command->Map(staging.Get(), 0u, D3D11_MAP_READ, 0u, &mapped)));
+    if (!mapped.pData)
+        return;
+    const uint32_t* result = static_cast<const uint32_t*>(mapped.pData);
+
+    size_t hits = 0u, mismatches = 0u, anyMismatches = 0u, overflows = 0u;
+    float maxDiff = 0.f;
+    for (uint32_t i = 0u; i < rayCount; ++i)
+    {
+        const GpuRay& r = rays[i];
+        const Vec3 o{ r.o[0], r.o[1], r.o[2] };
+        const Vec3 d{ r.d[0], r.d[1], r.d[2] };
+        SceneRayHit cpu{};
+        const bool cpuHit = scene.TraceClosest(o, d, 0.f, r.tMax, cpu);
+        const bool cpuAny = scene.TraceAny(o, d, 0.f, r.tMax);
+        const uint32_t* g = result + i * 4u;
+        const bool gpuHit = g[0] != 0xFFFFFFFFu;
+        overflows += g[3];
+        hits += cpuHit ? 1u : 0u;
+        if (cpuAny != (g[2] != 0u))
+            ++anyMismatches;
+        if (cpuHit != gpuHit)
+        {
+            ++mismatches;
+            continue;
+        }
+        if (!cpuHit)
+            continue;
+        float gpuT = 0.f;
+        std::memcpy(&gpuT, &g[0], sizeof(gpuT));
+        const float diff = std::fabs(gpuT - cpu.distance);
+        maxDiff = std::max(maxDiff, diff);
+        if (diff > 1e-3f * std::max(1.f, cpu.distance) || (g[1] != cpu.entity && diff > 1e-4f))
+            ++mismatches;
+    }
+    command->Unmap(staging.Get(), 0u);
+    std::fprintf(stdout, "  # test_gi.cpp: WARP trace: %u rays, %zu hits, %zu closest mismatches, %zu any mismatches, max |dt| %.6f\n",
+                 rayCount, hits, mismatches, anyMismatches, maxDiff);
+    CHECK(ctx, hits > rayCount / 4u);
+    CHECK(ctx, mismatches * 200u <= rayCount);      // at most 0.5 % (grazing edges, float order)
+    CHECK(ctx, anyMismatches * 200u <= rayCount);
+    CHECK_EQ(ctx, overflows, static_cast<size_t>(0u));
+#else
+    (void)ctx;
+    std::fprintf(stdout, "  # test_gi.cpp: no DX11 backend, WARP trace skipped\n");
+#endif
+}
+
 } // namespace
 
 int RunGiTests()
@@ -1107,6 +1360,8 @@ int RunGiTests()
          .Add("Scene BVH: change list for move, add, remove", TestSceneBvhChangeList)
          .Add("Scene BVH: empty scene", TestSceneBvhEmpty)
          .Add("Scene BVH from the ECS (MeshSceneBvh)", TestMeshSceneBvhFromWorld)
-         .Add("Scene BVH timings (1000 / 10000 instances)", TestSceneBvhTimings);
+         .Add("Scene BVH timings (1000 / 10000 instances)", TestSceneBvhTimings)
+         .Add("Surface cache shaders compile for DX11 and Vulkan", TestSurfaceCacheShadersCompile)
+         .Add("Surface cache trace kernel on WARP against the CPU BVH", TestSurfaceCacheTraceOnWarp);
     return suite.Run();
 }

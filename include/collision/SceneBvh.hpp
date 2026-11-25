@@ -129,6 +129,9 @@ public:
 
     [[nodiscard]] uint64_t Version() const noexcept { return m_version; }
     [[nodiscard]] uint64_t BlasPoolVersion() const noexcept { return m_blasPoolVersion; }
+    // Changes only when the traced geometry changes (moved, added, removed, new BLAS),
+    // not for the resting bit or a material id.
+    [[nodiscard]] uint64_t GeometryVersion() const noexcept { return m_geometryVersion; }
     [[nodiscard]] const std::vector<SceneBvhChange>& Changes() const noexcept { return m_changes; }
     [[nodiscard]] const SceneBvhUpdateStats& LastUpdate() const noexcept { return m_lastUpdate; }
 
@@ -197,6 +200,7 @@ private:
     uint32_t                    m_refitsSinceRebuild = 0u;
     uint64_t                    m_version = 0u;
     uint64_t                    m_blasPoolVersion = 0u;
+    uint64_t                    m_geometryVersion = 0u;
 };
 
 // World AABB of a box under an affine matrix (8 corners).

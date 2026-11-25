@@ -88,6 +88,7 @@ void SceneBvh::Clear()
     if (hadContent)
     {
         ++m_version;
+        ++m_geometryVersion;
         ++m_blasPoolVersion;
     }
 }
@@ -363,6 +364,8 @@ void SceneBvh::Update(const std::vector<SceneBvhInstanceDesc>& descs)
 
     if (stats.kind != SceneBvhUpdateKind::None || tableChanged)
         ++m_version;
+    if (stats.kind != SceneBvhUpdateKind::None)
+        ++m_geometryVersion;
     CompactBlasPoolIfWasteful();
 
     stats.refitsSinceRebuild = m_refitsSinceRebuild;

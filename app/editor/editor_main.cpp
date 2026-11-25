@@ -23,6 +23,7 @@ int main()
     config.enableForwardPlus = true;
     config.enableGtao        = true;
     config.enableContactShadows = true;
+    config.enableSurfaceCache   = true;   // off until switched on in the viewport settings
 
     config.ambientColor     = { 0.02f, 0.02f, 0.03f };
     config.ambientIntensity = 1.0f;

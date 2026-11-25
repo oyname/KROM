@@ -410,7 +410,7 @@ Neues Addon `addons/surface_cache`:
 |---|---|
 | 0 Vorprüfung | erledigt (2026-11-25), Test siehe unten |
 | 1 BVH auf der CPU | erledigt (2026-11-25), siehe unten |
-| 2 Trace-Kern | offen |
+| 2 Trace-Kern | erledigt (2026-11-25), Messwerte unten; Empfehlung: Paket 3 bauen |
 | 3 Radiance-Cache | offen |
 | 4 Resolve und Anbindung | offen |
 | 5 Abstimmung | offen |
@@ -532,3 +532,124 @@ Offen für Paket 2:
   oder Runtime-Raum wird erst in Paket 3 (Albedo pro Material) relevant.
 - Upload: `Version()` für TLAS-Knoten + Instanzen, `BlasPoolVersion()` für BLAS-Knoten +
   Dreiecke.
+
+### Paket 2 (2026-11-25, `feature/gi-trace`, abgezweigt von `feature/gi-bvh`)
+
+Neu:
+
+- `shaders/surface_cache_trace.hlsl`: Traversierung als HLSL-Baustein, `TraceClosest` und
+  `TraceAny`, Zeile für Zeile nach `SceneBvh`/`BvhTraverse*` (Paket 1). Ein Stack mit
+  32 Einträgen für TLAS und BLAS, Überlauf wird gezählt. **Eigene Datei statt eingebettetem
+  String**, weil Paket 3 sie wieder einbindet und der WARP-Test sie direkt nutzt; eingebettete
+  Compute-Shader dürfen schon heute aus `shaders/` einbinden (`ForwardPlusLighting.cpp:52`).
+- `addons/surface_cache/` (`engine_surface_cache`): `SurfaceCacheTypes.hpp`,
+  `SurfaceCachePass.{hpp,cpp}` (Compute-Kernel, Overlay, Passes), `SurfaceCacheFeature.{hpp,cpp}`
+  (Extraktion, Upload, Messmodus, GPU/CPU-Prüfung).
+- Editor: Einstellungen → Viewport, unter der Probe-Debug-Ansicht: „Surface Cache GI (Test)“,
+  Debug-Ansicht (Normale, Distanz, Farbe pro Instanz, besuchte Knoten), Überblenden,
+  Knöpfe „Messen“ und „GPU gegen CPU prüfen“, Statuszeile. Nicht gespeichert, Standard aus.
+  `KromEditorAppConfig::enableSurfaceCache` (in `editor_main.cpp` an = registriert, aber aus).
+  Texte in `locales/de.json` und `en.json`.
+- `krom_editor_loading_tests[_dx11] --gi-bench <Projekt> [Bildordner]`: automatischer Messlauf
+  (siehe unten).
+- `SceneBvh::GeometryVersion()` (Paket-1-Code): zählt nur echte Geometrieänderungen; das
+  Ruhend-Bit hatte die GPU/CPU-Prüfung sonst als „Szene geändert“ verworfen.
+
+Aufbau:
+
+- Extraktion (Hauptthread, nur Ansichten mit `enableDepthPrepass`, also Szene und Spiel,
+  keine Vorschauen): `MeshSceneBvh` pro Welt, Upload nur bei geänderten Versionen
+  (`BlasPoolVersion` → BLAS-Knoten und Dreiecke; `Version` → TLAS und Instanzen). Puffer wachsen
+  mit 50 % Reserve; bei unbewegter Szene kein Upload pro Frame (Statuszeile „Uploads“).
+- Passes: Compute in `BeforeOpaque` (Debug-Trace der Ansicht, im Messmodus 14 Mess-Passes,
+  ggf. Prüfung), Overlay in `AfterPostProcess` auf das fertige Bild (wie die Editor-Gizmos).
+  Ergebnisse in Structured Buffern (Befund 2: Vulkan kann keine UAV-Texturen); die
+  Compute-Passes schreiben eine Kette 1×1-Platzhalter, die das Overlay liest, sonst würde der
+  RenderGraph sie wegkürzen.
+- Bindungen ohne Änderung am Bindungsmodell: Buffer-SRV 0–3 (Szene), 4 (Overlay), UAV 0–3,
+  `PerFrame` b0 (Kamera), `PerPass` b3 (Dispatch-Konstanten, eigener Ring aus 96 Puffern).
+- Aus: Extraktion gibt alle Shader, Pipelines und Puffer frei, keine Passes im Graph
+  (`GetStructureRevision` 0). Es bleibt ein Frame-Daten-Eintrag pro Ansicht.
+
+Prüfung GPU gegen CPU:
+
+- `krom_tests --gi`: Trace-Kernel auf WARP gegen `SceneBvh` (512 Strahlen, Drehung,
+  ungleichmäßige und gespiegelte Skalierung, gekürzte Strahlen): 0 Abweichungen bei nächstem
+  Treffer und Any-Hit. Shader übersetzen über FXC und DXC.
+- Echte GPU (GTX 1660), DX11 und Vulkan: 256 Kamerastrahlen, 0 Abweichungen, größte
+  Distanzdifferenz 0,00003 m; nach Bewegen, Drehen, Skalieren einer Instanz, Entfernen eines
+  Meshes und Hinzufügen eines Prefabs erneut 0 Abweichungen (Upload folgt der Änderung).
+- Deckungsgleichheit: Bilder des Viewports mit 0 %, 50 % und 100 % Überblendung (Normale,
+  Instanzfarbe, Knoten, Distanz) für Hubschrauber- und Drachen-Szene angesehen; die Ansicht
+  liegt pixelgenau auf dem Bild.
+
+Messwerte (GTX 1660, x64-Release, Editor mit 1920×1080-Fenster, je 200 Frames nach 30 Frames
+Anlauf, GPU-Zeit des RenderGraph-Passes über `GpuPassProfiler`). Strahlen pro Frame bei
+Sekundärstrahlen = Primärtreffer (nur dort startet ein Strahl). Szene „car“: DemoProject,
+42 Instanzen, 108 645 Dreiecke. Szene „Drachen“: 64 Drachen-Prefabs im 26-m-Raster, übrige
+Meshes ausgeblendet, 256 Instanzen (4 Submeshes je Drache), 423 424 Dreiecke.
+
+Strahlen pro Millisekunde, 1920×1080:
+
+| Szene, Backend | primär | diffus ∞ | diffus 15 m | diffus 5 m | Verdeckung ∞ | 15 m | 5 m |
+|---|---|---|---|---|---|---|---|
+| car, DX11 | 1 420 k | 384 k | 519 k | 554 k | 451 k | 585 k | 689 k |
+| car, Vulkan | 1 708 k | 523 k | 599 k | 693 k | 577 k | 743 k | 986 k |
+| Drachen, DX11 | 609 k | 87 k | 128 k | 136 k | 99 k | 136 k | 146 k |
+| Drachen, Vulkan | 1 018 k | 143 k | 206 k | 239 k | 161 k | 224 k | 254 k |
+
+Dazu GPU-Zeit in ms (1920×1080 / 960×540):
+
+| Szene, Backend | primär | diffus ∞ | diffus 15 m | diffus 5 m | Verdeckung ∞ | 15 m | 5 m |
+|---|---|---|---|---|---|---|---|
+| car, DX11 (767 k / 192 k Sek.-Strahlen) | 1,46 / 0,54 | 2,00 / 0,68 | 1,48 / 0,71 | 1,38 / 0,69 | 1,70 / 0,56 | 1,31 / 0,66 | 1,11 / 0,46 |
+| car, Vulkan | 1,21 / 0,58 | 1,47 / 0,52 | 1,28 / 0,52 | 1,11 / 0,63 | 1,33 / 0,41 | 1,03 / 0,48 | 0,78 / 0,40 |
+| Drachen, DX11 (324 k / 81 k Sek.-Strahlen) | 3,41 / 1,19 | 3,73 / 1,09 | 2,52 / 0,84 | 2,38 / 0,72 | 3,27 / 1,06 | 2,38 / 0,91 | 2,22 / 0,72 |
+| Drachen, Vulkan | 2,04 / 0,69 | 2,27 / 0,71 | 1,57 / 0,51 | 1,36 / 0,46 | 2,01 / 0,62 | 1,45 / 0,47 | 1,27 / 0,42 |
+
+Höchste Stack-Tiefe 16 (car) bzw. 15 (Drachen) von 32, keine Überläufe. Trefferquote der
+Primärstrahlen: car 37 %, Drachen 15,6 % (viel Himmel); diffuse Strahlen treffen in car 7,4 %
+(offener Himmel über dem Boden), bei den Drachen 15,6 %.
+
+Hinweise zur Genauigkeit: Die Halbauflösung hat einen festen Sockel von etwa 0,3–0,4 ms pro
+Pass (Barrieren und Leerlauf zwischen abhängigen Dispatches); ihre Strahlen/ms sind deshalb
+zu niedrig und für die Hochrechnung nicht geeignet. Die Werte sind Mittel der geglätteten
+Profiler-Zeiten; ein zweiter Lauf schwankt um einige Prozent (car Vulkan primär: 1,02 ms im
+Debug-Lauf mit Validierung, 1,21 ms in Release mit Bildaufnahmen davor).
+
+Einschätzung: Wie viele diffuse Strahlen passen in 2 ms auf der 1660?
+
+- Offene Szene wie „car“: Vulkan 1,0–1,4 Mio. (unbegrenzt bis 5 m), DX11 0,8–1,1 Mio.
+- Dichte Szene wie „Drachen“ (viele sich überlappende Instanz-Boxen): Vulkan 0,3–0,5 Mio.,
+  DX11 0,2–0,3 Mio.
+- Für den Cache heißt das: ein festes Budget von 128 k–256 k diffusen Strahlen pro Frame
+  passt auch im ungünstigen Fall (DX11, dichte Szene) in etwa 1–2 ms; 1 Strahl pro Pixel in
+  halber Auflösung (≈ 520 k) nur unter Vulkan in offenen Szenen. Kürzen auf 15 m spart 25–35 %,
+  auf 5 m 30–45 %. Vulkan ist durchgehend 1,3–1,7-mal schneller als DX11 (DXC gegenüber FXC).
+- **Empfehlung: Paket 3 bauen**, mit einem Strahlenbudget pro Frame (Start: 128 k, Regler)
+  statt fester Strahlen pro Pixel, Strahllänge 15 m mit Probe/IBL-Rest.
+
+Wirksamste Maßnahmen, falls nötig (nicht umgesetzt):
+
+1. **Eine BLAS pro Mesh statt pro Submesh** (Materialkennung pro Dreieck): Der Drache besteht
+   aus 4 Submeshes mit fast gleichen Boxen, also 4 überlappende TLAS-Blätter pro Objekt; das
+   verdoppelt ungefähr die Arbeit pro Sekundärstrahl in dichten Szenen.
+2. **Breitere Knoten (BVH4) mit komprimierten Boxen**: weniger Stack-Arbeit und
+   Speicherzugriffe pro Strahl; typischer Gewinn 1,5–2× bei inkohärenten Strahlen.
+3. **Kürzere Strahlen** (schon gemessen: 15 m spart 25–35 %) und Kohärenz durch Sortieren der
+   Cache-Strahlen nach Richtung.
+
+Offen / Auffälligkeiten:
+
+- **Vulkan-Validierung meldet beim Instanziieren eines Prefabs während des Laufs** einen
+  Semaphor-Fehler (`vkQueueSubmit`: Semaphor zweimal signalisiert, nicht gewartet). Er tritt
+  auch bei ausgeschaltetem GI auf, kommt also nicht aus diesem Paket; nicht untersucht. Ohne
+  Prefab-Instanziierung: keine einzige Validierungsmeldung mit GI an.
+- Upload unter Vulkan geht über `ImmediateSubmit` mit `vkQueueWaitIdle`: bei jeder Bewegung
+  ein kurzer Stillstand. Bei unbewegter Szene kein Upload. Für Paket 3 Upload über
+  Staging-Ring im Frame erwägen.
+- Freie Bereiche im BLAS-Pool werden ab 50 % Verschnitt verdichtet (Paket 1).
+- Die Runtime (`KromWrapper`) registriert das Addon nicht; nur der Editor.
+- Messlauf neu ausführen:
+  `krom_editor_loading_tests_dx11.exe --gi-bench <abs. Pfad>\krom-project.json [Bildordner]`,
+  `KROM_PERF_SCENE=<Szene>`, `KROM_GI_BENCH_DRAGONS=64`, `KROM_GI_BENCH_SPACING=26`.

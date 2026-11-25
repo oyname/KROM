@@ -412,6 +412,7 @@ add_subdirectory(addons/lit)
 add_subdirectory(addons/shadow)
 add_subdirectory(addons/gtao)
 add_subdirectory(addons/contact_shadow)
+add_subdirectory(addons/surface_cache)
 add_subdirectory(addons/ssr)
 add_subdirectory(addons/probes)
 add_subdirectory(addons/postprocess)
@@ -671,6 +672,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         engine_shadow
         engine_gtao
         engine_contact_shadow
+        engine_surface_cache
         engine_ssr
         engine_probes
         engine_outline
@@ -692,6 +694,7 @@ function(krom_add_editor target platform_target backend_addon backend_define)
         ${CMAKE_CURRENT_SOURCE_DIR}/addons/pbr
         ${CMAKE_CURRENT_SOURCE_DIR}/addons/gtao
         ${CMAKE_CURRENT_SOURCE_DIR}/addons/contact_shadow
+        ${CMAKE_CURRENT_SOURCE_DIR}/addons/surface_cache
         ${CMAKE_CURRENT_SOURCE_DIR}/addons/ssr
         ${CMAKE_CURRENT_SOURCE_DIR}/addons/outline
         ${CMAKE_CURRENT_SOURCE_DIR}/addons/animation
@@ -923,6 +926,7 @@ target_link_libraries(krom_tests PRIVATE
     engine_lit
     engine_shadow
     engine_contact_shadow
+    engine_surface_cache
     engine_animation
     engine_prefab
     engine_script

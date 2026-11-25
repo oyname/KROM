@@ -1,5 +1,6 @@
 // Optionaler GPU-Test: --headless automatisiert, ohne Argumente sichtbare
 // ImGui-Anzeige fuer 40 s. Kein plattformspezifischer UI-Code.
+#include "addons/surface_cache/SurfaceCacheFeature.hpp"
 #include "app/KromEditorApp.hpp"
 #include <map>
 #include <numeric>
@@ -2366,6 +2367,221 @@ struct EditorLoadingSmokeTest final : IAppScene
         return true;
     }
 
+    // --gi-bench <project> [captureDir]: surface cache GI measuring run (doc/PLAN_GI.md,
+    // package 2). KROM_PERF_SCENE=<name> picks the scene; KROM_GI_BENCH_DRAGONS=<n> hides
+    // every mesh of it (in memory only) and places n dragon prefabs on a grid instead.
+    // Order: wait for shaders, switch GI on, wait for the BVH, GPU/CPU check, captures
+    // of the debug view (PPM, when captureDir is given), measuring run, close.
+    bool giBench = false;
+    std::filesystem::path giCaptureDir;
+    int giStage = 0;
+    int giWait = 0;
+    std::string giLabel;
+
+    bool UpdateGiBench(AppSceneContext& context)
+    {
+        namespace sc = renderer::addons::surface_cache;
+        auto& state = app.m_editorFrameCtx->state;
+        if (frames == 5)
+            if (const char* scene = std::getenv("KROM_PERF_SCENE"))
+                Check(app.m_editorFrameCtx->switchEditorScene(scene, false), "GI bench scene requested");
+        if (WaitForSceneShaders(context))
+            return true;
+        if (!app.m_surfaceCacheResources)
+        {
+            Check(false, "surface cache feature registered");
+            context.renderLoop.GetWindow()->RequestClose();
+            return true;
+        }
+        sc::SurfaceCacheGpuResources& res = *app.m_surfaceCacheResources;
+        const auto close = [&] { context.renderLoop.GetWindow()->RequestClose(); };
+        ++giWait;
+        switch (giStage)
+        {
+        case 0:
+        {
+            giLabel = app.m_currentSceneName;
+            if (const char* dragons = std::getenv("KROM_GI_BENCH_DRAGONS"))
+            {
+                const int count = std::max(1, std::atoi(dragons));
+                app.m_world->View<MeshComponent>([](EntityID, MeshComponent& mesh) { mesh.visible = false; });
+                const int side = static_cast<int>(std::ceil(std::sqrt(static_cast<double>(count))));
+                // The demo dragon is about 11 x 10 x 23 m; 26 m keeps neighbours apart.
+                const char* spacingEnv = std::getenv("KROM_GI_BENCH_SPACING");
+                const float spacing = spacingEnv ? std::max(1.f, static_cast<float>(std::atof(spacingEnv))) : 26.f;
+                for (int i = 0; i < count; ++i)
+                {
+                    const math::Vec3 position{ (static_cast<float>(i % side) - 0.5f * (side - 1)) * spacing, 0.f,
+                                               (static_cast<float>(i / side) - 0.5f * (side - 1)) * spacing };
+                    const EntityID dragon = app.InstantiatePrefabForPlay("Prefabs/Dragon.prefab", position,
+                        math::Quat::FromEulerDeg(0.f, static_cast<float>(i * 37 % 360), 0.f), math::Vec3{ 1.f, 1.f, 1.f });
+                    Check(dragon.IsValid(), "GI bench dragon placed");
+                }
+                auto& camera = state.editorCamera;
+                const float extent = 0.5f * spacing * side + 15.f;
+                camera.position = math::Vec3{ 0.f, extent * 0.45f, extent * 1.15f };
+                const math::Vec3 direction = (math::Vec3{ 0.f, 4.f, 0.f } - camera.position).Normalized();
+                camera.yawDeg = std::atan2(-direction.x, -direction.z) * math::RAD_TO_DEG;
+                camera.pitchDeg = std::asin(direction.y) * math::RAD_TO_DEG;
+                giLabel += "+" + std::to_string(count) + "dragons";
+            }
+            state.surfaceCacheEnabled = true;
+            state.surfaceCacheDebugView = 1u;
+            state.surfaceCacheOverlay = 0.f;
+            giStage = 1;
+            giWait = 0;
+            break;
+        }
+        case 1:   // BVH complete: instances present, no BLAS building, for 20 frames
+            if (res.lastInstances == 0u || res.lastPendingBlas != 0u)
+                giWait = 0;
+            if (giWait >= 20)
+            {
+                std::printf("GIBENCH scene=%s instances=%u triangles=%llu\n", giLabel.c_str(), res.lastInstances,
+                            static_cast<unsigned long long>(res.lastTriangles));
+                sc::RequestSurfaceCacheValidation(res);
+                giStage = 2;
+                giWait = 0;
+            }
+            else if (giWait > 2000)
+            {
+                Check(false, "GI bench: BVH ready");
+                close();
+            }
+            break;
+        case 2:   // GPU/CPU check
+            if (res.validation.state == sc::SurfaceCacheValidation::State::Idle && !res.validation.result.empty())
+            {
+                std::printf("GIBENCH %s\n", res.validation.result.c_str());
+                Check(res.validation.result.find(" 0 mismatches") != std::string::npos, "GI bench: GPU matches CPU");
+                giStage = 6;
+                giWait = 0;
+            }
+            else if (giWait > 600)
+            {
+                Check(false, "GI bench: GPU/CPU check finished");
+                close();
+            }
+            break;
+        case 3:   // captures: scene, normals, 50 % blend, instances, node heat map
+        {
+            struct Shot { const char* file; uint32_t view; float overlay; };
+            static const Shot shots[] = { { "gi_scene.ppm", 1u, 0.f }, { "gi_normal.ppm", 1u, 1.f },
+                                          { "gi_blend.ppm", 1u, 0.5f }, { "gi_instance.ppm", 3u, 1.f },
+                                          { "gi_nodes.ppm", 4u, 1.f }, { "gi_distance.ppm", 2u, 1.f } };
+            const int shot = giWait / 10;
+            const int phase = giWait % 10;
+            if (shot >= static_cast<int>(std::size(shots)))
+            {
+                state.surfaceCacheOverlay = 0.f;
+                giStage = 4;
+                giWait = 0;
+                break;
+            }
+            state.surfaceCacheDebugView = shots[shot].view;
+            state.surfaceCacheOverlay = shots[shot].overlay;
+            if (phase == 9)
+            {
+                auto* device = context.renderLoop.GetRenderSystem().GetDevice();
+                const TextureHandle texture = device->GetRenderTargetColorTexture(app.m_sceneView.rt);
+                std::vector<uint8_t> rgba;
+                uint32_t width = 0u, height = 0u;
+                if (device->ReadTexturePixels(texture, rgba, width, height) &&
+                    rgba.size() == static_cast<size_t>(width) * height * 4u)
+                {
+                    std::vector<char> rgb;
+                    rgb.reserve(static_cast<size_t>(width) * height * 3u);
+                    for (size_t i = 0; i < rgba.size(); i += 4u)
+                        rgb.insert(rgb.end(), { static_cast<char>(rgba[i]), static_cast<char>(rgba[i + 1]),
+                                                static_cast<char>(rgba[i + 2]) });
+                    std::ofstream out(giCaptureDir / shots[shot].file, std::ios::binary);
+                    out << "P6\n" << width << ' ' << height << "\n255\n";
+                    out.write(rgb.data(), static_cast<std::streamsize>(rgb.size()));
+                    Check(static_cast<bool>(out), shots[shot].file);
+                }
+                else
+                {
+                    Check(false, "GI bench capture readback");
+                }
+            }
+            break;
+        }
+        case 4:
+            sc::StartSurfaceCacheBench(res, BackendDisplayName(app.m_config.backend), giLabel);
+            giStage = 5;
+            giWait = 0;
+            break;
+        case 5:   // measuring run
+            if (!sc::SurfaceCacheBenchRunning(res))
+            {
+                for (const std::string& line : res.bench.results)
+                    std::printf("GIBENCH %s\n", line.c_str());
+                Check(!res.bench.results.empty(), "GI bench produced results");
+                std::fflush(stdout);
+                close();
+            }
+            else if (giWait > 3000)
+            {
+                Check(false, "GI bench finished");
+                close();
+            }
+            break;
+        case 6:   // edit the scene like a user would: move, rotate, scale, add, remove
+        {
+            std::vector<EntityID> meshes;
+            app.m_world->View<MeshComponent, TransformComponent>([&](EntityID e, MeshComponent& mesh, TransformComponent&) {
+                if (mesh.visible && mesh.mesh.IsValid())
+                    meshes.push_back(e);
+            });
+            if (meshes.size() >= 3u)
+            {
+                auto& moved = *app.m_world->Get<TransformComponent>(meshes[0]);
+                moved.localPosition = moved.localPosition + math::Vec3{ 1.5f, 0.5f, -1.0f };
+                moved.localRotation = (math::Quat::FromEulerDeg(0.f, 35.f, 10.f) * moved.localRotation).Normalized();
+                moved.localScale = math::Vec3{ moved.localScale.x * 1.4f, moved.localScale.y * 0.7f, moved.localScale.z };
+                moved.dirty = true;
+                app.m_world->Remove<MeshComponent>(meshes[1]);
+            }
+            const auto& camera = state.editorCamera;
+            const float yaw = camera.yawDeg * math::DEG_TO_RAD;
+            const math::Vec3 ahead = camera.position + math::Vec3{ -std::sin(yaw), 0.f, -std::cos(yaw) } * 30.f;
+            const EntityID added = app.InstantiatePrefabForPlay("Prefabs/Dragon.prefab", math::Vec3{ ahead.x, 0.f, ahead.z },
+                math::Quat::FromEulerDeg(0.f, 70.f, 0.f), math::Vec3{ 0.6f, 0.6f, 0.6f });
+            Check(added.IsValid() && meshes.size() >= 3u, "GI bench: scene edited");
+            giStage = 7;
+            giWait = 0;
+            break;
+        }
+        case 7:   // after the edits: wait for the BVH, then check again
+            if (res.lastPendingBlas != 0u)
+                giWait = 0;
+            if (giWait == 30)
+            {
+                std::printf("GIBENCH after edits instances=%u triangles=%llu\n", res.lastInstances,
+                            static_cast<unsigned long long>(res.lastTriangles));
+                sc::RequestSurfaceCacheValidation(res);
+            }
+            if (giWait > 30 && res.validation.state == sc::SurfaceCacheValidation::State::Idle &&
+                !res.validation.result.empty())
+            {
+                std::printf("GIBENCH after edits %s\n", res.validation.result.c_str());
+                Check(res.validation.result.find(" 0 mismatches") != std::string::npos,
+                      "GI bench: GPU matches CPU after scene edits");
+                giStage = giCaptureDir.empty() ? 4 : 3;
+                giWait = 0;
+            }
+            else if (giWait > 900)
+            {
+                Check(false, "GI bench: check after edits finished");
+                close();
+            }
+            break;
+        default:
+            break;
+        }
+        return true;
+    }
+
     bool UpdatePerf(AppSceneContext& context)
     {
         constexpr int kWarmup = 60;
@@ -2712,6 +2928,8 @@ struct EditorLoadingSmokeTest final : IAppScene
         if (!reloadProject.empty()) return UpdateScriptReload(context);
         if (compileStatus)
             return UpdateShaderCompileStatus(context);
+        if (giBench)
+            return UpdateGiBench(context);
         if (!perfProject.empty())
         {
             const bool verifyScene = !gtaoCaptureDir.empty() || std::getenv("KROM_PERF_COMPARE_GTAO");
@@ -2828,6 +3046,7 @@ struct EditorLoadingSmokeTest final : IAppScene
         config.enableForwardPlus = true;
         config.enableGtao = std::getenv("KROM_PERF_GTAO_OFF") == nullptr;
         config.enableContactShadows = true;
+        config.enableSurfaceCache = true;
         if (settingsUi) Debug::MinLevel = LogLevel::Error;
         Check(app.Initialize(config), "editor initialized");
         if (failures == 0)
@@ -3066,6 +3285,16 @@ int main(int argc, char** argv)
     test.toolbarLogo = argc > 1 && std::string_view(argv[1]) == "--toolbar-logo";
     if (argc > 2 && std::string_view(argv[1]) == "--perf")
         test.perfProject = argv[2];
+    if (argc > 2 && std::string_view(argv[1]) == "--gi-bench")
+    {
+        test.perfProject = argv[2];
+        test.giBench = true;
+        if (argc > 3)
+        {
+            test.giCaptureDir = engine::PathFromUtf8(argv[3]);
+            std::filesystem::create_directories(test.giCaptureDir);
+        }
+    }
     if (argc > 3 && (std::string_view(argv[1]) == "--auto-exposure" || std::string_view(argv[1]) == "--gizmo-colors"))
     {
         test.perfProject = argv[2];
