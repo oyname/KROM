@@ -1,5 +1,5 @@
 {
-  "lastScene":"level 3",
+  "lastScene":"car",
   "hierarchy":
 {
   "Room 0": {
@@ -25,7 +25,7 @@
     "fovDeg":60,
     "nearPlane":0.0500000007,
     "farPlane":3000,
-    "moveSpeed":5
+    "moveSpeed":14
   },
   "layers":["Default","EditorGizmo","Transparent","UI","User0","User1","User2","User3","","","","","","","","","","","","","","","","","","","","","","","",""],
   "codeEditor":{

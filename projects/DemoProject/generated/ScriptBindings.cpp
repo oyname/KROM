@@ -62,6 +62,9 @@ extern "C" void KromRegisterGameScripts(engine::script::ScriptRegistry& registry
     registry.RegisterField<HelicopterControl>("HelicopterControl", "maxTiltDeg", engine::script::ScriptFieldType::Float, &HelicopterControl::maxTiltDeg);
     registry.RegisterField<HelicopterControl>("HelicopterControl", "acceleration", engine::script::ScriptFieldType::Float, &HelicopterControl::acceleration);
     registry.RegisterField<HelicopterControl>("HelicopterControl", "noseAxis", engine::script::ScriptFieldType::Vec3, &HelicopterControl::noseAxis);
+    registry.RegisterField<HelicopterControl>("HelicopterControl", "gravity", engine::script::ScriptFieldType::Float, &HelicopterControl::gravity);
+    registry.RegisterField<HelicopterControl>("HelicopterControl", "maxLiftFactor", engine::script::ScriptFieldType::Float, &HelicopterControl::maxLiftFactor);
+    registry.RegisterField<HelicopterControl>("HelicopterControl", "liftResponse", engine::script::ScriptFieldType::Float, &HelicopterControl::liftResponse);
     registry.Register<HelicopterHover>("HelicopterHover");
     registry.RegisterField<HelicopterHover>("HelicopterHover", "height", engine::script::ScriptFieldType::Float, &HelicopterHover::height);
     registry.RegisterField<HelicopterHover>("HelicopterHover", "cyclesPerSecond", engine::script::ScriptFieldType::Float, &HelicopterHover::cyclesPerSecond);

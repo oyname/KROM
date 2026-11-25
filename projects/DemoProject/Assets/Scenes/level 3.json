@@ -4,8 +4,8 @@
   "entityCount": 6,
   "entities": [
     {
-      "entityId": 2561282,
-      "entityIndex": 10005,
+      "entityId": 2562306,
+      "entityIndex": 10009,
       "entityGeneration": 2,
       "components": [
         {
@@ -67,8 +67,8 @@
       ]
     },
     {
-      "entityId": 2561538,
-      "entityIndex": 10006,
+      "entityId": 2562562,
+      "entityIndex": 10010,
       "entityGeneration": 2,
       "components": [
         {
@@ -101,8 +101,8 @@
       ]
     },
     {
-      "entityId": 2561794,
-      "entityIndex": 10007,
+      "entityId": 2562818,
+      "entityIndex": 10011,
       "entityGeneration": 2,
       "components": [
         {
@@ -115,7 +115,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 2561538
+          "parentId": 2562562
         },
         {
           "type": "ActiveComponent",
@@ -161,8 +161,8 @@
       ]
     },
     {
-      "entityId": 2562050,
-      "entityIndex": 10008,
+      "entityId": 2563074,
+      "entityIndex": 10012,
       "entityGeneration": 2,
       "components": [
         {
@@ -213,8 +213,8 @@
       ]
     },
     {
-      "entityId": 2562306,
-      "entityIndex": 10009,
+      "entityId": 2563330,
+      "entityIndex": 10013,
       "entityGeneration": 2,
       "components": [
         {
@@ -259,9 +259,9 @@
   ]
 ,
   "editorCamera":{
-    "position":[-13.0644512, 15.9574718, -8.71666431],
-    "pitchDeg":-44.651432,
-    "yawDeg":-116.302605,
+    "position":[-6.02063131, 1.67936707, 9.87365055],
+    "pitchDeg":-32.2764168,
+    "yawDeg":381.171967,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,

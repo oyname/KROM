@@ -60,12 +60,16 @@
           "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
+          "type": "ColliderComponent",
           "showInEditor": true,
-          "isTrigger": false
+          "shapes": [
+            {
+              "shape": 0,
+              "centerOffset": [0, 0, 0],
+              "orientation": [0, 0, 0, 1],
+              "halfExtents": [0.5, 0.5, 0.5]
+            }
+          ]
         },
         {
           "type": "MeshComponent",
@@ -142,12 +146,16 @@
           "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
+          "type": "ColliderComponent",
           "showInEditor": true,
-          "isTrigger": false
+          "shapes": [
+            {
+              "shape": 0,
+              "centerOffset": [0, 0, 0],
+              "orientation": [0, 0, 0, 1],
+              "halfExtents": [0.5, 0.5, 0.5]
+            }
+          ]
         },
         {
           "type": "MeshComponent",
@@ -272,12 +280,16 @@
           "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
+          "type": "ColliderComponent",
           "showInEditor": true,
-          "isTrigger": false
+          "shapes": [
+            {
+              "shape": 0,
+              "centerOffset": [0, 0, 0],
+              "orientation": [0, 0, 0, 1],
+              "halfExtents": [0.5, 0.5, 0.5]
+            }
+          ]
         },
         {
           "type": "MeshComponent",
@@ -399,12 +411,16 @@
           "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
+          "type": "ColliderComponent",
           "showInEditor": true,
-          "isTrigger": false
+          "shapes": [
+            {
+              "shape": 0,
+              "centerOffset": [0, 0, 0],
+              "orientation": [0, 0, 0, 1],
+              "halfExtents": [0.5, 0.5, 0.5]
+            }
+          ]
         },
         {
           "type": "MeshComponent",
@@ -469,12 +485,16 @@
           "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
+          "type": "ColliderComponent",
           "showInEditor": true,
-          "isTrigger": false
+          "shapes": [
+            {
+              "shape": 0,
+              "centerOffset": [0, 0, 0],
+              "orientation": [0, 0, 0, 1],
+              "halfExtents": [0.5, 0.5, 0.5]
+            }
+          ]
         },
         {
           "type": "MeshComponent",
