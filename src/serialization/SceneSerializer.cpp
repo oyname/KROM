@@ -425,10 +425,18 @@ void AppendLegacyCapsuleCollider(const JsonValue& v, ColliderComponent& c)
 // BUGFIX: ForEachAlive statt View<NameComponent>
 std::string SceneSerializer::SerializeToJson(const std::string& sceneName) const
 {
+    // Count only the entities that pass the filter, so the header matches the
+    // "entities" array (the world also holds editor helpers and other scenes).
+    uint32_t writtenCount = 0u;
+    if (m_entityFilter)
+        m_world.ForEachAlive([&](EntityID id) { if (m_entityFilter(id)) ++writtenCount; });
+    else
+        writtenCount = static_cast<uint32_t>(m_world.EntityCount());
+
     JsonWriter w;
     w.BeginObject();
     w.WriteString("scene",     sceneName);
-    w.WriteUint("entityCount", static_cast<uint32_t>(m_world.EntityCount()));
+    w.WriteUint("entityCount", writtenCount);
     if (m_rootMetadataWriter)
         m_rootMetadataWriter(w);
     w.BeginArray("entities");
