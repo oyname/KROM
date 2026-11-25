@@ -18,6 +18,3 @@ public:
             ctx.AddForce({ 0.f, force, 0.f });   // wird intern zu Impuls force*dt
     }
 };
-// KROM_SCRIPT(Thruster)
-// KROM_FIELD(Thruster, force, Float)
-// KROM_FIELD(Thruster, useFixed, Bool)

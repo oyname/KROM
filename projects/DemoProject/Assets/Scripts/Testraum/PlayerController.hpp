@@ -14,9 +14,3 @@ public:
 
     void OnUpdate(engine::script::IScriptContext& ctx) override;
 };
-
-// KROM_SCRIPT(PlayerController)
-// KROM_FIELD(PlayerController, camera, Entity)
-// KROM_FIELD(PlayerController, walkSpeed, Float)
-// KROM_FIELD(PlayerController, runMultiplier, Float)
-// KROM_FIELD(PlayerController, jumpSpeed, Float)

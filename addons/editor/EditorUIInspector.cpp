@@ -31,6 +31,7 @@
 #include <array>
 #include <limits>
 #include "imgui_internal.h"
+#include <sstream>
 
 namespace engine::renderer::addons::editor {
 
@@ -721,6 +722,43 @@ static void RevealScriptAsset(EditorFrameContext& ctx, const std::string& classN
     ctx.state.consoleFocusRequest = false;
 }
 
+// Adds one script class to the entity (one undo step). Without a built factory
+// only the name and the header's field defaults are stored until the next build.
+static void AddScriptClassToEntity(EditorFrameContext& ctx, EntityID entity, const std::string& name)
+{
+    using namespace engine::script;
+
+    EditComponents<ScriptList>(ctx, "history.add_script", entity, [&] {
+        auto* sl = ctx.world.Get<ScriptList>(entity);
+        if (!sl)
+        {
+            ScriptList newList;
+            newList.SetOwnerEntity(entity);
+            ctx.world.Add<ScriptList>(entity, std::move(newList));
+            sl = ctx.world.Get<ScriptList>(entity);
+        }
+        if (!sl)
+            return;
+
+        if (ctx.scriptRegistry && ctx.scriptRegistry->Has(name))
+        {
+            sl->Add(name, entity, *ctx.scriptRegistry);
+            return;
+        }
+        sl->AddNameOnly(name);
+        ScriptInstance& inst = sl->Instances_Mutable().back();
+        for (const EditorScriptFieldMarker& field : FindCppScriptFields(ctx, name))
+        {
+            ScriptFieldValue value{};
+            value.type = field.type;
+            if (field.hasDefaultValue)
+                value = field.defaultValue;
+            inst.fieldValues[field.name] = std::move(value);
+        }
+        ctx.lastFileMessage = TranslateWithValue("script.added_build_needed", name);
+    });
+}
+
 static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
 {
     using namespace engine::script;
@@ -965,46 +1003,64 @@ static void DrawScriptSection(EditorFrameContext& ctx, EntityID entity)
 
         if (ImGui::BeginPopup("AddScriptPopup"))
         {
-            value_ui::TextDisabled(Translate("script.select_class"));
-            ImGui::Separator();
+            // Search box on top, the matching classes in a scrolling list below, so
+            // the popup stays the same size however many scripts the project has.
+            static char filter[64] = {};
+            constexpr float kListWidth = 280.f;
+            constexpr int kVisibleRows = 12;
 
-            for (const auto& name : scriptClassNames)
+            if (ImGui::IsWindowAppearing())
             {
-                if (ImGui::MenuItem(name.c_str()))
+                filter[0] = '\0';
+                ImGui::SetKeyboardFocusHere();
+            }
+            const std::string hint = std::string(ICON_LC_SEARCH "  ") + Translate("script.search_hint");
+            ImGui::SetNextItemWidth(kListWidth);
+            const bool enterPressed = ImGui::InputTextWithHint(
+                "##script_search", hint.c_str(), filter, sizeof(filter), ImGuiInputTextFlags_EnterReturnsTrue);
+
+            auto lower = [](std::string text) {
+                std::transform(text.begin(), text.end(), text.begin(),
+                    [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+                return text;
+            };
+            const std::string needle = lower(filter);
+            std::vector<const std::string*> matches;
+            for (const std::string& name : scriptClassNames)
+            {
+                if (needle.empty() || lower(name).find(needle) != std::string::npos)
+                    matches.push_back(&name);
+            }
+
+            const std::string* chosen = nullptr;
+            if (matches.empty())
+            {
+                value_ui::TextDisabled(Translate("script.search_none"));
+            }
+            else
+            {
+                const int rows = std::min(static_cast<int>(matches.size()), kVisibleRows);
+                const float listHeight = rows * ImGui::GetTextLineHeightWithSpacing() +
+                                         ImGui::GetStyle().WindowPadding.y;
+                if (ImGui::BeginChild("##script_list", ImVec2(kListWidth, listHeight)))
                 {
-                    EditComponents<ScriptList>(ctx, "history.add_script", entity, [&] {
-                        if (!sl)
-                        {
-                            engine::script::ScriptList newList;
-                            newList.SetOwnerEntity(entity);
-                            ctx.world.Add<ScriptList>(entity, std::move(newList));
-                            sl = ctx.world.Get<ScriptList>(entity);
-                        }
-                        if (sl)
-                        {
-                            const bool hasLiveFactory = ctx.scriptRegistry && ctx.scriptRegistry->Has(name);
-                            if (hasLiveFactory)
-                            {
-                                sl->Add(name, entity, *ctx.scriptRegistry);
-                            }
-                            else
-                            {
-                                sl->AddNameOnly(name);
-                                ScriptInstance& inst = sl->Instances_Mutable().back();
-                                for (const EditorScriptFieldMarker& field : FindCppScriptFields(ctx, name))
-                                {
-                                    ScriptFieldValue value{};
-                                    value.type = field.type;
-                                    if (field.hasDefaultValue)
-                                        value = field.defaultValue;
-                                    inst.fieldValues[field.name] = std::move(value);
-                                }
-                                ctx.lastFileMessage =
-                                    TranslateWithValue("script.added_build_needed", name);
-                            }
-                        }
-                    });
+                    for (size_t i = 0; i < matches.size(); ++i)
+                    {
+                        // While searching, the first match is the one Enter picks.
+                        const bool enterTarget = i == 0u && !needle.empty();
+                        if (ImGui::Selectable(matches[i]->c_str(), enterTarget))
+                            chosen = matches[i];
+                    }
                 }
+                ImGui::EndChild();
+                if (enterPressed)
+                    chosen = matches.front();
+            }
+
+            if (chosen)
+            {
+                AddScriptClassToEntity(ctx, entity, *chosen);
+                ImGui::CloseCurrentPopup();
             }
             ImGui::EndPopup();
         }
@@ -2694,9 +2750,19 @@ static void DrawMaterialSection(EditorFrameContext& ctx, EntityID entity)
 static bool HasPhysicsCollider(const ecs::World& world, EntityID entity)
 {
     const auto* obb = world.Get<OBBComponent>(entity);
-    return (obb && !obb->isTrigger) ||
-           world.Has<SphereColliderComponent>(entity) ||
-           world.Has<CapsuleColliderComponent>(entity);
+    const auto* collider = world.Get<ColliderComponent>(entity);
+    return (obb && !obb->isTrigger) || (collider && !collider->shapes.empty());
+}
+
+// Kollisionsformen direkt an der Entity (ColliderComponent + solide OBB).
+static uint32_t OwnColliderShapeCount(const ecs::World& world, EntityID entity)
+{
+    uint32_t count = 0u;
+    if (const auto* obb = world.Get<OBBComponent>(entity); obb && !obb->isTrigger)
+        ++count;
+    if (const auto* collider = world.Get<ColliderComponent>(entity))
+        count += static_cast<uint32_t>(collider->shapes.size());
+    return count;
 }
 
 static void CountChildColliders(const ecs::World& world, EntityID entity, uint32_t& count, uint32_t depth = 0u)
@@ -2708,8 +2774,7 @@ static void CountChildColliders(const ecs::World& world, EntityID entity, uint32
     {
         if (!world.IsAlive(child))
             continue;
-        if (HasPhysicsCollider(world, child))
-            ++count;
+        count += OwnColliderShapeCount(world, child);
         CountChildColliders(world, child, count, depth + 1u);
     }
 }
@@ -2752,10 +2817,9 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
     // Kollisionen dieses Koerpers (eigene + Kinder) und Hinweise.
     uint32_t childColliders = 0u;
     CountChildColliders(ctx.world, entity, childColliders);
-    const bool ownCollider = HasPhysicsCollider(ctx.world, entity);
-    const uint32_t total = childColliders + (ownCollider ? 1u : 0u);
-    value_ui::TextDisabled(Translate("physics.collider_counts"),
-                        total, ownCollider ? 1u : 0u, childColliders);
+    const uint32_t ownShapes = OwnColliderShapeCount(ctx.world, entity);
+    const uint32_t total = childColliders + ownShapes;
+    value_ui::TextDisabled(Translate("physics.collider_counts"), total, ownShapes, childColliders);
     const ImVec4 warnColor(1.f, 0.7f, 0.2f, 1.f);
     if (total == 0u)
         ImGui::TextColored(warnColor, Translate("physics.no_collider"));
@@ -2770,19 +2834,6 @@ static void DrawRigidBodySection(EditorFrameContext& ctx, EntityID entity)
     {
         value_ui::TextDisabled(Translate("physics.parent_position"));
     }
-    if (ImGui::SmallButton(TranslateLabel("physics.add_box_child", "+ Kollisions-Kind (Box)##rb_child_box").c_str()))
-    {
-        CreateColliderChildEntity(ctx, entity, ColliderChildShape::Box);
-        return;   // Selektion wechselt auf das neue Kind
-    }
-    ImGui::SameLine();
-    if (ImGui::SmallButton(TranslateLabel("physics.add_sphere_child", "+ Kollisions-Kind (Kugel)##rb_child_sphere").c_str()))
-    {
-        CreateColliderChildEntity(ctx, entity, ColliderChildShape::Sphere);
-        return;
-    }
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(Translate("physics.compound_tip"));
     ImGui::Separator();
 
     value_ui::DragFloat(TranslateLabel("physics.friction", "Reibung##rb_friction").c_str(), &rb->friction, 0.01f, 0.f, 10.f, "%.2f");
@@ -2821,20 +2872,223 @@ static void DrawColliderOwnerInfo(EditorFrameContext& ctx, EntityID entity, cons
     }
 }
 
-static void DrawSphereColliderSection(EditorFrameContext& ctx, EntityID entity)
+// Neue Form, an die Mesh-Bounds angepasst (ohne Bounds: Standardgroesse).
+static ColliderShape MakeFittedColliderShape(ColliderShapeType type, const BoundsComponent* bounds)
 {
-    auto* sphere = ctx.world.Get<SphereColliderComponent>(entity);
-    if (!sphere)
+    ColliderShape shape{};
+    shape.type = type;
+    if (!bounds)
+        return shape;
+    const math::Vec3 e = bounds->extentsLocal;
+    shape.centerOffset = bounds->centerLocal;
+    shape.halfExtents  = { std::max(0.001f, e.x), std::max(0.001f, e.y), std::max(0.001f, e.z) };
+    if (type == ColliderShapeType::Sphere)
+    {
+        shape.radius = std::max(0.001f, std::max({ e.x, e.y, e.z }));
+    }
+    else if (type == ColliderShapeType::Capsule)
+    {
+        shape.axis   = ColliderAxis::Y;
+        shape.radius = std::max(0.001f, std::max(e.x, e.z));
+        shape.height = std::max(shape.radius * 2.f, e.y * 2.f);
+    }
+    return shape;
+}
+
+// Typwechsel: Lage bleibt, Groesse wird sinngemaess uebernommen.
+static void ConvertColliderShape(ColliderShape& shape, ColliderShapeType type)
+{
+    if (shape.type == type)
+        return;
+    math::Vec3 half = shape.halfExtents;
+    if (shape.type == ColliderShapeType::Sphere)
+    {
+        half = { shape.radius, shape.radius, shape.radius };
+    }
+    else if (shape.type == ColliderShapeType::Capsule)
+    {
+        half = { shape.radius, shape.radius, shape.radius };
+        (&half.x)[static_cast<int>(shape.axis)] = std::max(shape.radius, shape.height * 0.5f);
+    }
+    shape.type = type;
+    shape.halfExtents = half;
+    if (type == ColliderShapeType::Sphere)
+    {
+        shape.radius = std::max({ half.x, half.y, half.z });
+    }
+    else if (type == ColliderShapeType::Capsule)
+    {
+        shape.axis   = ColliderAxis::Y;
+        shape.radius = std::max(half.x, half.z);
+        shape.height = std::max(shape.radius * 2.f, half.y * 2.f);
+    }
+}
+
+static const char* ColliderShapeLabel(ColliderShapeType type)
+{
+    switch (type)
+    {
+        case ColliderShapeType::Sphere:  return Translate("collider.shape_sphere");
+        case ColliderShapeType::Capsule: return Translate("collider.shape_capsule");
+        default:                         return Translate("collider.shape_box");
+    }
+}
+
+// Menueeintraege Box / Kugel / Kapsel; true + Typ, wenn einer gewaehlt wurde.
+static bool ColliderShapeTypeMenuItems(ColliderShapeType& outType)
+{
+    bool chosen = false;
+    for (const ColliderShapeType type : { ColliderShapeType::Box, ColliderShapeType::Sphere, ColliderShapeType::Capsule })
+    {
+        if (ImGui::MenuItem(ColliderShapeLabel(type)))
+        {
+            outType = type;
+            chosen = true;
+        }
+    }
+    return chosen;
+}
+
+// Fuegt eine passende Form hinzu (legt die Komponente bei Bedarf an) und
+// klappt sie im Inspector auf. Ein Undo-Schritt.
+static void AddColliderShape(EditorFrameContext& ctx, EntityID entity, ColliderShapeType type)
+{
+    const ColliderShape shape = MakeFittedColliderShape(type, ctx.world.Get<BoundsComponent>(entity));
+    int newIndex = 0;
+    EditComponents<ColliderComponent>(ctx, "history.add_collider_shape", entity, [&] {
+        if (auto* collider = ctx.world.Get<ColliderComponent>(entity))
+        {
+            collider->shapes.push_back(shape);
+            newIndex = static_cast<int>(collider->shapes.size()) - 1;
+        }
+        else
+        {
+            ColliderComponent fresh;
+            fresh.shapes.push_back(shape);
+            ctx.world.Add<ColliderComponent>(entity, std::move(fresh));
+        }
+    });
+    ctx.state.colliderEditShape = newIndex;
+}
+
+// Quaternion nach Euler-Winkeln (Grad), passend zu Quat::FromEulerDeg.
+static math::Vec3 ColliderQuatToEulerDeg(const math::Quat& q) noexcept
+{
+    const float sinPitch = 2.f * (q.w * q.x - q.y * q.z);
+    const float pitch = std::asin(std::clamp(sinPitch, -1.f, 1.f));
+    float yaw = 0.f, roll = 0.f;
+    if (std::abs(sinPitch) < 0.9999f)
+    {
+        yaw  = std::atan2(2.f * (q.x * q.z + q.w * q.y), 1.f - 2.f * (q.x * q.x + q.y * q.y));
+        roll = std::atan2(2.f * (q.x * q.y + q.w * q.z), 1.f - 2.f * (q.x * q.x + q.z * q.z));
+    }
+    else
+    {
+        yaw = std::atan2(-2.f * (q.x * q.z - q.w * q.y), 1.f - 2.f * (q.y * q.y + q.z * q.z));
+    }
+    return { pitch * math::RAD_TO_DEG, yaw * math::RAD_TO_DEG, roll * math::RAD_TO_DEG };
+}
+
+static void DrawColliderShapeFields(EditorFrameContext& ctx, EntityID entity, ColliderShape& shape,
+                                    int index, bool& discreteEdit)
+{
+    const std::string id = "##collider_" + std::to_string(index);
+
+    int type = static_cast<int>(shape.type);
+    const char* typeNames[] = { ColliderShapeLabel(ColliderShapeType::Box),
+                                ColliderShapeLabel(ColliderShapeType::Sphere),
+                                ColliderShapeLabel(ColliderShapeType::Capsule) };
+    if (value_ui::Combo((TranslateLabel("collider.shape", "Form") + id + "_type").c_str(), &type,
+                        typeNames, IM_ARRAYSIZE(typeNames)))
+    {
+        ConvertColliderShape(shape, static_cast<ColliderShapeType>(type));
+        discreteEdit = true;
+    }
+
+    switch (shape.type)
+    {
+        case ColliderShapeType::Box:
+        {
+            // Vollgroesse anzeigen, intern als halfExtents speichern
+            math::Vec3 size = shape.halfExtents * 2.f;
+            value_ui::RowLabel(Translate("physics.box_size"));
+            if (value_ui::DragFloat3((id + "_size").c_str(), &size.x, 0.01f, 0.001f, 10000.f, "%.3f"))
+            {
+                shape.halfExtents.x = std::max(0.001f, size.x * 0.5f);
+                shape.halfExtents.y = std::max(0.001f, size.y * 0.5f);
+                shape.halfExtents.z = std::max(0.001f, size.z * 0.5f);
+            }
+            math::Vec3 euler = ColliderQuatToEulerDeg(shape.orientation);
+            value_ui::RowLabel(Translate("collider.rotation"));
+            if (value_ui::DragFloat3((id + "_rot").c_str(), &euler.x, 0.5f, -360.f, 360.f, "%.1f"))
+                shape.orientation = math::Quat::FromEulerDeg(euler.x, euler.y, euler.z).Normalized();
+            break;
+        }
+        case ColliderShapeType::Sphere:
+            value_ui::DragFloat((TranslateLabel("field.radius", "Radius") + id + "_radius").c_str(),
+                                &shape.radius, 0.01f, 0.001f, 10000.f, "%.3f");
+            shape.radius = std::max(shape.radius, 0.001f);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(Translate("physics.sphere_scale_tip"));
+            break;
+        case ColliderShapeType::Capsule:
+        {
+            static const char* kAxisNames[] = { "X", "Y", "Z" };
+            int axis = static_cast<int>(shape.axis);
+            if (value_ui::Combo((TranslateLabel("physics.axis", "Achse") + id + "_axis").c_str(), &axis,
+                                kAxisNames, IM_ARRAYSIZE(kAxisNames)))
+            {
+                shape.axis = static_cast<ColliderAxis>(axis);
+                discreteEdit = true;
+            }
+            value_ui::DragFloat((TranslateLabel("field.radius", "Radius") + id + "_radius").c_str(),
+                                &shape.radius, 0.01f, 0.001f, 10000.f, "%.3f");
+            shape.radius = std::max(shape.radius, 0.001f);
+            value_ui::DragFloat((TranslateLabel("field.height", "Hoehe") + id + "_height").c_str(),
+                                &shape.height, 0.01f, 0.002f, 10000.f, "%.3f");
+            shape.height = std::max(shape.height, 0.002f);
+            if (ImGui::IsItemHovered())
+                ImGui::SetTooltip(Translate("physics.capsule_height_tip"));
+            break;
+        }
+    }
+
+    value_ui::RowLabel(Translate("physics.center_offset"));
+    value_ui::DragFloat3((id + "_center").c_str(), &shape.centerOffset.x, 0.01f, -10000.f, 10000.f, "%.3f");
+
+    if (ImGui::Button((TranslateLabel("physics.fit_mesh", "Aus Mesh berechnen") + id + "_fit").c_str()))
+    {
+        if (const auto* bounds = ctx.world.Get<BoundsComponent>(entity))
+        {
+            const ColliderShape fitted = MakeFittedColliderShape(shape.type, bounds);
+            shape.centerOffset = fitted.centerOffset;
+            shape.halfExtents  = fitted.halfExtents;
+            shape.radius       = fitted.radius;
+            shape.height       = fitted.height;
+            shape.orientation  = math::Quat::Identity();
+            if (shape.type == ColliderShapeType::Capsule)
+                shape.axis = fitted.axis;
+            discreteEdit = true;
+        }
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip(Translate("collider.fit_tip"));
+}
+
+static void DrawColliderSection(EditorFrameContext& ctx, EntityID entity)
+{
+    auto* collider = ctx.world.Get<ColliderComponent>(entity);
+    if (!collider)
         return;
 
-    const bool open = ComponentHeader(TranslateLabel("physics.sphere", "Kollision (Kugel)##sphere_hdr").c_str(), ComponentIcon::Collider);
-    if (BeginComponentContextMenu("##sphere_hdr_ctx"))
+    const bool open = ComponentHeader(TranslateLabel("component.collider", "Collider##collider_hdr").c_str(), ComponentIcon::Collider);
+    if (BeginComponentContextMenu("##collider_hdr_ctx"))
     {
-        DrawComponentClipboardMenuItems<SphereColliderComponent>(ctx, entity, "physics.sphere");
+        DrawComponentClipboardMenuItems<ColliderComponent>(ctx, entity, "component.collider");
         ImGui::Separator();
-        if (ImGui::MenuItem(TranslateLabel("physics.remove_sphere", "Kugel-Kollision entfernen").c_str()))
+        if (ImGui::MenuItem(TranslateLabel("collider.remove", "Collider entfernen").c_str()))
         {
-            EditComponents<SphereColliderComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<SphereColliderComponent>(entity); });
+            EditComponents<ColliderComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<ColliderComponent>(entity); });
             ImGui::EndPopup();
             return;
         }
@@ -2842,28 +3096,76 @@ static void DrawSphereColliderSection(EditorFrameContext& ctx, EntityID entity)
     }
     if (!open)
         return;
-    ComponentUndoScope<SphereColliderComponent> undo(ctx, entity, "sphere", "history.edit_sphere");
 
-    value_ui::Checkbox(TranslateLabel("physics.sphere_visible", "Sichtbar (Kugel anzeigen)##sphere_vis").c_str(), &sphere->showInEditor);
-    DrawColliderOwnerInfo(ctx, entity, "sphere");
+    ComponentUndoScope<ColliderComponent> undo(ctx, entity, "collider", "history.edit_collider");
+    bool discreteEdit = false;
+
+    if (value_ui::Checkbox(TranslateLabel("collider.visible", "Formen anzeigen##collider_vis").c_str(), &collider->showInEditor))
+        discreteEdit = true;
+    DrawColliderOwnerInfo(ctx, entity, "collider");
+    if (collider->shapes.empty())
+        ImGui::TextColored(ImVec4(1.f, 0.7f, 0.2f, 1.f), "%s", Translate("collider.no_shapes"));
     ImGui::Separator();
 
-    value_ui::DragFloat(TranslateLabel("field.radius", "Radius##sphere_radius").c_str(), &sphere->radius, 0.01f, 0.001f, 10000.f, "%.3f");
-    sphere->radius = std::max(sphere->radius, 0.001f);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(Translate("physics.sphere_scale_tip"));
-    value_ui::RowLabel(Translate("physics.center_offset"));
-    value_ui::DragFloat3("##sphere_center", &sphere->centerOffset.x, 0.01f, -10000.f, 10000.f, "%.3f");
-
-    ImGui::Separator();
-    if (ImGui::Button(TranslateLabel("physics.fit_mesh", "Aus Mesh berechnen##sphere_auto").c_str()))
+    int& active = ctx.state.colliderEditShape;
+    int removeIndex = -1;
+    for (int i = 0; i < static_cast<int>(collider->shapes.size()); ++i)
     {
-        if (const auto* b = ctx.world.Get<BoundsComponent>(entity))
+        ColliderShape& shape = collider->shapes[static_cast<size_t>(i)];
+        ImGui::PushID(i);
+        ImGui::SetNextItemOpen(i == active, ImGuiCond_Always);
+        const std::string title = std::to_string(i + 1) + ". " + ColliderShapeLabel(shape.type);
+        const bool shapeOpen = ImGui::TreeNodeEx("##shape", ImGuiTreeNodeFlags_SpanAvailWidth | ImGuiTreeNodeFlags_AllowOverlap |
+                                                 ImGuiTreeNodeFlags_FramePadding, "%s", title.c_str());
+        if (ImGui::IsItemToggledOpen())
+            active = shapeOpen ? i : -1;
+        if (ImGui::BeginPopupContextItem("##shape_ctx"))
         {
-            sphere->centerOffset = b->centerLocal;
-            sphere->radius = std::max(0.001f, std::max({b->extentsLocal.x, b->extentsLocal.y, b->extentsLocal.z}));
+            if (ImGui::MenuItem(Translate("collider.remove_shape")))
+                removeIndex = i;
+            ImGui::EndPopup();
         }
+        // Entfernen-Knopf rechts in der Zeile.
+        ImGui::SameLine(ImGui::GetContentRegionMax().x - ImGui::GetFrameHeight());
+        if (ImGui::SmallButton("x"))
+            removeIndex = i;
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", Translate("collider.remove_shape"));
+        if (shapeOpen)
+        {
+            DrawColliderShapeFields(ctx, entity, shape, i, discreteEdit);
+            ImGui::TreePop();
+        }
+        ImGui::PopID();
     }
+    if (removeIndex >= 0)
+    {
+        collider->shapes.erase(collider->shapes.begin() + removeIndex);
+        if (active == removeIndex)
+            active = -1;
+        else if (active > removeIndex)
+            --active;
+        discreteEdit = true;
+    }
+
+    if (ImGui::Button(TranslateLabel("collider.add_shape", "collider_add").c_str()))
+        ImGui::OpenPopup("##collider_add_popup");
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", Translate("collider.add_shape_tip"));
+    if (ImGui::BeginPopup("##collider_add_popup"))
+    {
+        ColliderShapeType type = ColliderShapeType::Box;
+        if (ColliderShapeTypeMenuItems(type))
+        {
+            collider->shapes.push_back(MakeFittedColliderShape(type, ctx.world.Get<BoundsComponent>(entity)));
+            active = static_cast<int>(collider->shapes.size()) - 1;
+            discreteEdit = true;
+        }
+        ImGui::EndPopup();
+    }
+
+    if (discreteEdit)
+        undo.CommitOnExit();
 }
 
 static void DrawCharacterControllerSection(EditorFrameContext& ctx, EntityID entity)
@@ -3682,47 +3984,6 @@ static void DrawParticleEmitterSection(EditorFrameContext& ctx, EntityID entity)
     if (discreteEdit) undo.CommitOnExit();
 }
 
-static void DrawCapsuleColliderSection(EditorFrameContext& ctx, EntityID entity)
-{
-    auto* capsule = ctx.world.Get<CapsuleColliderComponent>(entity);
-    if (!capsule)
-        return;
-
-    const bool open = ComponentHeader(TranslateLabel("physics.capsule", "Kollision (Kapsel)##capsule_hdr").c_str(), ComponentIcon::Collider);
-    if (BeginComponentContextMenu("##capsule_hdr_ctx"))
-    {
-        DrawComponentClipboardMenuItems<CapsuleColliderComponent>(ctx, entity, "physics.capsule");
-        ImGui::Separator();
-        if (ImGui::MenuItem(TranslateLabel("physics.remove_capsule", "Kapsel-Kollision entfernen").c_str()))
-        {
-            EditComponents<CapsuleColliderComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<CapsuleColliderComponent>(entity); });
-            ImGui::EndPopup();
-            return;
-        }
-        ImGui::EndPopup();
-    }
-    if (!open)
-        return;
-    ComponentUndoScope<CapsuleColliderComponent> undo(ctx, entity, "capsule", "history.edit_capsule");
-
-    value_ui::Checkbox(TranslateLabel("physics.capsule_visible", "Sichtbar (Kapsel anzeigen)##capsule_vis").c_str(), &capsule->showInEditor);
-    DrawColliderOwnerInfo(ctx, entity, "capsule");
-    ImGui::Separator();
-
-    static const char* kAxisNames[] = { "X", "Y", "Z" };
-    int axis = static_cast<int>(capsule->axis);
-    if (value_ui::Combo(TranslateLabel("physics.axis", "Achse##capsule_axis").c_str(), &axis, kAxisNames, IM_ARRAYSIZE(kAxisNames)))
-        capsule->axis = static_cast<CapsuleAxis>(axis);
-    value_ui::DragFloat(TranslateLabel("field.radius", "Radius##capsule_radius").c_str(), &capsule->radius, 0.01f, 0.001f, 10000.f, "%.3f");
-    capsule->radius = std::max(capsule->radius, 0.001f);
-    value_ui::DragFloat(TranslateLabel("field.height", "Hoehe##capsule_height").c_str(), &capsule->height, 0.01f, 0.002f, 10000.f, "%.3f");
-    capsule->height = std::max(capsule->height, 0.002f);
-    if (ImGui::IsItemHovered())
-        ImGui::SetTooltip(Translate("physics.capsule_height_tip"));
-    value_ui::RowLabel(Translate("physics.center_offset"));
-    value_ui::DragFloat3("##capsule_center", &capsule->centerOffset.x, 0.01f, -10000.f, 10000.f, "%.3f");
-}
-
 static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
 {
     // Sektion nur anzeigen wenn eine OBB-Komponente vorhanden ist.
@@ -3731,12 +3992,14 @@ static void DrawOBBSection(EditorFrameContext& ctx, EntityID entity)
     if (!obb)
         return;
 
-    const bool obbOpen = ComponentHeader(TranslateLabel("physics.box", "Kollision##obb_hdr").c_str(), ComponentIcon::Collider);
+    const bool obbOpen = ComponentHeader(TranslateLabel(obb->isTrigger ? "physics.trigger_zone" : "physics.box",
+                                                        "Kollision##obb_hdr").c_str(), ComponentIcon::Collider);
     if (BeginComponentContextMenu("##obb_hdr_ctx"))
     {
         DrawComponentClipboardMenuItems<OBBComponent>(ctx, entity, "physics.box");
         ImGui::Separator();
-        if (ImGui::MenuItem(TranslateLabel("physics.remove_box", "Kollision entfernen").c_str()))
+        if (ImGui::MenuItem(TranslateLabel(obb->isTrigger ? "physics.remove_trigger_zone" : "physics.remove_box",
+                                           "Kollision entfernen").c_str()))
         {
             EditComponents<OBBComponent>(ctx, "history.remove_component", entity, [&] { ctx.world.Remove<OBBComponent>(entity); });
             ImGui::EndPopup();
@@ -4188,6 +4451,62 @@ static void DrawEnvironmentInspector(EditorFrameContext& ctx)
 } // namespace
 
 namespace detail {
+
+namespace {
+// Single file: the browser's move payload. Several files: one path per line.
+constexpr const char* kScriptFilesPayload = "KROM_SCRIPT_FILES";
+
+bool IsCppScriptFile(const std::filesystem::path& path)
+{
+    const std::string ext = PathToUtf8(path.extension());
+    return ext == ".hpp" || ext == ".h" || ext == ".cpp" || ext == ".cxx";
+}
+} // namespace
+
+bool IsScriptFileDragActive()
+{
+    const ImGuiPayload* active = ImGui::GetDragDropPayload();
+    if (!active || !active->Data)
+        return false;
+    if (active->IsDataType(kScriptFilesPayload))
+        return true;
+    return active->IsDataType("KROM_MOVE_FILE") &&
+           IsCppScriptFile(PathFromUtf8(static_cast<const char*>(active->Data)));
+}
+
+bool AcceptScriptFileDrop(EditorFrameContext& ctx, EntityID entity)
+{
+    if (!IsScriptFileDragActive())
+        return false;
+    const ImGuiPayload* payload = ImGui::AcceptDragDropPayload(kScriptFilesPayload);
+    if (!payload)
+        payload = ImGui::AcceptDragDropPayload("KROM_MOVE_FILE");
+    if (!payload || !payload->Data)
+        return false;
+
+    // Header and source of one script may both be in the selection: add each class once.
+    std::vector<std::string> classNames;
+    std::istringstream lines(std::string(static_cast<const char*>(payload->Data)));
+    for (std::string line; std::getline(lines, line);)
+    {
+        if (line.empty())
+            continue;
+        for (std::string& name : FindCppScriptClassNamesInFile(ctx, PathFromUtf8(line)))
+        {
+            if (std::find(classNames.begin(), classNames.end(), name) == classNames.end())
+                classNames.push_back(std::move(name));
+        }
+    }
+
+    if (classNames.empty())
+    {
+        ctx.lastFileMessage = Translate("script.drop_no_class");
+        return true;
+    }
+    for (const std::string& name : classNames)
+        AddScriptClassToEntity(ctx, entity, name);
+    return true;
+}
 
 // ── Physik (Rigidbody) ───────────────────────────────────────────────────────
 // Regel wie im Physics-Addon: der oberste Rigidbody einer Hierarchie besitzt
@@ -4874,15 +5193,15 @@ void DrawInspector(EditorFrameContext& ctx)
         if (isInactive) ImGui::BeginDisabled();
 
         using SectionDrawer = void (*)(EditorFrameContext&, EntityID);
-        static constexpr std::array<SectionDrawer, 18> drawers = {
+        static constexpr std::array<SectionDrawer, 17> drawers = {
             DrawTransformSection, DrawCameraSection, DrawLightSection, DrawMeshSection,
-            DrawMaterialSlotsSection, DrawRigidBodySection, DrawOBBSection,
-            DrawSphereColliderSection, DrawCapsuleColliderSection, DrawCharacterControllerSection,
+            DrawMaterialSlotsSection, DrawRigidBodySection, DrawColliderSection,
+            DrawOBBSection, DrawCharacterControllerSection,
             DrawAudioSourceSection, DrawAudioListenerSection, DrawParticleEmitterSection,
             DrawMaterialSection, DrawScriptSection, DrawAnimatorSection, DrawReflectionProbeSection,
             DrawPostProcessVolumeSection
         };
-        static std::array<int, 18> order = {0, 1, 2, 16, 17, 3, 4, 5, 13, 15, 6, 7, 8, 9, 10, 11, 12, 14};
+        static std::array<int, 17> order = {0, 1, 2, 15, 16, 3, 4, 5, 12, 14, 6, 7, 8, 9, 10, 11, 13};
         // Each component as a card: subtle background, border and its type colour
         // as a stripe down the whole section. The background goes into a lower
         // draw channel because the section height is known only afterwards.
@@ -4976,6 +5295,15 @@ void DrawInspector(EditorFrameContext& ctx)
         }
     }
 
+    // Script files from the asset browser can be dropped anywhere on the inspector.
+    if (IsScriptFileDragActive() && !ctx.state.prefabModeReadOnly &&
+        ImGui::BeginDragDropTargetCustom(ImGui::GetCurrentWindow()->InnerRect,
+                                         ImGui::GetID("##InspectorScriptDrop")))
+    {
+        AcceptScriptFileDrop(ctx, selected);
+        ImGui::EndDragDropTarget();
+    }
+
     // "+" Button — am unteren Rand wenn Platz ist, aber niemals ueber Inhalt zeichnen.
     // Bei langen Inspector-Inhalten bleibt er im normalen Scroll-Flow unter den Controls.
     const float addButtonY = ImGui::GetWindowHeight() - 28.f;
@@ -5017,19 +5345,31 @@ void DrawInspector(EditorFrameContext& ctx)
             });
         if (hasAnimator) ImGui::EndDisabled();
 
-        const bool hasMesh     = ctx.world.Has<MeshComponent>(selected);
-        const bool hasOBB      = ctx.world.Has<OBBComponent>(selected);
         const bool hasMaterial = [&]() {
             auto* mc = ctx.world.Get<MaterialComponent>(selected);
             return mc && !mc->materialAssetPath.empty();
         }();
 
-        // Kollision (OBB) — auch ohne Mesh, z.B. fuer unsichtbare Trigger-Zonen
-        const bool obbDisabled = hasOBB;
-        if (obbDisabled) ImGui::BeginDisabled();
-        if (ImGui::MenuItem(TranslateLabel("physics.box", "Kollision (Box)").c_str()))
+        // Kollision: Formen (Box/Kugel/Kapsel, beliebig viele) an den Mesh-Bounds.
+        if (ImGui::BeginMenu(TranslateLabel("component.collider", "add_collider_menu").c_str()))
+        {
+            ColliderShapeType type = ColliderShapeType::Box;
+            if (ColliderShapeTypeMenuItems(type))
+                AddColliderShape(ctx, selected, type);
+            ImGui::EndMenu();
+        }
+        if (ImGui::IsItemHovered())
+            ImGui::SetTooltip("%s", Translate(ctx.world.Has<ColliderComponent>(selected)
+                                                  ? "collider.menu_add_tip" : "collider.menu_tip"));
+
+        // Trigger-Zone (OBB mit isTrigger) — auch ohne Mesh.
+        const bool hasOBB = ctx.world.Has<OBBComponent>(selected);
+        if (hasOBB) ImGui::BeginDisabled();
+        if (ImGui::MenuItem(TranslateLabel("physics.trigger_zone", "add_trigger_zone").c_str()))
         {
             OBBComponent fresh;
+            fresh.isTrigger = true;
+            fresh.showInEditor = true;
             if (const auto* b = ctx.world.Get<BoundsComponent>(selected))
             {
                 fresh.centerOffset = b->centerLocal;
@@ -5037,58 +5377,12 @@ void DrawInspector(EditorFrameContext& ctx)
             }
             EditComponents<OBBComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<OBBComponent>(selected, fresh); });
         }
-        if (obbDisabled) ImGui::EndDisabled();
+        if (hasOBB) ImGui::EndDisabled();
         if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        {
-            if (hasOBB)       ImGui::SetTooltip(Translate("physics.collider_exists"));
-            else if (hasMesh) ImGui::SetTooltip(Translate("physics.box_from_mesh"));
-            else              ImGui::SetTooltip(Translate("physics.default_box"));
-        }
-
-        // Kugel / Kapsel (Physics-Addon) — an die Mesh-Bounds angepasst.
-        const auto* addBounds = ctx.world.Get<BoundsComponent>(selected);
-        const bool hasSphere = ctx.world.Has<SphereColliderComponent>(selected);
-        if (hasSphere) ImGui::BeginDisabled();
-        if (ImGui::MenuItem(TranslateLabel("physics.sphere", "Kollision (Kugel)").c_str()))
-        {
-            SphereColliderComponent fresh;
-            if (addBounds)
-            {
-                fresh.centerOffset = addBounds->centerLocal;
-                fresh.radius = std::max(0.001f, std::max({addBounds->extentsLocal.x,
-                                                          addBounds->extentsLocal.y,
-                                                          addBounds->extentsLocal.z}));
-            }
-            fresh.showInEditor = true;
-            EditComponents<SphereColliderComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<SphereColliderComponent>(selected, fresh); });
-        }
-        if (hasSphere) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip(hasSphere ? Translate("physics.sphere_exists")
-                                        : Translate("physics.sphere_from_mesh"));
-
-        const bool hasCapsule = ctx.world.Has<CapsuleColliderComponent>(selected);
-        if (hasCapsule) ImGui::BeginDisabled();
-        if (ImGui::MenuItem(TranslateLabel("physics.capsule", "Kollision (Kapsel)").c_str()))
-        {
-            CapsuleColliderComponent fresh;
-            if (addBounds)
-            {
-                const math::Vec3 e = addBounds->extentsLocal;
-                fresh.centerOffset = addBounds->centerLocal;
-                fresh.axis   = CapsuleAxis::Y;
-                fresh.radius = std::max(0.001f, std::max(e.x, e.z));
-                fresh.height = std::max(fresh.radius * 2.f, e.y * 2.f);
-            }
-            fresh.showInEditor = true;
-            EditComponents<CapsuleColliderComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<CapsuleColliderComponent>(selected, fresh); });
-        }
-        if (hasCapsule) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip(hasCapsule ? Translate("physics.capsule_exists")
-                                         : Translate("physics.capsule_from_mesh"));
+            ImGui::SetTooltip("%s", Translate(hasOBB ? "physics.trigger_zone_exists" : "physics.trigger_zone_tip"));
 
         // Spielfigur — Kapsel um die Mesh-Bounds, Ursprung an den Fuessen.
+        const auto* addBounds = ctx.world.Get<BoundsComponent>(selected);
         const bool hasCharacter = ctx.world.Has<CharacterControllerComponent>(selected);
         if (hasCharacter) ImGui::BeginDisabled();
         if (ImGui::MenuItem(TranslateLabel("component.character", "Spielfigur (Character Controller)").c_str()))
@@ -5157,26 +5451,25 @@ void DrawInspector(EditorFrameContext& ctx)
         const bool hasRigidBody = ctx.world.Has<RigidBodyComponent>(selected);
         if (hasRigidBody) ImGui::BeginDisabled();
         if (ImGui::MenuItem(TranslateLabel("component.rigidbody", "Rigidbody").c_str()))
-        EditComponents<OBBComponent, RigidBodyComponent>(ctx, "history.add_rigidbody", selected, [&]
+        EditComponents<ColliderComponent, RigidBodyComponent>(ctx, "history.add_rigidbody", selected, [&]
         {
             uint32_t childColliders = 0u;
             CountChildColliders(ctx.world, selected, childColliders);
             if (!HasPhysicsCollider(ctx.world, selected) && childColliders == 0u)
             {
-                if (auto* obb = ctx.world.Get<OBBComponent>(selected))
+                const ColliderShape box = MakeFittedColliderShape(ColliderShapeType::Box,
+                                                                  ctx.world.Get<BoundsComponent>(selected));
+                if (auto* collider = ctx.world.Get<ColliderComponent>(selected))
                 {
-                    obb->isTrigger = false;
+                    collider->shapes.push_back(box);
                 }
                 else
                 {
-                    OBBComponent fresh;
-                    if (const auto* b = ctx.world.Get<BoundsComponent>(selected))
-                    {
-                        fresh.centerOffset = b->centerLocal;
-                        fresh.halfExtents  = b->extentsLocal;
-                    }
-                    ctx.world.Add<OBBComponent>(selected, fresh);
+                    ColliderComponent fresh;
+                    fresh.shapes.push_back(box);
+                    ctx.world.Add<ColliderComponent>(selected, std::move(fresh));
                 }
+                ctx.state.colliderEditShape = 0;
             }
             ctx.world.Add<RigidBodyComponent>(selected, RigidBodyComponent{});
         });
@@ -5187,16 +5480,7 @@ void DrawInspector(EditorFrameContext& ctx)
             else              ImGui::SetTooltip(Translate("physics.dynamic_help"));
         }
 
-        // Zusammengesetzte Formen: weitere Collider als Kind-Objekte.
         ImGui::Separator();
-        if (ImGui::MenuItem(TranslateLabel("physics.box_child", "Kollisions-Kind (Box)").c_str()))
-            CreateColliderChildEntity(ctx, selected, ColliderChildShape::Box);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(Translate("physics.box_child_tip"));
-        if (ImGui::MenuItem(TranslateLabel("physics.sphere_child", "Kollisions-Kind (Kugel)").c_str()))
-            CreateColliderChildEntity(ctx, selected, ColliderChildShape::Sphere);
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip(Translate("physics.sphere_child_tip"));
 
         // Material
         if (hasMaterial) ImGui::BeginDisabled();

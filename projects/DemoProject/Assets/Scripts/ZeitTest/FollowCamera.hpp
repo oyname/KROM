@@ -15,7 +15,3 @@ public:
             ctx.SetPosition(ctx.GetPosition(target) + offset);
     }
 };
-
-// KROM_SCRIPT(FollowCamera)
-// KROM_FIELD(FollowCamera, target, Entity)
-// KROM_FIELD(FollowCamera, offset, Vec3)

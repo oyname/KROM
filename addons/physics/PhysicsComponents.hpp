@@ -9,8 +9,8 @@
 //     Alle Collider an ihr und an ihren Kindern (ohne eigenen Rigidbody)
 //     werden zu einer gemeinsamen Form zusammengefasst.
 //   • Collider ohne Rigidbody in der Hierarchie sind statische Hindernisse.
-//   • Box-Collider ist das Core-OBBComponent (isTrigger = false); Kugel und
-//     Kapsel liegen hier im Addon.
+//   • Die Formen (Box, Kugel, Kapsel, beliebig viele) liegen im Core-
+//     ColliderComponent; Trigger-Zonen bleiben OBBComponent mit isTrigger.
 // =============================================================================
 #include "core/Math.hpp"
 #include "ecs/ComponentMeta.hpp"
@@ -43,26 +43,6 @@ struct RigidBodyComponent
     bool operator==(const RigidBodyComponent&) const = default;
 };
 
-struct SphereColliderComponent
-{
-    math::Vec3 centerOffset{ 0.f, 0.f, 0.f };
-    float      radius       = 0.5f;   // bei ungleichmaessiger Skalierung: groesste Achse
-    bool       showInEditor = false;
-    bool operator==(const SphereColliderComponent&) const = default;
-};
-
-enum class CapsuleAxis : uint8_t { X = 0, Y = 1, Z = 2 };
-
-struct CapsuleColliderComponent
-{
-    math::Vec3  centerOffset{ 0.f, 0.f, 0.f };
-    float       radius       = 0.5f;
-    float       height       = 2.f;   // Gesamthoehe inklusive beider Halbkugeln
-    CapsuleAxis axis         = CapsuleAxis::Y;
-    bool        showInEditor = false;
-    bool operator==(const CapsuleColliderComponent&) const = default;
-};
-
 // Spielfigur (Jolt CharacterVirtual): laeuft ueber Boden, Schraegen und Stufen,
 // statt wie ein Rigidbody zu rollen oder zu kippen. Form ist eine aufrechte
 // Kapsel mit dem Entity-Ursprung an den Fuessen. Gesteuert wird per Script
@@ -86,8 +66,6 @@ inline void RegisterPhysicsComponents(ecs::ComponentMetaRegistry& registry)
 {
     using namespace ecs;
     RegisterComponent<RigidBodyComponent>(registry, "RigidBodyComponent");
-    RegisterComponent<SphereColliderComponent>(registry, "SphereColliderComponent");
-    RegisterComponent<CapsuleColliderComponent>(registry, "CapsuleColliderComponent");
     RegisterComponent<CharacterControllerComponent>(registry, "CharacterControllerComponent");
 }
 

@@ -183,10 +183,8 @@ void ApplyRecordComponents(ecs::World& world,
 
     if (record.rigidBody)
         world.Add<RigidBodyComponent>(entity, *record.rigidBody);
-    if (record.sphereCollider)
-        world.Add<SphereColliderComponent>(entity, *record.sphereCollider);
-    if (record.capsuleCollider)
-        world.Add<CapsuleColliderComponent>(entity, *record.capsuleCollider);
+    if (record.collider)
+        world.Add<ColliderComponent>(entity, *record.collider);
     if (record.characterController)
         world.Add<CharacterControllerComponent>(entity, *record.characterController);
     if (record.audioSource)
@@ -523,16 +521,10 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
         physics::WriteRigidBodyFields(w, *record.rigidBody);
         w.EndObject();
     }
-    if (record.sphereCollider)
+    if (record.collider)
     {
-        w.BeginObject("sphereCollider");
-        physics::WriteSphereColliderFields(w, *record.sphereCollider);
-        w.EndObject();
-    }
-    if (record.capsuleCollider)
-    {
-        w.BeginObject("capsuleCollider");
-        physics::WriteCapsuleColliderFields(w, *record.capsuleCollider);
+        w.BeginObject("collider");
+        serialization::WriteColliderFields(w, *record.collider);
         w.EndObject();
     }
     if (record.characterController)
@@ -692,10 +684,23 @@ void WriteRecord(serialization::JsonWriter& w, const PrefabEntityRecord& record)
     if (const auto* v = OptionalObjectField(value, "loopAnimation")) record.loopAnimation = v->AsBool();
     if (const auto* v = value.Get("rigidBody"); v && v->IsObject())
         physics::ReadRigidBodyFields(*v, record.rigidBody.emplace());
+    if (const auto* v = value.Get("collider"); v && v->IsObject())
+        serialization::ReadColliderFields(*v, record.collider.emplace());
+    // Older prefabs: solid OBB, sphere and capsule were separate components.
+    if (record.addObb && !record.obbIsTrigger)
+    {
+        OBBComponent legacy{};
+        legacy.centerOffset = record.obbCenterOffset;
+        legacy.halfExtents  = record.obbHalfExtents;
+        legacy.orientation  = record.obbOrientation;
+        legacy.showInEditor = record.showObbInEditor;
+        serialization::AppendLegacyBoxCollider(legacy, record.collider ? *record.collider : record.collider.emplace());
+        record.addObb = false;
+    }
     if (const auto* v = value.Get("sphereCollider"); v && v->IsObject())
-        physics::ReadSphereColliderFields(*v, record.sphereCollider.emplace());
+        serialization::AppendLegacySphereCollider(*v, record.collider ? *record.collider : record.collider.emplace());
     if (const auto* v = value.Get("capsuleCollider"); v && v->IsObject())
-        physics::ReadCapsuleColliderFields(*v, record.capsuleCollider.emplace());
+        serialization::AppendLegacyCapsuleCollider(*v, record.collider ? *record.collider : record.collider.emplace());
     if (const auto* v = value.Get("characterController"); v && v->IsObject())
         physics::ReadCharacterControllerFields(*v, record.characterController.emplace());
     if (const auto* v = value.Get("audioSource"); v && v->IsObject())
@@ -1133,10 +1138,8 @@ PrefabAsset BuildPrefabFromWorldEntity(
 
         if (const auto* rb = world.Get<RigidBodyComponent>(entity))
             record.rigidBody = *rb;
-        if (const auto* sphere = world.Get<SphereColliderComponent>(entity))
-            record.sphereCollider = *sphere;
-        if (const auto* capsule = world.Get<CapsuleColliderComponent>(entity))
-            record.capsuleCollider = *capsule;
+        if (const auto* collider = world.Get<ColliderComponent>(entity))
+            record.collider = *collider;
         if (const auto* character = world.Get<CharacterControllerComponent>(entity))
             record.characterController = *character;
         if (const auto* source = world.Get<AudioSourceComponent>(entity))

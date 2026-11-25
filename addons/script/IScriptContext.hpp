@@ -265,7 +265,8 @@ public:
     [[nodiscard]] EntityID GetRoot(EntityID entity = NULL_ENTITY);
 
     // ── Kollisionsabfragen ───────────────────────────────────────────────────
-    // Arbeiten auf Box-Kollisionen (OBBComponent ohne Trigger) und Mesh-Bounds.
+    // Arbeiten auf den umschliessenden Boxen der Kollisionsformen (Collider bzw.
+    // OBBComponent ohne Trigger) und sonst den Mesh-Bounds.
     // Ergebnis-Entities sind Hierarchie-Wurzeln (siehe GetRoot). ignoreSelf
     // blendet die eigene Hierarchie aus.
     bool Raycast(const math::Vec3& origin, const math::Vec3& direction, float maxDistance,
@@ -276,7 +277,7 @@ public:
                                                    bool ignoreSelf = true);
 
     // Wie Raycast, aber ueber die Physik gegen die exakten Kollisionsformen
-    // (gedrehte Boxen, Kugeln, Kapseln, Kollisions-Kinder, Figuren). Trifft nur
+    // (gedrehte Boxen, Kugeln, Kapseln, auch an Kindern, Figuren). Trifft nur
     // Objekte mit Kollision, keine reinen Meshes. outHit.entity = Koerper-Entity
     // (Rigidbody bzw. statische Kollision). ignoreSelf blendet den Koerper der
     // Hierarchie-Wurzel dieses Scripts aus. false ohne Physik.

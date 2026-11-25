@@ -2384,7 +2384,22 @@ struct EditorLoadingSmokeTest final : IAppScene
                     if (const auto* name = app.m_world->Get<NameComponent>(e); name && name->name == wanted)
                         app.m_editorFrameCtx->state.selectedEntity = e;
                 });
+        // KROM_PERF_SCENE=<name>: switch to this scene first.
+        // KROM_PERF_PLAY=1: start Play before measuring (scripts, spawned prefabs).
+        if (frames == 5)
+            if (const char* scene = std::getenv("KROM_PERF_SCENE"))
+                Check(app.m_editorFrameCtx->switchEditorScene(scene, false), "perf scene requested");
+        if (frames == 20 && std::getenv("KROM_PERF_PLAY"))
+        {
+            const auto playStart = std::chrono::steady_clock::now();
+            Check(app.BeginEditorPlay(), "perf Play started");
+            std::printf("PERF BeginEditorPlay=%.0f ms\n",
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - playStart).count());
+        }
         const auto now = std::chrono::steady_clock::now();
+        if (frames == 21 || frames == 22)
+            std::printf("PERF frame %d after Play took %.0f ms\n", frames - 1,
+                std::chrono::duration<double, std::milli>(now - perfLast).count());
         if (perfFirstFrameMs < 0.0)
             perfFirstFrameMs = std::chrono::duration<double, std::milli>(now - perfProcessStart).count();
         if (frames == kWarmup)
@@ -2422,6 +2437,32 @@ struct EditorLoadingSmokeTest final : IAppScene
                 static_cast<double>(perfDescriptorUpdates) / kMeasured,
                 static_cast<double>(perfDescriptorBinds) / kMeasured,
                 perfFirstFrameMs, perfWarmupEndMs);
+            {
+                // CPU split of the last frame: the app segments of the profiler window
+                // and the renderer stages inside the render tick.
+                const auto& s = context.renderLoop.GetRenderSystem().GetStats();
+                const auto& t = app.m_editorFrameCtx->appCpuTimings;
+                uint32_t alive = 0u;
+                app.m_world->ForEachAlive([&](EntityID) { ++alive; });
+                std::printf("PERF cpu update=%.2f assets=%.2f views=%.2f gizmos=%.2f particles=%.2f renderTick=%.2f ms\n",
+                    t[0], t[1], t[2], t[3], t[4], t[5]);
+                std::printf("PERF render prepare=%.2f (shaders=%.2f materials=%.2f) buildGraph=%.2f uploads=%.2f"
+                            " execute=%.2f (record=%.2f submit=%.2f present=%.2f) parallel=%.2f ms\n",
+                    s.prepareFrameMs, s.collectShadersMs, s.collectMaterialsMs, s.buildGraphMs,
+                    s.collectUploadsMs + s.commitUploadsMs, s.executeMs, s.executeRecordMs,
+                    s.executeSubmitMs, s.executePresentMs, s.parallelSectionMs);
+                std::printf("PERF opaque setup=%.2f material=%.2f (%u binds) draw=%.2f (%u draws) ms\n",
+                    s.opaqueCpu.setupMs, s.opaqueCpu.materialMs, s.opaqueCpu.materialBinds,
+                    s.opaqueCpu.drawMs, s.opaqueCpu.draws);
+                for (const auto& pass : s.slowestPasses)
+                    if (pass.name[0] != '\0')
+                        std::printf("PERF pass %s cpu=%.2f ms\n", pass.name.data(), pass.cpuMs);
+                std::printf("PERF scene entities=%u proxies=%u visible=%u opaque=%u shadow=%u transparent=%u"
+                            " instancedDraws=%u instancedObjects=%u uploaded=%llu KB\n",
+                    alive, s.totalProxyCount, s.visibleProxyCount, s.opaqueDraws, s.shadowDraws,
+                    s.transparentDraws, s.instancedDraws, s.instancedObjects,
+                    static_cast<unsigned long long>(s.uploadedBytes / 1024u));
+            }
             if (std::getenv("KROM_PERF_GPU_PASSES"))
             {
                 // Smoothed GPU time per pass (KROM_PERF_GPU_PASSES=1).

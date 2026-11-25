@@ -4,6 +4,7 @@
 // NEU: JsonParser + SceneDeserializer
 // =============================================================================
 #include "serialization/SceneSerializer.hpp"
+#include <algorithm>
 #include <charconv>
 #include <cstdio>
 #include <cstring>
@@ -289,6 +290,136 @@ void SceneSerializer::RegisterDefaultHandlers()
         w.WriteBool("isTrigger",    c.isTrigger);
         w.EndObject();
     });
+    RegisterSerializer<ColliderComponent>([](JsonWriter& w,const ColliderComponent& c){
+        w.BeginObject(); w.WriteString("type","ColliderComponent");
+        WriteColliderFields(w, c);
+        w.EndObject();
+    });
+}
+
+// =============================================================================
+// ColliderComponent fields
+// =============================================================================
+
+namespace {
+
+void ReadShapeFloat(const JsonValue& v, const char* key, float& out)
+{
+    if (const auto* n = v.Get(key); n && n->IsNumber())
+        out = n->AsFloat();
+}
+
+void ReadShapeVec3(const JsonValue& v, const char* key, math::Vec3& out)
+{
+    if (const auto* n = v.Get(key); n && n->IsArray() && n->arrayVal.size() >= 3u)
+        out = n->AsVec3();
+}
+
+int ReadShapeInt(const JsonValue& v, const char* key, int fallback, int maxValue)
+{
+    if (const auto* n = v.Get(key); n && n->IsNumber())
+        return std::clamp(n->AsInt(), 0, maxValue);
+    return fallback;
+}
+
+bool ReadShowInEditor(const JsonValue& v)
+{
+    const auto* n = v.Get("showInEditor");
+    return n && n->IsBool() && n->AsBool();
+}
+
+} // namespace
+
+void WriteColliderFields(JsonWriter& w, const ColliderComponent& c)
+{
+    w.WriteBool("showInEditor", c.showInEditor);
+    w.BeginArray("shapes");
+    for (const ColliderShape& s : c.shapes)
+    {
+        w.BeginObject();
+        w.WriteInt("shape", static_cast<int>(s.type));
+        w.WriteVec3("centerOffset", s.centerOffset);
+        w.WriteQuat("orientation", s.orientation);
+        switch (s.type)
+        {
+            case ColliderShapeType::Box:
+                w.WriteVec3("halfExtents", s.halfExtents);
+                break;
+            case ColliderShapeType::Sphere:
+                w.WriteFloat("radius", s.radius);
+                break;
+            case ColliderShapeType::Capsule:
+                w.WriteFloat("radius", s.radius);
+                w.WriteFloat("height", s.height);
+                w.WriteInt("axis", static_cast<int>(s.axis));
+                break;
+        }
+        w.EndObject();
+    }
+    w.EndArray();
+}
+
+void ReadColliderFields(const JsonValue& v, ColliderComponent& c)
+{
+    if (const auto* n = v.Get("showInEditor"); n && n->IsBool())
+        c.showInEditor = n->AsBool();
+    const auto* shapes = v.Get("shapes");
+    if (!shapes || !shapes->IsArray())
+        return;
+    c.shapes.clear();
+    for (const JsonValue& sv : shapes->arrayVal)
+    {
+        if (!sv.IsObject())
+            continue;
+        ColliderShape s{};
+        s.type = static_cast<ColliderShapeType>(ReadShapeInt(sv, "shape", 0, 2));
+        ReadShapeVec3(sv, "centerOffset", s.centerOffset);
+        if (const auto* q = sv.Get("orientation"); q && q->IsArray())
+            s.orientation = q->AsQuat().Normalized();
+        ReadShapeVec3(sv, "halfExtents", s.halfExtents);
+        ReadShapeFloat(sv, "radius", s.radius);
+        ReadShapeFloat(sv, "height", s.height);
+        s.axis = static_cast<ColliderAxis>(ReadShapeInt(sv, "axis", 1, 2));
+        c.shapes.push_back(s);
+    }
+}
+
+void AppendLegacyBoxCollider(const OBBComponent& obb, ColliderComponent& c)
+{
+    ColliderShape s{};
+    s.type         = ColliderShapeType::Box;
+    s.centerOffset = obb.centerOffset;
+    s.orientation  = obb.orientation;
+    s.halfExtents  = obb.halfExtents;
+    if (c.shapes.empty())
+        c.showInEditor = obb.showInEditor;
+    else
+        c.showInEditor = c.showInEditor || obb.showInEditor;
+    c.shapes.push_back(s);
+}
+
+void AppendLegacySphereCollider(const JsonValue& v, ColliderComponent& c)
+{
+    ColliderShape s{};
+    s.type = ColliderShapeType::Sphere;
+    ReadShapeVec3(v, "centerOffset", s.centerOffset);
+    ReadShapeFloat(v, "radius", s.radius);
+    const bool show = ReadShowInEditor(v);
+    c.showInEditor = c.shapes.empty() ? show : (c.showInEditor || show);
+    c.shapes.push_back(s);
+}
+
+void AppendLegacyCapsuleCollider(const JsonValue& v, ColliderComponent& c)
+{
+    ColliderShape s{};
+    s.type = ColliderShapeType::Capsule;
+    ReadShapeVec3(v, "centerOffset", s.centerOffset);
+    ReadShapeFloat(v, "radius", s.radius);
+    ReadShapeFloat(v, "height", s.height);
+    s.axis = static_cast<ColliderAxis>(ReadShapeInt(v, "axis", 1, 2));
+    const bool show = ReadShowInEditor(v);
+    c.showInEditor = c.shapes.empty() ? show : (c.showInEditor || show);
+    c.shapes.push_back(s);
 }
 
 // BUGFIX: ForEachAlive statt View<NameComponent>
@@ -402,6 +533,29 @@ void SceneDeserializer::RegisterDefaultHandlers()
         if (const auto* t=v.Get("isTrigger"))    obb.isTrigger   =t->AsBool();
         w.SetComponent<OBBComponent>(id,obb);
     });
+    RegisterHandler<ColliderComponent>([](const JsonValue& v,ecs::World& w,EntityID id){
+        // Appends to shapes a legacy component of the same entity may have added.
+        ColliderComponent loaded{};
+        ReadColliderFields(v, loaded);
+        ColliderComponent collider = w.Get<ColliderComponent>(id) ? *w.Get<ColliderComponent>(id) : ColliderComponent{};
+        if (collider.shapes.empty())
+            collider.showInEditor = loaded.showInEditor;
+        collider.shapes.insert(collider.shapes.end(), loaded.shapes.begin(), loaded.shapes.end());
+        w.SetComponent<ColliderComponent>(id, std::move(collider));
+    });
+    // Older files: sphere and capsule were physics-addon components.
+    m_handlers["SphereColliderComponent"]=[](const JsonValue& v,ecs::World& w,EntityID id,
+                                              const std::unordered_map<uint32_t,EntityID>&){
+        ColliderComponent collider = w.Get<ColliderComponent>(id) ? *w.Get<ColliderComponent>(id) : ColliderComponent{};
+        AppendLegacySphereCollider(v, collider);
+        w.SetComponent<ColliderComponent>(id, std::move(collider));
+    };
+    m_handlers["CapsuleColliderComponent"]=[](const JsonValue& v,ecs::World& w,EntityID id,
+                                               const std::unordered_map<uint32_t,EntityID>&){
+        ColliderComponent collider = w.Get<ColliderComponent>(id) ? *w.Get<ColliderComponent>(id) : ColliderComponent{};
+        AppendLegacyCapsuleCollider(v, collider);
+        w.SetComponent<ColliderComponent>(id, std::move(collider));
+    };
     // ParentComponent: braucht ID-Remapping
     m_handlers["ParentComponent"]=[](const JsonValue& v,ecs::World& w,EntityID id,
                                       const std::unordered_map<uint32_t,EntityID>& remap){
@@ -495,6 +649,24 @@ DeserializeResult SceneDeserializer::DeserializeFromValue(const JsonValue& root)
             it->second(fake,m_world,pp.newId,remap);
             ++result.componentsRead;
         }
+    }
+
+    // Older scenes: a solid OBB was the box collider. Only whole scenes are
+    // migrated; single components (editor undo) load exactly as stored.
+    for (const auto& [oldId, id] : remap)
+    {
+        const auto* obb = m_world.Get<OBBComponent>(id);
+        if (!obb || obb->isTrigger)
+            continue;
+        ColliderComponent collider{};
+        AppendLegacyBoxCollider(*obb, collider);
+        if (const auto* existing = m_world.Get<ColliderComponent>(id))
+        {
+            collider.showInEditor = collider.showInEditor || existing->showInEditor;
+            collider.shapes.insert(collider.shapes.end(), existing->shapes.begin(), existing->shapes.end());
+        }
+        m_world.Remove<OBBComponent>(id);
+        m_world.SetComponent<ColliderComponent>(id, std::move(collider));
     }
 
     result.entityRemap = std::move(remap);

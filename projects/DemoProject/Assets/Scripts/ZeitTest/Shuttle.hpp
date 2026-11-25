@@ -24,7 +24,3 @@ public:
             ctx.SetVelocity({ speed, 0.f, 0.f });
     }
 };
-
-// KROM_SCRIPT(Shuttle)
-// KROM_FIELD(Shuttle, speed, Float)
-// KROM_FIELD(Shuttle, range, Float)

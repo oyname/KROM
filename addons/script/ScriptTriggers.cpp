@@ -64,7 +64,7 @@ void ScriptTriggerSystem::Update(ecs::World& world, const ScriptServices& servic
         // Gegenseite: Box-Kollisionen haben Vorrang vor Mesh-Bounds (wie SceneQueries::BuildColliders)
         std::vector<Collider> colliders;
         world.View<BoundsComponent>([&](EntityID id, const BoundsComponent&) {
-            if (world.Has<OBBComponent>(id))
+            if (world.Has<OBBComponent>(id) || world.Has<ColliderComponent>(id))
                 return;
             math::Vec3 center{};
             math::Vec3 extents{};
@@ -77,6 +77,14 @@ void ScriptTriggerSystem::Update(ecs::World& world, const ScriptServices& servic
             if (const auto* transform = world.Get<WorldTransformComponent>(id))
                 colliders.push_back({RootOf(world, id),
                     collision::ComputeWorldAABB(obb, CurrentWorldTransform(world, id, *transform))});
+        });
+        world.View<ColliderComponent>([&](EntityID id, const ColliderComponent& collider) {
+            const auto* transform = world.Get<WorldTransformComponent>(id);
+            if (!transform)
+                return;
+            collision::AABB box{};
+            if (collision::ComputeWorldAABB(collider, CurrentWorldTransform(world, id, *transform), box))
+                colliders.push_back({RootOf(world, id), box});
         });
 
         for (const auto& [trigger, triggerBox] : triggers)

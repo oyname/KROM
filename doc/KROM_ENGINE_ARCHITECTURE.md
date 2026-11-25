@@ -623,8 +623,10 @@ physics commands. Runtime services reach the context through `ScriptServices`; e
 service is optional, and without it the helpers return neutral values. This keeps
 scripts testable without a running engine.
 
-Project scripts are discovered by the editor through `KROM_SCRIPT` / `KROM_FIELD`
-markers and registered via the generated `KromRegisterGameScripts()` function.
+Project scripts are discovered by the editor from their declarations (a class deriving
+from `ComponentScript`, its public variables as fields; `KROM_SCRIPT` / `KROM_FIELD`
+marker comments remain as the explicit form) and registered via the generated
+`KromRegisterGameScripts()` function.
 
 ### Physics (`addons/physics`)
 

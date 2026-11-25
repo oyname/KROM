@@ -399,7 +399,8 @@ struct BoundsComponent
 ```
 
 Other core components: `ParentComponent`, `ChildrenComponent`, `NameComponent`,
-`GuidComponent`, `OBBComponent`, `ActiveComponent`, `TagComponent`.
+`GuidComponent`, `OBBComponent`, `ColliderComponent` (see section 16), `ActiveComponent`,
+`TagComponent`.
 
 ---
 
@@ -861,6 +862,13 @@ public:
 
     // Events from other scripts (ctx.SendEvent / ctx.BroadcastEvent).
     virtual void OnEvent(IScriptContext&, const ScriptEvent& event) {}
+
+    // Once per frame after all OnUpdate calls, the physics (including the
+    // interpolated pose) and animation, before the TransformSystem. The place
+    // for cameras and anything that follows a physics-driven or animated
+    // object: GetWorldPosition/GetRotation return its pose of this frame.
+    // ctx.DeltaTime() as in OnUpdate. Only for started scripts.
+    virtual void OnLateUpdate(IScriptContext&) {}
 };
 ```
 
@@ -947,15 +955,35 @@ public:
             ctx.Destroy();
     }
 };
-
-// KROM_SCRIPT(Jumper)
-// KROM_FIELD(Jumper, jumpImpulse, Float)
 ```
 
 ### Registration
 
-The editor scans project scripts for `KROM_SCRIPT` / `KROM_FIELD` markers and generates
-`generated/ScriptBindings.cpp`, which defines `KromRegisterGameScripts`. By hand:
+The editor reads the script headers (`.hpp` / `.h`) under `Assets/Scripts` as text:
+
+- A class at global scope that derives directly from `engine::script::ComponentScript`
+  is a script.
+- Each public variable of type `float`, `int`, `bool`, `engine::math::Vec3`,
+  `std::string` or `engine::EntityID` is a field: it is shown in the inspector and
+  saved with the scene. Private and protected variables are not fields.
+- `KROM_HIDE float cached = 0.f;` keeps a public variable from becoming a field.
+- `KROM_PREFAB std::string effect;` makes a string a prefab reference.
+
+This is a text scan, not a compiler: declare one variable per statement
+(`float a, b;` is skipped), and use the types by name rather than through an alias.
+Classes inside a namespace and classes that derive from a script base class of your
+own are not found automatically.
+
+The older marker comments still work and cover those cases. A class that has them
+gets exactly the fields they list:
+
+```cpp
+// KROM_SCRIPT(Jumper)
+// KROM_FIELD(Jumper, jumpImpulse, Float)
+```
+
+From this the editor generates `generated/ScriptBindings.cpp`, which defines
+`KromRegisterGameScripts`. By hand:
 
 ```cpp
 script::ScriptRegistry registry;
@@ -1008,31 +1036,41 @@ struct RigidBodyComponent
     bool  lockRotationX = false, lockRotationY = false, lockRotationZ = false;
 };
 
-struct SphereColliderComponent
-{
-    Vec3  centerOffset;
-    float radius       = 0.5f;      // non-uniform scale: largest axis
-    bool  showInEditor = false;
-};
-
-enum class CapsuleAxis : uint8_t { X, Y, Z };
-
-struct CapsuleColliderComponent
-{
-    Vec3        centerOffset;
-    float       radius       = 0.5f;
-    float       height       = 2.f;  // total height including both caps
-    CapsuleAxis axis         = CapsuleAxis::Y;
-    bool        showInEditor = false;
-};
-
 void RegisterPhysicsComponents(ecs::ComponentMetaRegistry&);
 ```
 
-The box collider is the core `OBBComponent` with `isTrigger = false`.
+Collision shapes are the core `ColliderComponent` (`ecs/Components.hpp`): any number of
+boxes, spheres and capsules on one entity, all in entity-local space.
 
-**Body rule.** The topmost `RigidBodyComponent` of a hierarchy owns every collider on its
-entity and on its children; together they form one compound body, and only the
+```cpp
+enum class ColliderShapeType : uint8_t { Box, Sphere, Capsule };
+enum class ColliderAxis : uint8_t { X, Y, Z };
+
+struct ColliderShape
+{
+    ColliderShapeType type = ColliderShapeType::Box;
+    Vec3         centerOffset;
+    Quat         orientation = Quat::Identity();
+    Vec3         halfExtents{0.5f, 0.5f, 0.5f};  // Box
+    float        radius = 0.5f;                  // Sphere, Capsule (largest scale axis)
+    float        height = 2.f;                   // Capsule: total height including both caps
+    ColliderAxis axis   = ColliderAxis::Y;        // Capsule
+};
+
+struct ColliderComponent
+{
+    std::vector<ColliderShape> shapes;
+    bool showInEditor = true;
+};
+```
+
+Trigger zones stay `OBBComponent` with `isTrigger = true`. A solid `OBBComponent`
+(`isTrigger = false`) still collides as a single box. Scenes and prefabs that stored one,
+or the former `SphereColliderComponent` / `CapsuleColliderComponent`, load as a
+`ColliderComponent`.
+
+**Body rule.** The topmost `RigidBodyComponent` of a hierarchy owns every collider shape on
+its entity and on its children; together they form one compound body, and only the
 rigid-body entity's transform is written by physics. Colliders without a rigid body in
 their hierarchy are static obstacles. A rigid body nested below another one is ignored
 (with a warning).

@@ -77,8 +77,18 @@ void KeepNextWindowInMainViewport(const char* windowName);
 
 namespace {
 
+bool IsScriptMultiSelected(const AssetBrowserState& browser, const std::filesystem::path& path)
+{
+    return std::find(browser.selectedScripts.begin(), browser.selectedScripts.end(), path) !=
+           browser.selectedScripts.end();
+}
+
 void SelectAssetTile(AssetBrowserState& browser, const std::filesystem::path& path)
 {
+    // A plain click outside the Ctrl+click script selection ends it; a click on
+    // one of its files keeps it so the group can be dragged.
+    if (!ImGui::GetIO().KeyCtrl && !IsScriptMultiSelected(browser, path))
+        browser.selectedScripts.clear();
     if (browser.selectedPath != path)
     {
         browser.selectedPath = path;
@@ -2107,7 +2117,7 @@ static bool DrawIconTile(AssetBrowserState& browser,
     const bool pressed = ImGui::InvisibleButton("##icon_tile", ImVec2(kLabelWidth, kTileHeight));
     if (activated) *activated = pressed;
     const bool clicked = SelectAssetTileOnClick(browser, path);
-    const bool selected = browser.selectedPath == path;
+    const bool selected = browser.selectedPath == path || IsScriptMultiSelected(browser, path);
     const bool hovered = ImGui::IsItemHovered();
     const ImVec2 itemMin = ImGui::GetItemRectMin();
     const ImVec2 previewMin{itemMin.x + (kLabelWidth - kThumbSize) * 0.5f, itemMin.y};
@@ -3194,8 +3204,26 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
                 BeginTileInRow(cppTileRowUsed, tileRowAvail);
                 const auto ext = PathToUtf8(p.extension());
                 const bool isHeader = ext == ".hpp" || ext == ".h";
+                const std::filesystem::path previousSelection = browser.selectedPath;
                 DrawIconTile(browser, p, isHeader ? browser.icons.cppHeader : browser.icons.cppSource,
                              PathToUtf8(p.filename()), isHeader ? "HPP" : "CPP");
+
+                // Ctrl+click adds or removes a script from the group selection.
+                if (ImGui::IsItemClicked(ImGuiMouseButton_Left) && ImGui::GetIO().KeyCtrl)
+                {
+                    auto& group = browser.selectedScripts;
+                    if (group.empty() && previousSelection != p && IsSupportedCppScriptSource(previousSelection))
+                        group.push_back(previousSelection);
+                    if (const auto it = std::find(group.begin(), group.end(), p); it != group.end())
+                    {
+                        group.erase(it);
+                        browser.selectedPath = group.empty() ? std::filesystem::path{} : group.back();
+                    }
+                    else
+                    {
+                        group.push_back(p);
+                    }
+                }
                 if (browser.highlightPath == p)
                     ImGui::SetScrollHereY(0.5f);
 
@@ -3232,9 +3260,26 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
                 if (ImGui::BeginDragDropSource())
                 {
-                    const std::string absPath = PathToUtf8(p);
-                    ImGui::SetDragDropPayload("KROM_MOVE_FILE", absPath.c_str(), absPath.size() + 1u);
-                    ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
+                    if (browser.selectedScripts.size() > 1u && IsScriptMultiSelected(browser, p))
+                    {
+                        // Group drag: one path per line, for dropping onto an object.
+                        std::string paths;
+                        for (const auto& script : browser.selectedScripts)
+                        {
+                            if (!paths.empty())
+                                paths += '\n';
+                            paths += PathToUtf8(script);
+                        }
+                        ImGui::SetDragDropPayload("KROM_SCRIPT_FILES", paths.c_str(), paths.size() + 1u);
+                        ImGui::TextUnformatted(TranslateWithValue(
+                            "assets.scripts_dragged", std::to_string(browser.selectedScripts.size())).c_str());
+                    }
+                    else
+                    {
+                        const std::string absPath = PathToUtf8(p);
+                        ImGui::SetDragDropPayload("KROM_MOVE_FILE", absPath.c_str(), absPath.size() + 1u);
+                        ImGui::TextUnformatted(PathToUtf8(p.filename()).c_str());
+                    }
                     ImGui::EndDragDropSource();
                 }
             }

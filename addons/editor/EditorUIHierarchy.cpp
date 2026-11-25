@@ -227,17 +227,24 @@ void DrawEntityList(EditorFrameContext& ctx)
     ImGui::Spacing();
     ImGui::Separator();
 
+    // All entities in display order. The order is read once per entity, not in
+    // the comparator: with thousands of entities the lookups dominate the sort.
     std::vector<EntityID> entities;
-    ctx.world.ForEachAlive([&](EntityID id) {
-        entities.push_back(id);
-    });
-    std::sort(entities.begin(), entities.end(), [&](EntityID a, EntityID b) {
-        const uint32_t orderA = GetEntityHierarchyOrder(ctx, a);
-        const uint32_t orderB = GetEntityHierarchyOrder(ctx, b);
-        if (orderA != orderB)
-            return orderA < orderB;
-        return a.value < b.value;
-    });
+    {
+        std::vector<std::pair<uint32_t, EntityID>> ordered;
+        ordered.reserve(ctx.world.EntityCount());
+        ctx.world.ForEachAlive([&](EntityID id) {
+            ordered.emplace_back(GetEntityHierarchyOrder(ctx, id), id);
+        });
+        std::sort(ordered.begin(), ordered.end(), [](const auto& a, const auto& b) {
+            if (a.first != b.first)
+                return a.first < b.first;
+            return a.second.value < b.second.value;
+        });
+        entities.reserve(ordered.size());
+        for (const auto& entry : ordered)
+            entities.push_back(entry.second);
+    }
 
     auto passesFilter = [&](EntityID id) {
         // Laufzeit-Gizmo-Entities sind rein visuelle Hilfsobjekte — nie in der Liste anzeigen
@@ -361,18 +368,57 @@ void DrawEntityList(EditorFrameContext& ctx)
         return pc && pc->parent == parent;
     };
 
-    auto hasVisibleDescendant = [&](auto&& self, EntityID parent, uint32_t depth) -> bool {
+    // Children per parent in display order. Scanning all entities for every row
+    // instead costs entities^2 per frame (10000 entities: 3 fps).
+    // A row is an index into entities. The children of an entity form a list of
+    // rows (firstChild by entity index, then nextSibling), built in one pass.
+    constexpr uint32_t kNoRow = UINT32_MAX;
+    const uint32_t rowCount = static_cast<uint32_t>(entities.size());
+    uint32_t indexEnd = 0u;
+    for (EntityID id : entities)
+        indexEnd = std::max(indexEnd, static_cast<uint32_t>(id.Index()) + 1u);
+    std::vector<uint32_t> firstChild(indexEnd, kNoRow);
+    std::vector<uint32_t> lastChild(indexEnd, kNoRow);
+    std::vector<uint32_t> nextSibling(rowCount, kNoRow);
+    for (uint32_t row = 0u; row < rowCount; ++row)
+    {
+        const auto* pc = ctx.world.Get<ParentComponent>(entities[row]);
+        if (!pc || !pc->parent.IsValid() || pc->parent.Index() >= indexEnd)
+            continue;
+        const uint32_t parentIndex = static_cast<uint32_t>(pc->parent.Index());
+        if (lastChild[parentIndex] == kNoRow)
+            firstChild[parentIndex] = row;
+        else
+            nextSibling[lastChild[parentIndex]] = row;
+        lastChild[parentIndex] = row;
+    }
+    auto firstChildRow = [&](EntityID parent) { return firstChild[parent.Index()]; };
+
+    // Both answers are needed for a row and again for its parent: keep them.
+    std::vector<int8_t> filterMemo(rowCount, -1);
+    std::vector<int8_t> descendantMemo(rowCount, -1);
+    auto rowPassesFilter = [&](uint32_t row) {
+        if (filterMemo[row] < 0)
+            filterMemo[row] = passesFilter(entities[row]) ? 1 : 0;
+        return filterMemo[row] != 0;
+    };
+
+    auto hasVisibleDescendant = [&](auto&& self, uint32_t parentRow, uint32_t depth) -> bool {
         if (depth > 32u)
             return false;
+        if (descendantMemo[parentRow] >= 0)
+            return descendantMemo[parentRow] != 0;
 
-        for (EntityID candidate : entities)
+        const EntityID parent = entities[parentRow];
+        bool found = false;
+        for (uint32_t row = firstChildRow(parent); row != kNoRow && !found; row = nextSibling[row])
         {
-            if (!isDirectChildOf(candidate, parent))
+            if (!isDirectChildOf(entities[row], parent))
                 continue;
-            if (passesFilter(candidate) || self(self, candidate, depth + 1u))
-                return true;
+            found = rowPassesFilter(row) || self(self, row, depth + 1u);
         }
-        return false;
+        descendantMemo[parentRow] = found ? 1 : 0;
+        return found;
     };
 
     // Set when the mouse is over a row; the panel-wide root drop then stays off,
@@ -380,14 +426,75 @@ void DrawEntityList(EditorFrameContext& ctx)
     bool mouseOverRow = false;
     bool hierarchyStateChanged = false;
 
-    auto drawEntity = [&](auto&& self, EntityID id, uint32_t depth) -> void {
+    // Rows outside the visible part of the panel are not built: they only add
+    // their height, handed to ImGui as one spacer before the next built row.
+    // With thousands of entities the panel otherwise costs tens of milliseconds.
+    static float rowPitch = 0.f;   // height of one row incl. spacing, measured on built rows
+    if (rowPitch <= 0.f)
+        rowPitch = ImGui::GetTextLineHeightWithSpacing();
+    const ImRect listClip = ImGui::GetCurrentWindow()->InnerClipRect;
+    float skippedHeight = 0.f;
+    auto flushSkippedRows = [&] {
+        if (skippedHeight <= 0.f)
+            return;
+        ImGui::Dummy(ImVec2(0.f, std::max(0.f, skippedHeight - ImGui::GetStyle().ItemSpacing.y)));
+        skippedHeight = 0.f;
+    };
+    // Foldout state saved with the scene (see the built rows below), or null.
+    auto storedFoldout = [&](EntityID id) -> const bool* {
+        const auto* guid = !prefabMode ? ctx.world.Get<GuidComponent>(id) : nullptr;
+        if (!guid || guid->guid.empty())
+            return nullptr;
+        const auto* origin = ctx.world.Get<EditorSceneTagComponent>(id);
+        const std::string& scene = origin && !origin->sceneName.empty()
+            ? origin->sceneName : ctx.currentEditorSceneName;
+        const auto sceneIt = ctx.state.hierarchyOpenStates.find(scene);
+        if (scene.empty() || sceneIt == ctx.state.hierarchyOpenStates.end())
+            return nullptr;
+        const auto entityIt = sceneIt->second.find(guid->guid);
+        return entityIt != sceneIt->second.end() ? &entityIt->second : nullptr;
+    };
+
+    auto drawEntity = [&](auto&& self, uint32_t entityRow, uint32_t depth) -> void {
         if (depth > 32u)
             return;
 
-        const bool visibleSelf = passesFilter(id);
-        const bool visibleDescendant = hasVisibleDescendant(hasVisibleDescendant, id, depth);
+        const EntityID id = entities[entityRow];
+        const bool visibleSelf = rowPassesFilter(entityRow);
+        const bool visibleDescendant = hasVisibleDescendant(hasVisibleDescendant, entityRow, depth);
         if (!visibleSelf && !visibleDescendant)
             return;
+
+        // The row to reveal and its ancestors are always built: they may have to
+        // open and to scroll into view.
+        const float rowTop = ImGui::GetCursorScreenPos().y + skippedHeight;
+        if (revealAncestors.count(id.value) == 0 &&
+            (rowTop + rowPitch < listClip.Min.y - rowPitch || rowTop > listClip.Max.y + rowPitch))
+        {
+            skippedHeight += rowPitch;
+            if (visibleDescendant)
+            {
+                // Same id, open state and indent as the tree node of a built row.
+                const ImGuiID nodeId = ImGui::GetID(
+                    reinterpret_cast<void*>(static_cast<uintptr_t>(GetStableEditorEntityId(ctx, id))));
+                const bool* stored = storedFoldout(id);
+                if (stored ? *stored : ImGui::GetStateStorage()->GetInt(nodeId, 1) != 0)
+                {
+                    ImGui::Indent();
+                    ImGui::PushOverrideID(nodeId);
+                    for (uint32_t row = firstChildRow(id); row != kNoRow; row = nextSibling[row])
+                    {
+                        if (isDirectChildOf(entities[row], id))
+                            self(self, row, depth + 1u);
+                    }
+                    ImGui::PopID();
+                    ImGui::Unindent();
+                }
+            }
+            return;
+        }
+        flushSkippedRows();
+        const float rowStartY = ImGui::GetCursorPosY();
 
         const auto* origin = ctx.world.Get<EditorSceneTagComponent>(id);
         const bool carriedOver = !prefabMode && !ctx.currentEditorSceneName.empty() &&
@@ -445,6 +552,8 @@ void DrawEntityList(EditorFrameContext& ctx)
             flags,
             "%s",
             label);
+        if (ImGui::GetCursorPosY() > rowStartY)
+            rowPitch = ImGui::GetCursorPosY() - rowStartY;
         if (persistentFoldout && (storedOpen ? *storedOpen != open : !open || ImGui::IsItemToggledOpen()))
         {
             ctx.state.hierarchyOpenStates[scene][guid->guid] = open;
@@ -586,6 +695,17 @@ void DrawEntityList(EditorFrameContext& ctx)
             }
         }
 
+        // Arrow-key navigation selects the row it lands on, like a click,
+        // so the inspector follows the keyboard.
+        if (visibleSelf && rowId != 0 && GImGui->NavJustMovedToId == rowId &&
+            ctx.state.selectedEntity != id && !ShouldCancelSelectionChangeForActiveInput())
+        {
+            highlighted = NULL_ENTITY;
+            ClearMultiSelection(ctx);
+            ctx.state.selectedEntity  = id;
+            ctx.state.selectionSource = SelectionSource::Outliner;
+        }
+
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
             visibleSelf && !ShouldCancelSelectionChangeForActiveInput())
         {
@@ -663,6 +783,7 @@ void DrawEntityList(EditorFrameContext& ctx)
                     });
                 }
             }
+            AcceptScriptFileDrop(ctx, id);
             ImGui::EndDragDropTarget();
         }
 
@@ -671,22 +792,25 @@ void DrawEntityList(EditorFrameContext& ctx)
 
         if (visibleDescendant && open)
         {
-            for (EntityID candidate : entities)
+            // The parent is checked again: a row drawn earlier in this frame may
+            // have moved the entity.
+            for (uint32_t row = firstChildRow(id); row != kNoRow; row = nextSibling[row])
             {
-                if (isDirectChildOf(candidate, id))
-                    self(self, candidate, depth + 1u);
+                if (isDirectChildOf(entities[row], id))
+                    self(self, row, depth + 1u);
             }
             ImGui::TreePop();
         }
     };
 
-    for (EntityID id : entities)
+    for (uint32_t row = 0u; row < rowCount; ++row)
     {
-        const auto* pc = ctx.world.Get<ParentComponent>(id);
+        const auto* pc = ctx.world.Get<ParentComponent>(entities[row]);
         if (pc && pc->parent.IsValid() && ctx.world.IsAlive(pc->parent))
             continue;
-        drawEntity(drawEntity, id, 0u);
+        drawEntity(drawEntity, row, 0u);
     }
+    flushSkippedRows();
 
     // Always leave some empty space below the last row to drop onto.
     const ImVec2 listEnd = ImGui::GetCursorScreenPos();

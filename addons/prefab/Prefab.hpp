@@ -94,8 +94,7 @@ struct PrefabEntityRecord
 
     // Physics-Addon (nur Daten, keine Simulation)
     std::optional<RigidBodyComponent>       rigidBody;
-    std::optional<SphereColliderComponent>  sphereCollider;
-    std::optional<CapsuleColliderComponent> capsuleCollider;
+    std::optional<ColliderComponent>        collider;   // Core; older files: sphere/capsule/solid OBB
     std::optional<CharacterControllerComponent> characterController;
 
     // Audio-Addon (nur Daten)

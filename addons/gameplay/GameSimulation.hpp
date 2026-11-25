@@ -12,6 +12,7 @@
 //   UpdateScripts(world, ...) OnUpdate, events, triggers, collisions,
 //                             OnFixedUpdate + physics, Destroy/LoadScene
 //   AnimationSystem           node/skeleton animation (optional)
+//   LateUpdateScripts         OnLateUpdate (cameras: pose of this frame)
 //   steps.beforeTransforms    caller hook (local bounds, editor sync)
 //   TransformSystem, BoundsSystem
 //   UpdateLate(world, ...)    audio and particles at the current pose
@@ -24,6 +25,7 @@
 #include "addons/text/TextRenderer.hpp"
 #include "collision/SceneQueries.hpp"
 #include "core/FixedTimestep.hpp"
+#include "core/FrameDeltaSmoother.hpp"
 #include "core/ProjectSettings.hpp"
 #include <filesystem>
 #include <functional>
@@ -91,9 +93,21 @@ public:
 
     // Spielzeit um das ungeskalierte Delta fortschreiben (TimeScale aus dem
     // letzten Frame) und den Bildschirmtext leeren. Liefert das skalierte Delta.
+    // Das gemessene Delta wird an die Bildanzeige angepasst (FrameDeltaClock):
+    // bei VSync rastet es auf ganze Bildperioden ein, sonst wird es geglaettet.
+    // Das gemessene Frame-Delta schwankt bei VSync stark, obwohl die Bilder
+    // gleichmaessig erscheinen - bewegte Objekte wuerden sonst zittern.
     float BeginFrame(float unscaledDeltaSeconds);
 
+    // Bildwiederholrate des Monitors (Hz, <= 0 unbekannt) und ob mit VSync
+    // praesentiert wird. Vor RunFrame setzen, gern jeden Frame (Monitorwechsel).
+    void SetDisplay(double refreshHz, bool vsync) noexcept { m_frameClock.SetDisplay(refreshHz, vsync); }
+
     void UpdateScripts(ecs::World& world, const platform::IInput* input, const GameSimulationHooks& hooks);
+
+    // OnLateUpdate der Scripts aus UpdateScripts: nach Physik und Animation,
+    // vor dem TransformSystem (Kameras folgen der Pose dieses Frames).
+    void LateUpdateScripts(ecs::World& world, const platform::IInput* input, const GameSimulationHooks& hooks);
 
     // Nach dem TransformSystem: Audio-Quellen/Listener und Partikel an der aktuellen Pose.
     void UpdateLate(ecs::World& world, const GameSimulationHooks& hooks);
@@ -114,10 +128,16 @@ private:
     struct Backends;   // Physik/Audio (optional gebaut, siehe CMake)
 
     void ApplyScriptRequests(ecs::World& world, const GameSimulationHooks& hooks);
+    // Baut die Dienste einer Script-Phase (Physik, Audio, Partikel, ...) und
+    // ruft fn(services) auf; die Dienst-Adapter leben nur waehrenddessen.
+    template<typename Fn>
+    void WithScriptServices(ecs::World& world, const platform::IInput* input,
+                            const GameSimulationHooks& hooks, Fn&& fn);
 
     std::unique_ptr<Backends>             m_backends;
     script::ScriptClock                   m_clock;
     FixedTimestep                         m_fixedStep;
+    FrameDeltaClock                       m_frameClock;
     bool                                  m_fixedStepConfigured = false;
     bool                                  m_audioDevice = true;
     ProjectSettings                       m_projectSettings;

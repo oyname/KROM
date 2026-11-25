@@ -1033,36 +1033,51 @@ struct PhysicsWorld::Impl
             });
         });
 
-        world.View<SphereColliderComponent>([&](EntityID id, const SphereColliderComponent& sphere) {
-            addCollider(id, [&](const Pose& local, ColliderDesc& c) {
-                c.kind = ColliderKind::Sphere;
-                c.position = local.position + local.rotation.Rotate(Mul(local.scale, sphere.centerOffset));
-                c.rotation = local.rotation;
-                c.radius = std::max(0.001f, sphere.radius * MaxComponent(Abs(local.scale)));
-            });
-        });
-
-        world.View<CapsuleColliderComponent>([&](EntityID id, const CapsuleColliderComponent& capsule) {
-            addCollider(id, [&](const Pose& local, ColliderDesc& c) {
-                const math::Vec3 s = Abs(local.scale);
-                float axisScale = s.y, radialScale = std::max(s.x, s.z);
-                math::Quat axisRotation = math::Quat::Identity();   // Jolt-Kapsel liegt auf Y
-                if (capsule.axis == CapsuleAxis::X)
-                {
-                    axisScale = s.x; radialScale = std::max(s.y, s.z);
-                    axisRotation = math::Quat::FromAxisAngleDeg({ 0.f, 0.f, 1.f }, -90.f);
-                }
-                else if (capsule.axis == CapsuleAxis::Z)
-                {
-                    axisScale = s.z; radialScale = std::max(s.x, s.y);
-                    axisRotation = math::Quat::FromAxisAngleDeg({ 1.f, 0.f, 0.f }, 90.f);
-                }
-                c.kind = ColliderKind::Capsule;
-                c.position = local.position + local.rotation.Rotate(Mul(local.scale, capsule.centerOffset));
-                c.rotation = (local.rotation * axisRotation).Normalized();
-                c.radius = std::max(0.001f, capsule.radius * radialScale);
-                c.halfHeight = std::max(0.f, capsule.height * axisScale * 0.5f - c.radius);
-            });
+        world.View<ColliderComponent>([&](EntityID id, const ColliderComponent& collider) {
+            for (const ColliderShape& shape : collider.shapes)
+            {
+                addCollider(id, [&](const Pose& local, ColliderDesc& c) {
+                    c.position = local.position + local.rotation.Rotate(Mul(local.scale, shape.centerOffset));
+                    const math::Quat shapeRotation = (local.rotation * shape.orientation).Normalized();
+                    switch (shape.type)
+                    {
+                        case ColliderShapeType::Box:
+                        {
+                            c.kind = ColliderKind::Box;
+                            c.rotation = shapeRotation;
+                            const math::Vec3 half = Abs(Mul(local.scale, shape.halfExtents));
+                            c.halfExtents = { std::max(half.x, 0.001f), std::max(half.y, 0.001f), std::max(half.z, 0.001f) };
+                            break;
+                        }
+                        case ColliderShapeType::Sphere:
+                            c.kind = ColliderKind::Sphere;
+                            c.rotation = shapeRotation;
+                            c.radius = std::max(0.001f, shape.radius * MaxComponent(Abs(local.scale)));
+                            break;
+                        case ColliderShapeType::Capsule:
+                        {
+                            const math::Vec3 s = Abs(local.scale);
+                            float axisScale = s.y, radialScale = std::max(s.x, s.z);
+                            math::Quat axisRotation = math::Quat::Identity();   // Jolt-Kapsel liegt auf Y
+                            if (shape.axis == ColliderAxis::X)
+                            {
+                                axisScale = s.x; radialScale = std::max(s.y, s.z);
+                                axisRotation = math::Quat::FromAxisAngleDeg({ 0.f, 0.f, 1.f }, -90.f);
+                            }
+                            else if (shape.axis == ColliderAxis::Z)
+                            {
+                                axisScale = s.z; radialScale = std::max(s.x, s.y);
+                                axisRotation = math::Quat::FromAxisAngleDeg({ 1.f, 0.f, 0.f }, 90.f);
+                            }
+                            c.kind = ColliderKind::Capsule;
+                            c.rotation = (shapeRotation * axisRotation).Normalized();
+                            c.radius = std::max(0.001f, shape.radius * radialScale);
+                            c.halfHeight = std::max(0.f, shape.height * axisScale * 0.5f - c.radius);
+                            break;
+                        }
+                    }
+                });
+            }
         });
     }
 
@@ -1298,14 +1313,20 @@ void PhysicsWorld::Sync(ecs::World& world)
                     JPH::RVec3 joltPosition;
                     JPH::Quat  joltRotation;
                     bodies.GetPositionAndRotation(record.id, joltPosition, joltRotation);
-                    const math::Vec3 position = NearlyEqual(desc.pose.position, record.lastPosition)
-                        ? FromJolt(joltPosition) : desc.pose.position;
-                    const math::Quat rotation = NearlyEqual(desc.pose.rotation, record.lastRotation)
-                        ? FromJolt(joltRotation).Normalized() : desc.pose.rotation;
+                    const bool positionSet = !NearlyEqual(desc.pose.position, record.lastPosition);
+                    const bool rotationSet = !NearlyEqual(desc.pose.rotation, record.lastRotation);
+                    const math::Vec3 position = positionSet ? desc.pose.position : FromJolt(joltPosition);
+                    const math::Quat rotation = rotationSet ? desc.pose.rotation : FromJolt(joltRotation).Normalized();
                     bodies.SetPositionAndRotation(record.id, ToJolt(position), ToJolt(rotation),
                                                   JPH::EActivation::Activate);
-                    record.prevPosition = position;   // Teleport nicht interpolieren
-                    record.prevRotation = rotation;
+                    // Teleport nicht interpolieren - aber nur den gesetzten Teil.
+                    // Setzt ein Script jedes Frame nur die Drehung (z.B. Neigen),
+                    // gleitet die Position sonst in Frames ohne Physikschritt
+                    // nicht weiter und springt danach zurueck (Zittern).
+                    if (positionSet)
+                        record.prevPosition = position;
+                    if (rotationSet)
+                        record.prevRotation = rotation;
                     if (tc)
                         record.writtenLocalVersion = tc->localVersion;
                 }

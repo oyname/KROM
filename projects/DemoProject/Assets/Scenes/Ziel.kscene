@@ -79,10 +79,10 @@
             {
               "class": "ThirdPersonCamera",
               "fields": {
-                "target": "c42e6b59-ee92-5534-a87a-eda935637b41",
                 "pivotHeight": 1.5,
-                "distance": 5,
+                "target": "c42e6b59-ee92-5534-a87a-eda935637b41",
                 "turnSpeedDegPerSecond": 90,
+                "distance": 5,
                 "mouseSensitivity": 0.15
               }
             }
@@ -176,12 +176,16 @@
           "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
+          "type": "ColliderComponent",
           "showInEditor": true,
-          "isTrigger": false
+          "shapes": [
+            {
+              "shape": 0,
+              "centerOffset": [0, 0, 0],
+              "orientation": [0, 0, 0, 1],
+              "halfExtents": [0.5, 0.5, 0.5]
+            }
+          ]
         },
         {
           "type": "MeshComponent",
@@ -283,12 +287,16 @@
           "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
+          "type": "ColliderComponent",
           "showInEditor": true,
-          "isTrigger": false
+          "shapes": [
+            {
+              "shape": 0,
+              "centerOffset": [0, 0, 0],
+              "orientation": [0, 0, 0, 1],
+              "halfExtents": [0.5, 0.5, 0.5]
+            }
+          ]
         },
         {
           "type": "MeshComponent",
@@ -391,8 +399,8 @@
             {
               "class": "GameControls",
               "fields": {
-                "restartScene": "Scenes/Room 2.kscene",
-                "message": "Glückwunsch, Ziel erreicht!"
+                "message": "Glückwunsch, Ziel erreicht!",
+                "restartScene": "Scenes/Room 2.kscene"
               }
             }
           ]
@@ -429,12 +437,16 @@
           "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
+          "type": "ColliderComponent",
           "showInEditor": true,
-          "isTrigger": false
+          "shapes": [
+            {
+              "shape": 0,
+              "centerOffset": [0, 0, 0],
+              "orientation": [0, 0, 0, 1],
+              "halfExtents": [0.5, 0.5, 0.5]
+            }
+          ]
         },
         {
           "type": "MeshComponent",
@@ -493,7 +505,7 @@
           "shadowFilter": 2,
           "shadowResolution": 2048,
           "shadowBias": 0.0005,
-          "shadowNormalBias": 0.001,
+          "shadowNormalBiasTexels": 1,
           "shadowMaxDistance": 40,
           "shadowStrength": 0.85,
           "shadowCascadeCount": 2,
@@ -533,12 +545,16 @@
           "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
+          "type": "ColliderComponent",
           "showInEditor": true,
-          "isTrigger": false
+          "shapes": [
+            {
+              "shape": 0,
+              "centerOffset": [0, 0, 0],
+              "orientation": [0, 0, 0, 1],
+              "halfExtents": [0.5, 0.5, 0.5]
+            }
+          ]
         },
         {
           "type": "MeshComponent",
@@ -589,12 +605,16 @@
           "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
+          "type": "ColliderComponent",
           "showInEditor": true,
-          "isTrigger": false
+          "shapes": [
+            {
+              "shape": 0,
+              "centerOffset": [0, 0, 0],
+              "orientation": [0, 0, 0, 1],
+              "halfExtents": [0.5, 0.5, 0.5]
+            }
+          ]
         },
         {
           "type": "MeshComponent",
@@ -658,7 +678,7 @@
           "shadowFilter": 2,
           "shadowResolution": 1024,
           "shadowBias": 0.0005,
-          "shadowNormalBias": 0.001,
+          "shadowNormalBiasTexels": 1,
           "shadowMaxDistance": 20,
           "shadowStrength": 0.8,
           "shadowCascadeCount": 1,
@@ -738,12 +758,16 @@
           "extentsLocal": [0.5, 0.5, 0.5]
         },
         {
-          "type": "OBBComponent",
-          "centerOffset": [0, 0, 0],
-          "halfExtents": [0.5, 0.5, 0.5],
-          "orientation": [0, 0, 0, 1],
+          "type": "ColliderComponent",
           "showInEditor": true,
-          "isTrigger": false
+          "shapes": [
+            {
+              "shape": 0,
+              "centerOffset": [0, 0, 0],
+              "orientation": [0, 0, 0, 1],
+              "halfExtents": [0.5, 0.5, 0.5]
+            }
+          ]
         },
         {
           "type": "MeshComponent",

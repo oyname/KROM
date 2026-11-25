@@ -50,14 +50,19 @@ struct RaycastCandidate
 
 // Welt-AABB einer OBBComponent — umschliesst die (gedrehte, skalierte) Box konservativ.
 [[nodiscard]] AABB ComputeWorldAABB(const OBBComponent& obb, const WorldTransformComponent& transform) noexcept;
+// Welt-AABB aller Formen einer ColliderComponent (Kapsel als umschliessende Box).
+// false, wenn sie keine Form hat.
+[[nodiscard]] bool ComputeWorldAABB(const ColliderComponent& collider, const WorldTransformComponent& transform,
+                                    AABB& out) noexcept;
 
 class SceneQueries
 {
 public:
     // Alle Entities mit BoundsComponent (Mesh-Bounds) — z.B. fuer Editor-Picking.
     void Build(const ecs::World& world);
-    // Kollisions-Sicht fuer Gameplay: OBBComponent (ohne Trigger) hat Vorrang vor
-    // den Mesh-Bounds; Entities nur mit Trigger-OBB werden ignoriert.
+    // Kollisions-Sicht fuer Gameplay: ColliderComponent bzw. OBBComponent (ohne
+    // Trigger) haben Vorrang vor den Mesh-Bounds; Entities nur mit Trigger-OBB
+    // werden ignoriert.
     void BuildColliders(const ecs::World& world);
 
     bool Raycast(const Ray& ray, float maxDistance, RaycastHit& outHit) const;

@@ -15,5 +15,3 @@ private:
     int   logFrames = 0;
     bool  lowFps    = false;
 };
-
-// KROM_SCRIPT(TimeControl)

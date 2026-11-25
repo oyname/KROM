@@ -123,6 +123,8 @@ public:
     [[nodiscard]] virtual uint32_t GetFramebufferWidth() const { return GetWidth(); }
     [[nodiscard]] virtual uint32_t GetFramebufferHeight() const { return GetHeight(); }
     [[nodiscard]] virtual float GetDPIScale() const { return 1.0f; }
+    // Refresh rate of the monitor the window is on (Hz, e.g. 143.998); 0 = unknown.
+    [[nodiscard]] virtual double GetRefreshRateHz() const { return 0.0; }
     [[nodiscard]] virtual const char* GetBackendName() const = 0;
     virtual std::vector<std::filesystem::path> ConsumeDroppedFiles() { return {}; }
 };

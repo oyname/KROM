@@ -428,8 +428,7 @@ void ApplyChanges(ecs::World& world, EntityID entity, const JsonValue& before,
     copy.template operator()<BoundsComponent>({"addBounds", "boundsCenterLocal", "boundsExtentsLocal"});
     copy.template operator()<OBBComponent>({"addObb", "obbCenterOffset", "obbHalfExtents", "obbOrientation", "showObbInEditor", "obbIsTrigger"});
     copy.template operator()<RigidBodyComponent>({"rigidBody"});
-    copy.template operator()<SphereColliderComponent>({"sphereCollider"});
-    copy.template operator()<CapsuleColliderComponent>({"capsuleCollider"});
+    copy.template operator()<ColliderComponent>({"collider"});
     copy.template operator()<CharacterControllerComponent>({"characterController"});
     copy.template operator()<AudioSourceComponent>({"audioSource"});
     copy.template operator()<AudioListenerComponent>({"audioListener"});

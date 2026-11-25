@@ -9,7 +9,8 @@ namespace engine::script {
 // 5: script::RenderSettings gained ColorGrading (size change of a by-value API type).
 // 6: script::RenderSettings gained burleyDiffuse.
 // 7: explicit compiler/architecture identity and immutable SDK build ID.
-inline constexpr uint32_t ScriptModuleAbiVersion = 7;
+// 8: ComponentScript gained OnLateUpdate (vtable change).
+inline constexpr uint32_t ScriptModuleAbiVersion = 8;
 
 struct ScriptModuleAbi
 {

@@ -5,10 +5,10 @@
   "backend": "vulkan",
   "assetRoot": "Assets",
   "shaderCache": "shader-bin",
-  "editorScene": "Assets/Scenes/Time_Test.json",
+  "editorScene": "Assets/Scenes/car.json",
   "sceneOrder": [
-    "Room 2",
     "car",
+    "Room 2",
     "Ziel",
     "Room 0",
     "Room 1",
@@ -86,7 +86,10 @@
       "contactShadowLength": 0.15,
       "contactShadowThickness": 0.061,
       "contactShadowIntensity": 1,
-      "contactShadowSteps": 12
+      "contactShadowSteps": 12,
+      "shadowSunResolution": 2048,
+      "shadowLocalResolution": 2048,
+      "shadowFilter": 2
     }
   },
   "version": 1

@@ -21,8 +21,3 @@ private:
     float closeTimer = -1.0f;   // < 0: kein Schliessen vorgemerkt
     float lift = 0.0f;          // aktuelle Hoehe ueber closedPosition
 };
-
-// KROM_SCRIPT(Door)
-// KROM_FIELD(Door, openHeight, Float)
-// KROM_FIELD(Door, speed, Float)
-// KROM_FIELD(Door, closeDelay, Float)

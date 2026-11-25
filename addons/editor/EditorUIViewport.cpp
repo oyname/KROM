@@ -121,8 +121,11 @@ static std::array<OBBFace, 6> ComputeBoxFaces(const math::Mat4& entityWorld, con
     return faces;
 }
 
-// Box whose faces get drag handles: the collision box (OBBComponent) or, without
-// one, the box of a post-process volume (turns with the entity, scale ignored).
+// Box whose faces get drag handles: the box shape of the collider that is open
+// in the inspector, else the trigger box (OBBComponent), else the box of a
+// post-process volume (turns with the entity, scale ignored).
+enum class EditableBoxSource { Collider, Obb, PostProcessVolume };
+
 struct EditableBox
 {
     math::Mat4  entityWorld = math::Mat4::Identity();
@@ -130,23 +133,44 @@ struct EditableBox
     math::Vec3* halfExtents = nullptr;   // edited by the handles
     math::Vec3* centerOffset = nullptr;
     float       minHalfExtent = 0.001f;
-    bool        postProcessVolume = false;
+    EditableBoxSource source = EditableBoxSource::Obb;
 };
+
+// Box shape of the collider that the handles edit, or nullptr.
+static ColliderShape* ActiveColliderBox(EditorFrameContext& ctx, EntityID entity)
+{
+    auto* collider = ctx.world.Get<ColliderComponent>(entity);
+    if (!collider || !collider->showInEditor)
+        return nullptr;
+    const int index = ctx.state.colliderEditShape;
+    if (index < 0 || index >= static_cast<int>(collider->shapes.size()))
+        return nullptr;
+    ColliderShape& shape = collider->shapes[static_cast<size_t>(index)];
+    return shape.type == ColliderShapeType::Box ? &shape : nullptr;
+}
 
 static bool FindEditableBox(EditorFrameContext& ctx, EntityID entity, EditableBox& out)
 {
     const auto* wtc = ctx.world.Get<WorldTransformComponent>(entity);
     if (!wtc)
         return false;
+    if (ColliderShape* shape = ActiveColliderBox(ctx, entity))
+    {
+        out = { wtc->matrix, shape->orientation, &shape->halfExtents, &shape->centerOffset, 0.001f,
+                EditableBoxSource::Collider };
+        return true;
+    }
     if (auto* obb = ctx.world.Get<OBBComponent>(entity); obb && obb->showInEditor)
     {
-        out = { wtc->matrix, obb->orientation, &obb->halfExtents, &obb->centerOffset, 0.001f, false };
+        out = { wtc->matrix, obb->orientation, &obb->halfExtents, &obb->centerOffset, 0.001f,
+                EditableBoxSource::Obb };
         return true;
     }
     if (auto* volume = ctx.world.Get<PostProcessVolumeComponent>(entity); volume && !volume->global)
     {
         out = { math::Mat4::TRS(wtc->position, wtc->rotation.Normalized(), {1.f, 1.f, 1.f}),
-                math::Quat::Identity(), &volume->extents, &volume->boxOffset, 0.05f, true };
+                math::Quat::Identity(), &volume->extents, &volume->boxOffset, 0.05f,
+                EditableBoxSource::PostProcessVolume };
         return true;
     }
     return false;
@@ -240,39 +264,59 @@ static void DrawEntityColliders(EditorFrameContext& ctx, EntityID entity, bool i
     engine::addons::debug_draw::DebugDrawRenderer& dd = *ctx.debugDraw;
     const math::Vec3 s{ std::fabs(wtc->scale.x), std::fabs(wtc->scale.y), std::fabs(wtc->scale.z) };
 
-    // Jede Form folgt ihrem eigenen "Sichtbar"-Haken. Die Box der Selektion
-    // zeichnet DrawOBBDebugLines (inkl. Handles).
+    // Solide OBB (aeltere Daten/Code) folgt ihrem "Sichtbar"-Haken. Die Box
+    // mit Griffen zeichnet DrawOBBDebugLines.
     if (const auto* obb = ctx.world.Get<OBBComponent>(entity);
         obb && !obb->isTrigger && !isSelected && obb->showInEditor)
         dd.Box(ComputeOBBCorners(wtc->matrix, *obb), color);
 
-    if (const auto* sphere = ctx.world.Get<SphereColliderComponent>(entity);
-        sphere && sphere->showInEditor)
+    const auto* collider = ctx.world.Get<ColliderComponent>(entity);
+    if (collider && collider->showInEditor)
     {
-        DrawWireSphere(dd, wtc->matrix.TransformPoint(sphere->centerOffset), wtc->rotation,
-                       sphere->radius * std::max({ s.x, s.y, s.z }), color);
-    }
-
-    if (const auto* capsule = ctx.world.Get<CapsuleColliderComponent>(entity);
-        capsule && capsule->showInEditor)
-    {
-        math::Vec3 axisLocal{0.f, 1.f, 0.f}, uLocal{1.f, 0.f, 0.f}, vLocal{0.f, 0.f, 1.f};
-        float axisScale = s.y, radialScale = std::max(s.x, s.z);
-        if (capsule->axis == CapsuleAxis::X)
+        const ColliderShape* handleBox = isSelected ? ActiveColliderBox(ctx, entity) : nullptr;
+        for (const ColliderShape& shape : collider->shapes)
         {
-            axisLocal = {1.f, 0.f, 0.f}; uLocal = {0.f, 1.f, 0.f};
-            axisScale = s.x; radialScale = std::max(s.y, s.z);
+            const math::Quat rotation = (wtc->rotation * shape.orientation).Normalized();
+            switch (shape.type)
+            {
+                case ColliderShapeType::Box:
+                {
+                    if (&shape == handleBox)
+                        break;
+                    OBBComponent box{};
+                    box.centerOffset = shape.centerOffset;
+                    box.orientation  = shape.orientation;
+                    box.halfExtents  = shape.halfExtents;
+                    dd.Box(ComputeOBBCorners(wtc->matrix, box), color);
+                    break;
+                }
+                case ColliderShapeType::Sphere:
+                    DrawWireSphere(dd, wtc->matrix.TransformPoint(shape.centerOffset), rotation,
+                                   shape.radius * std::max({ s.x, s.y, s.z }), color);
+                    break;
+                case ColliderShapeType::Capsule:
+                {
+                    math::Vec3 axisLocal{0.f, 1.f, 0.f}, uLocal{1.f, 0.f, 0.f}, vLocal{0.f, 0.f, 1.f};
+                    float axisScale = s.y, radialScale = std::max(s.x, s.z);
+                    if (shape.axis == ColliderAxis::X)
+                    {
+                        axisLocal = {1.f, 0.f, 0.f}; uLocal = {0.f, 1.f, 0.f};
+                        axisScale = s.x; radialScale = std::max(s.y, s.z);
+                    }
+                    else if (shape.axis == ColliderAxis::Z)
+                    {
+                        axisLocal = {0.f, 0.f, 1.f}; vLocal = {0.f, 1.f, 0.f};
+                        axisScale = s.z; radialScale = std::max(s.x, s.y);
+                    }
+                    const float radius = shape.radius * radialScale;
+                    const float halfCylinder = std::max(0.f, shape.height * axisScale * 0.5f - radius);
+                    DrawWireCapsule(dd, wtc->matrix.TransformPoint(shape.centerOffset),
+                                    rotation.Rotate(axisLocal), rotation.Rotate(uLocal),
+                                    rotation.Rotate(vLocal), radius, halfCylinder, color);
+                    break;
+                }
+            }
         }
-        else if (capsule->axis == CapsuleAxis::Z)
-        {
-            axisLocal = {0.f, 0.f, 1.f}; vLocal = {0.f, 1.f, 0.f};
-            axisScale = s.z; radialScale = std::max(s.x, s.y);
-        }
-        const float radius = capsule->radius * radialScale;
-        const float halfCylinder = std::max(0.f, capsule->height * axisScale * 0.5f - radius);
-        DrawWireCapsule(dd, wtc->matrix.TransformPoint(capsule->centerOffset),
-                        wtc->rotation.Rotate(axisLocal), wtc->rotation.Rotate(uLocal),
-                        wtc->rotation.Rotate(vLocal), radius, halfCylinder, color);
     }
 
     // Spielfigur: immer aufrecht (ignoriert Rotation/Skalierung), Ursprung an den Fuessen.
@@ -1251,7 +1295,15 @@ void DrawOBBDebugLines(EditorFrameContext& ctx)
     DebugDrawRenderer& dd = *ctx.debugDraw;
 
     // Trigger orange, feste Kollision gruen (the volume draws its own box lines)
-    if (const auto* obb = box.postProcessVolume ? nullptr : ctx.world.Get<OBBComponent>(selected))
+    if (box.source == EditableBoxSource::Collider)
+    {
+        OBBComponent shapeBox{};
+        shapeBox.centerOffset = *box.centerOffset;
+        shapeBox.orientation  = box.orientation;
+        shapeBox.halfExtents  = *box.halfExtents;
+        dd.Box(ComputeOBBCorners(wtc->matrix, shapeBox), math::Vec4{0.f, 1.f, 0.2f, 1.f});
+    }
+    else if (const auto* obb = box.source == EditableBoxSource::Obb ? ctx.world.Get<OBBComponent>(selected) : nullptr)
     {
         const math::Vec4 boxColor = obb->isTrigger ? math::Vec4{1.f, 0.6f, 0.f, 1.f}
                                                    : math::Vec4{0.f, 1.f, 0.2f, 1.f};
@@ -1385,13 +1437,11 @@ void DrawPhysicsColliderLines(EditorFrameContext& ctx)
     // Hat die Selektion selbst eine ausgeblendete Kollisionsform, schaltet das die
     // Anzeige des ganzen Koerpers (inkl. Kollisions-Kinder) ab.
     const auto hidden = [&](bool hasShape, bool visible) { return hasShape && !visible; };
-    const auto* obb     = ctx.world.Get<OBBComponent>(selected);
-    const auto* sphere  = ctx.world.Get<SphereColliderComponent>(selected);
-    const auto* capsule = ctx.world.Get<CapsuleColliderComponent>(selected);
-    const auto* cc      = ctx.world.Get<CharacterControllerComponent>(selected);
-    if (hidden(obb != nullptr, obb && obb->showInEditor) ||
-        hidden(sphere != nullptr, sphere && sphere->showInEditor) ||
-        hidden(capsule != nullptr, capsule && capsule->showInEditor) ||
+    const auto* obb      = ctx.world.Get<OBBComponent>(selected);
+    const auto* collider = ctx.world.Get<ColliderComponent>(selected);
+    const auto* cc       = ctx.world.Get<CharacterControllerComponent>(selected);
+    if (hidden(obb != nullptr && !obb->isTrigger, obb && obb->showInEditor) ||
+        hidden(collider != nullptr, collider && collider->showInEditor) ||
         hidden(cc != nullptr, cc && cc->showInEditor))
         return;
 
@@ -1484,8 +1534,10 @@ void UpdateOBBHandles(EditorFrameContext& ctx)
     // ── Drag starten ──
     if (st.obbHoveredFace >= 0 && ImGui::IsMouseClicked(ImGuiMouseButton_Left))
     {
-        if (box.postProcessVolume)
+        if (box.source == EditableBoxSource::PostProcessVolume)
             BeginPendingComponentEdit<PostProcessVolumeComponent>(ctx, "viewport.obb", "history.ppv_box", selected);
+        else if (box.source == EditableBoxSource::Collider)
+            BeginPendingComponentEdit<ColliderComponent>(ctx, "viewport.obb", "history.edit_collider", selected);
         else
             BeginPendingComponentEdit<OBBComponent>(ctx, "viewport.obb", "history.edit_box", selected);
         const OBBFace& f  = faces[st.obbHoveredFace];

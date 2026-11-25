@@ -41,6 +41,12 @@ struct EditorScriptAssetResult
 [[nodiscard]] std::vector<std::string> FindCppScriptClassNames(
     const EditorFrameContext& ctx);
 
+// Script classes declared by one file. For a .cpp the header next to it counts,
+// so either half of a script can be dragged onto an object.
+[[nodiscard]] std::vector<std::string> FindCppScriptClassNamesInFile(
+    const EditorFrameContext& ctx,
+    const std::filesystem::path& file);
+
 // Implementierung neben dem Klassen-Header, sonst der Header selbst.
 [[nodiscard]] std::filesystem::path FindCppScriptAssetPath(
     const EditorFrameContext& ctx,

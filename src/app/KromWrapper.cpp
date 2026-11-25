@@ -2283,6 +2283,9 @@ int Run()
         {
             engine::mesh_renderer::UpdateLocalBoundsFromMeshes(*state.world, state.assetRegistry);
         };
+        // Frame time follows the display (vsync on the window's monitor).
+        if (const engine::platform::IWindow* window = state.renderLoop.GetWindow())
+            game.SetDisplay(window->GetRefreshRateHz(), state.renderLoop.GetRenderSystem().IsPresentVsync());
         game.RunFrame(*state.world, unscaledDeltaSeconds, input, hooks, steps);
 
         // GPU upload of the bone palettes written by the AnimationSystem.

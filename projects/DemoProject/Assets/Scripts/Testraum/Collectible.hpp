@@ -20,7 +20,3 @@ private:
     float phase = 0.0f;
     bool  collected = false;
 };
-
-// KROM_SCRIPT(Collectible)
-// KROM_FIELD(Collectible, spinDegPerSecond, Float)
-// KROM_FIELD(Collectible, bobHeight, Float)

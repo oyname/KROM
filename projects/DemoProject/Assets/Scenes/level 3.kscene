@@ -1,7 +1,7 @@
 
 {
   "scene": "level 3",
-  "entityCount": 3,
+  "entityCount": 5,
   "version": 2,
   "persistent": false,
   "environment": {
@@ -33,36 +33,6 @@
     {
       "entityId": 1,
       "entityIndex": 0,
-      "entityGeneration": 1,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "sphere"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-184522712264500-1"
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, -4.25],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-0"
-        }
-      ]
-    },
-    {
-      "entityId": 257,
-      "entityIndex": 1,
       "entityGeneration": 1,
       "components": [
         {
@@ -102,6 +72,50 @@
             0,
             1
           ]
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "CameraController",
+              "fields": {
+                "mouseSensitivity": 0.12,
+                "moveSpeed": 12,
+                "fastMultiplier": 4,
+                "turnSpeedDegPerSecond": 55
+              }
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "entityId": 257,
+      "entityIndex": 1,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "sphere"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-184522712264500-1"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, -4.25],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-0"
         }
       ]
     },
@@ -120,7 +134,7 @@
         },
         {
           "type": "ParentComponent",
-          "parentId": 1
+          "parentId": 257
         },
         {
           "type": "ActiveComponent",
@@ -158,6 +172,94 @@
         {
           "type": "PrefabSourceComponent",
           "recordId": "legacy-1"
+        }
+      ]
+    },
+    {
+      "entityId": 769,
+      "entityIndex": 3,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Sun"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "c3f4a8d1-27b6-4e95-b0a8-1f7d53e6c902"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 30, 0],
+          "localRotation": [-0.408218, -0.23457, -0.109382, 0.875426],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "LightComponent",
+          "lightType": 0,
+          "color": [1, 0.98, 0.94],
+          "intensity": 5,
+          "range": 100,
+          "spotInnerDeg": 18,
+          "spotOuterDeg": 35,
+          "castShadows": false,
+          "layerMask": 4294967295,
+          "shadowEnabled": false,
+          "shadowFilter": 2,
+          "shadowResolution": 2048,
+          "shadowBias": 0.0005,
+          "shadowNormalBiasTexels": 1,
+          "shadowMaxDistance": 46.5,
+          "shadowStrength": 1,
+          "shadowCascadeCount": 2,
+          "shadowCascadeLambda": 0.9,
+          "shadowLightSize": 0.1,
+          "contactShadows": false
+        }
+      ]
+    },
+    {
+      "entityId": 1025,
+      "entityIndex": 4,
+      "entityGeneration": 1,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Stresstest"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "5b1e7c42-9a3d-4f60-8c21-6d0e2f9a4b17"
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "ScriptList",
+          "scripts": [
+            {
+              "class": "StressSpawner",
+              "fields": {
+                "cubePrefab": "Prefabs/StressCube.prefab",
+                "seed": 1,
+                "count": 5000,
+                "areaSize": [120, 40, 120]
+              }
+            }
+          ]
         }
       ]
     }

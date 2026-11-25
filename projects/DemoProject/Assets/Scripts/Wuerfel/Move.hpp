@@ -10,7 +10,3 @@ public:
     void OnStart(engine::script::IScriptContext& ctx) override;
     void OnUpdate(engine::script::IScriptContext& ctx) override;
 };
-
-// KROM_SCRIPT(Move)
-// KROM_FIELD(Move, speedPerSecond, Float)
-// KROM_FIELD(Move, target, Entity)

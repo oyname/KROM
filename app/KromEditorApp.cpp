@@ -6343,6 +6343,9 @@ void KromEditorApp::TickEditorPlay(float unscaledDeltaSeconds, const std::functi
     steps.bounds           = &m_boundsSystem;
     steps.animation        = m_playAnimation.get();
     steps.beforeTransforms = editorSync;
+    // Frame time follows the display (vsync on the editor's monitor).
+    if (const platform::IWindow* window = m_renderLoop.GetWindow())
+        m_game.SetDisplay(window->GetRefreshRateHz(), m_renderLoop.GetRenderSystem().IsPresentVsync());
     m_game.RunFrame(*m_world, unscaledDeltaSeconds, input, MakeEditorPlayHooks(), steps);
 }
 
@@ -6393,10 +6396,13 @@ EntityID KromEditorApp::InstantiatePrefabForPlay(std::string_view prefabAssetPat
         Debug::LogError("Play: Prefab konnte nicht instanziiert werden '%s'", PathToUtf8(path).c_str());
         return NULL_ENTITY;
     }
+    // Only the new entities: resolving the whole world on every call makes a
+    // script that spawns n prefabs cost n * world size.
     if (m_assetPipeline)
-        addons::mesh_renderer::ResolveMeshAssetBindings(*m_assetPipeline, m_assetRegistry, *m_world);
+        addons::mesh_renderer::ResolveMeshAssetBindings(*m_assetPipeline, m_assetRegistry, *m_world,
+                                                        instance.entities);
     if (m_editorFrameCtx)
-        renderer::addons::editor::ResolveMaterialAssetBindings(*m_editorFrameCtx);
+        renderer::addons::editor::ResolveMaterialAssetBindings(*m_editorFrameCtx, instance.entities);
     for (const EntityID entity : instance.entities)
     {
         if (!entity.IsValid() || !m_world->IsAlive(entity))

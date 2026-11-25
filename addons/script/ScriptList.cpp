@@ -166,6 +166,18 @@ void ScriptList::FixedUpdate(float fixedDeltaTime, EntityID entity, const Script
     }
 }
 
+void ScriptList::LateUpdate(float deltaTime, EntityID entity, const ScriptServices& services)
+{
+    if (services.world && !IsEntityActiveInHierarchy(*services.world, entity))
+        return;
+    ScriptFrameContext ctx{ deltaTime, entity, services };
+    for (auto& inst : m_instances)
+    {
+        if (!inst.script || !inst.started) continue;
+        inst.script->OnLateUpdate(ctx);
+    }
+}
+
 void ScriptList::NotifyTrigger(bool enter, EntityID entity, EntityID other, const ScriptServices& services)
 {
     ScriptFrameContext ctx{ 0.0f, entity, services };

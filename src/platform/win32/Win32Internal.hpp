@@ -115,6 +115,7 @@ public:
     NativeWindowHandle GetNativeWindowHandle() const override;
     uint32_t GetWidth() const override;
     uint32_t GetHeight() const override;
+    double GetRefreshRateHz() const override;
     const char* GetBackendName() const override;
     std::vector<std::filesystem::path> ConsumeDroppedFiles() override;
 
@@ -134,6 +135,10 @@ private:
     std::string m_title;
     Win32Input* m_input = nullptr;
     std::vector<std::filesystem::path> m_droppedFiles;
+    // Refresh rate cache: the query is not free, the monitor rarely changes.
+    mutable HMONITOR m_refreshMonitor = nullptr;
+    mutable double m_refreshHz = 0.0;
+    mutable ULONGLONG m_refreshQueriedMs = 0u;
 };
 
 #endif

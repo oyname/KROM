@@ -1027,19 +1027,25 @@ static void TestPrefabPreservesPhysicsComponents(test::TestContext& ctx)
     rb.mass = 3.f;
     rb.lockRotationY = true;
     world.Add<RigidBodyComponent>(root, rb);
-    SphereColliderComponent sphere{};
+    ColliderShape sphere{};
+    sphere.type = ColliderShapeType::Sphere;
     sphere.radius = 0.75f;
-    world.Add<SphereColliderComponent>(root, sphere);
+    ColliderShape box{};
+    box.halfExtents = { 0.2f, 0.4f, 0.6f };
+    ColliderComponent rootCollider{};
+    rootCollider.shapes = { sphere, box };
+    world.Add<ColliderComponent>(root, rootCollider);
 
     const EntityID child = world.CreateEntity();
     world.Add<NameComponent>(child, NameComponent("Collider"));
     world.Add<TransformComponent>(child);
     world.Add<ParentComponent>(child, ParentComponent{root});
     world.Add<ChildrenComponent>(root).Add(child);
-    CapsuleColliderComponent capsule{};
-    capsule.axis = CapsuleAxis::X;
+    ColliderShape capsule{};
+    capsule.type = ColliderShapeType::Capsule;
+    capsule.axis = ColliderAxis::X;
     capsule.height = 2.5f;
-    world.Add<CapsuleColliderComponent>(child, capsule);
+    world.Add<ColliderComponent>(child).shapes.push_back(capsule);
 
     const PrefabAsset prefab = BuildPrefabFromWorldEntity(world, root);
     CHECK_EQ(ctx, prefab.records.size(), size_t{2});
@@ -1064,10 +1070,11 @@ static void TestPrefabPreservesPhysicsComponents(test::TestContext& ctx)
         CHECK(ctx, rb2->mass == 3.f);
         CHECK(ctx, rb2->lockRotationY && !rb2->lockRotationX);
     }
-    const auto* sphere2 = world2.Get<SphereColliderComponent>(instance.entities[0]);
-    CHECK(ctx, sphere2 && sphere2->radius == 0.75f);
-    const auto* capsule2 = world2.Get<CapsuleColliderComponent>(instance.entities[1]);
-    CHECK(ctx, capsule2 && capsule2->axis == CapsuleAxis::X && capsule2->height == 2.5f);
+    const auto* rootCollider2 = world2.Get<ColliderComponent>(instance.entities[0]);
+    CHECK(ctx, rootCollider2 && *rootCollider2 == rootCollider);
+    const auto* childCollider2 = world2.Get<ColliderComponent>(instance.entities[1]);
+    CHECK(ctx, childCollider2 && childCollider2->shapes.size() == 1u &&
+               childCollider2->shapes[0].axis == ColliderAxis::X && childCollider2->shapes[0].height == 2.5f);
     CHECK(ctx, world2.Get<RigidBodyComponent>(instance.entities[1]) == nullptr);
 }
 
@@ -1834,21 +1841,21 @@ static void TestPrefabAddonMergeAndComponentRemoval(test::TestContext& ctx)
     auto meta = MakePrefabComponentRegistry(); ecs::World world(meta); assets::AssetRegistry registry;
     auto prefab = MakeLinkedRecipe();
     prefab.records[1].audioSource.emplace(); prefab.records[1].particleEmitter.emplace();
-    prefab.records[1].sphereCollider.emplace();
+    prefab.records[1].collider.emplace().shapes.emplace_back();
     prefab.records[1].baseColorTexturePath = "Textures/a.png"; // Material-only entity.
     auto instance = InstantiatePrefab(world, prefab); LinkPrefabInstance(world, prefab, instance, "addons.prefab");
     CHECK(ctx, world.Has<MaterialComponent>(instance.entities[1]));
     world.Get<AudioSourceComponent>(instance.entities[1])->volume = 0.7f;
     prefab.records[1].audioSource->volume = 0.2f; prefab.records[1].audioSource->pitch = 2.f;
     prefab.records[1].particleEmitter->emitRate = 123.f;
-    prefab.records[1].rigidBody.reset(); prefab.records[1].sphereCollider.reset();
+    prefab.records[1].rigidBody.reset(); prefab.records[1].collider.reset();
     prefab.records[1].baseColorTexturePath = "Textures/b.png";
     CHECK(ctx, SynchronizePrefabInstance(world, instance.root, prefab, registry));
     CHECK_EQ(ctx, world.Get<AudioSourceComponent>(instance.entities[1])->volume, 0.7f);
     CHECK_EQ(ctx, world.Get<AudioSourceComponent>(instance.entities[1])->pitch, 2.f);
     CHECK_EQ(ctx, world.Get<ParticleEmitterComponent>(instance.entities[1])->emitRate, 123.f);
     CHECK(ctx, !world.Has<RigidBodyComponent>(instance.entities[1]));
-    CHECK(ctx, !world.Has<SphereColliderComponent>(instance.entities[1]));
+    CHECK(ctx, !world.Has<ColliderComponent>(instance.entities[1]));
     CHECK_EQ(ctx, world.Get<MaterialComponent>(instance.entities[1])->baseColorTexturePath, std::string("Textures/b.png"));
 }
 

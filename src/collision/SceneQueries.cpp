@@ -35,6 +35,65 @@ AABB ComputeWorldAABB(const OBBComponent& obb, const WorldTransformComponent& tr
     return out;
 }
 
+namespace {
+
+void ExtendByLocalBox(AABB& out, const Vec3& center, const engine::math::Quat& orientation,
+                      const Vec3& half, const WorldTransformComponent& transform) noexcept
+{
+    for (int i = 0; i < 8; ++i)
+    {
+        const Vec3 corner{
+            (i & 1) ? half.x : -half.x,
+            (i & 2) ? half.y : -half.y,
+            (i & 4) ? half.z : -half.z };
+        const Vec3 local = center + orientation.Rotate(corner);
+        const Vec3 scaled{ local.x * transform.scale.x, local.y * transform.scale.y, local.z * transform.scale.z };
+        const Vec3 world = transform.position + transform.rotation.Rotate(scaled);
+        out.min = { std::min(out.min.x, world.x), std::min(out.min.y, world.y), std::min(out.min.z, world.z) };
+        out.max = { std::max(out.max.x, world.x), std::max(out.max.y, world.y), std::max(out.max.z, world.z) };
+    }
+}
+
+} // namespace
+
+bool ComputeWorldAABB(const ColliderComponent& collider, const WorldTransformComponent& transform,
+                      AABB& out) noexcept
+{
+    if (collider.shapes.empty())
+        return false;
+    constexpr float kBig = 3.402823466e+38f;
+    out = { { kBig, kBig, kBig }, { -kBig, -kBig, -kBig } };
+    const Vec3 s{ std::fabs(transform.scale.x), std::fabs(transform.scale.y), std::fabs(transform.scale.z) };
+    const float maxScale = std::max({ s.x, s.y, s.z });
+    for (const ColliderShape& shape : collider.shapes)
+    {
+        switch (shape.type)
+        {
+            case ColliderShapeType::Box:
+                ExtendByLocalBox(out, shape.centerOffset, shape.orientation, shape.halfExtents, transform);
+                break;
+            case ColliderShapeType::Sphere:
+            {
+                const Vec3 local{ shape.centerOffset.x * transform.scale.x, shape.centerOffset.y * transform.scale.y,
+                                  shape.centerOffset.z * transform.scale.z };
+                const Vec3 center = transform.position + transform.rotation.Rotate(local);
+                const float r = shape.radius * maxScale;
+                out.min = { std::min(out.min.x, center.x - r), std::min(out.min.y, center.y - r), std::min(out.min.z, center.z - r) };
+                out.max = { std::max(out.max.x, center.x + r), std::max(out.max.y, center.y + r), std::max(out.max.z, center.z + r) };
+                break;
+            }
+            case ColliderShapeType::Capsule:
+            {
+                Vec3 half{ shape.radius, shape.radius, shape.radius };
+                (&half.x)[static_cast<int>(shape.axis)] = std::max(shape.radius, shape.height * 0.5f);
+                ExtendByLocalBox(out, shape.centerOffset, shape.orientation, half, transform);
+                break;
+            }
+        }
+    }
+    return true;
+}
+
 void SceneQueries::Build(const ecs::World& world)
 {
     m_entries.clear();
@@ -51,8 +110,8 @@ void SceneQueries::BuildColliders(const ecs::World& world)
 {
     m_entries.clear();
     world.View<BoundsComponent>([&](EntityID id, const BoundsComponent& bounds) {
-        if (world.Has<OBBComponent>(id))
-            return;  // OBB ist die Kollisionsform dieser Entity
+        if (world.Has<OBBComponent>(id) || world.Has<ColliderComponent>(id))
+            return;  // Collider bzw. OBB ist die Kollisionsform dieser Entity
         Entry entry{};
         entry.entity = id;
         entry.aabb = BuildAABB(bounds.centerWorld, bounds.extentsWorld);
@@ -68,6 +127,18 @@ void SceneQueries::BuildColliders(const ecs::World& world)
         Entry entry{};
         entry.entity = id;
         entry.aabb = ComputeWorldAABB(obb, *transform);
+        const Vec3 center = (entry.aabb.min + entry.aabb.max) * 0.5f;
+        entry.sphere = BuildSphere(center, entry.aabb.max - center);
+        m_entries.push_back(entry);
+    });
+    world.View<ColliderComponent>([&](EntityID id, const ColliderComponent& collider) {
+        const auto* transform = world.Get<WorldTransformComponent>(id);
+        if (!transform)
+            return;
+        Entry entry{};
+        entry.entity = id;
+        if (!ComputeWorldAABB(collider, *transform, entry.aabb))
+            return;
         const Vec3 center = (entry.aabb.min + entry.aabb.max) * 0.5f;
         entry.sphere = BuildSphere(center, entry.aabb.max - center);
         m_entries.push_back(entry);

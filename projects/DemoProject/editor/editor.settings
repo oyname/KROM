@@ -1,12 +1,13 @@
 {
-  "lastScene":"Room 0",
+  "lastScene":"car",
   "hierarchy":
 {
   "Room 0": {
     "prefab-98153419941200-1": false
   },
   "Room 2": {
-    "prefab-16316348756700-546": false
+    "prefab-16316348756700-546": false,
+    "prefab-33399249515600-34": false
   },
   "car": {
     "7e5887fe-0c6e-687c-865f-2660d35099fa": true,
@@ -15,6 +16,7 @@
     "prefab-1219236775500-3": true,
     "prefab-1219236775500-5": true,
     "prefab-181548400935600-10": true,
+    "prefab-33399249515600-68": true,
     "prefab-51008682747000-10": true,
     "prefab-8837162749800-6": true
   }
@@ -22,8 +24,8 @@
   "camera":{
     "fovDeg":60,
     "nearPlane":0.0500000007,
-    "farPlane":2000,
-    "moveSpeed":1.20000005
+    "farPlane":3000,
+    "moveSpeed":14
   },
   "layers":["Default","EditorGizmo","Transparent","UI","User0","User1","User2","User3","","","","","","","","","","","","","","","","","","","","","","","",""],
   "codeEditor":{
@@ -40,8 +42,8 @@
     "showGrid":false
   },
   "gizmo":{
-    "mode":1,
-    "space":1
+    "mode":0,
+    "space":0
   },
   "viewport":{
     "playAllParticles":false,

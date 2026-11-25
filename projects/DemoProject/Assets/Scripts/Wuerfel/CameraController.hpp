@@ -16,9 +16,3 @@ private:
     float yawDeg = 0.0f;
     float pitchDeg = 0.0f;
 };
-
-// KROM_SCRIPT(CameraController)
-// KROM_FIELD(CameraController, moveSpeed, Float)
-// KROM_FIELD(CameraController, fastMultiplier, Float)
-// KROM_FIELD(CameraController, turnSpeedDegPerSecond, Float)
-// KROM_FIELD(CameraController, mouseSensitivity, Float)
