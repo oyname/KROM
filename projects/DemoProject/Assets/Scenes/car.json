@@ -1,7 +1,7 @@
 
 {
   "scene": "EditorScene",
-  "entityCount": 59,
+  "entityCount": 55,
   "entities": [
     {
       "entityId": 2,
@@ -162,7 +162,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -340,7 +340,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -459,7 +459,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -544,7 +544,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -725,7 +725,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -850,7 +850,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -943,7 +943,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -1062,7 +1062,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -1121,7 +1121,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -1248,7 +1248,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -1307,7 +1307,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -1366,7 +1366,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -1425,7 +1425,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -1484,7 +1484,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -1555,7 +1555,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -1614,7 +1614,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -1852,7 +1852,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -1911,7 +1911,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -1970,7 +1970,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -2029,7 +2029,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -2088,7 +2088,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -2264,7 +2264,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -2371,7 +2371,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -2430,7 +2430,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -2489,7 +2489,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -2681,7 +2681,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -2753,13 +2753,13 @@
               "class": "HelicopterControl",
               "fields": {
                 "speed": 60,
-                "acceleration": 1.5,
                 "climbSpeed": 30,
+                "acceleration": 1.5,
                 "turnSpeedDegPerSecond": 120,
                 "maxTiltDeg": 15,
                 "noseAxis": [-1, 0, 0],
-                "liftResponse": 3,
-                "maxLiftFactor": 4
+                "maxLiftFactor": 4,
+                "liftResponse": 3
               }
             }
           ]
@@ -2831,7 +2831,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -2890,7 +2890,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -2949,7 +2949,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -3008,7 +3008,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -3067,7 +3067,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -3138,7 +3138,7 @@
         {
           "type": "MaterialComponent",
           "submeshIndex": 0,
-          "materialAssetPath": "Models/apache15.glb#material/0"
+          "materialAssetPath": "Materials/Leuchte.mat"
         },
         {
           "type": "PrefabSourceComponent",
@@ -3153,9 +3153,9 @@
   ]
 ,
   "editorCamera":{
-    "position":[-30.32934, 71.3184814, 33.3166809],
-    "pitchDeg":-11.6780396,
-    "yawDeg":-41.5062485,
+    "position":[-17.4912529, 68.9692764, 48.8863525],
+    "pitchDeg":-4.26159143,
+    "yawDeg":-37.3768082,
     "moveSpeed":14,
     "fovDeg":60,
     "nearPlane":0.0500000007,
