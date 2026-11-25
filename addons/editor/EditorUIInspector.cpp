@@ -29,6 +29,7 @@
 #include <cstring>
 #include <functional>
 #include <array>
+#include <span>
 #include <limits>
 #include "imgui_internal.h"
 #include <sstream>
@@ -4574,6 +4575,368 @@ void DrawSceneSettingsPanel(EditorFrameContext& ctx)
     ImGui::End();
 }
 
+// Draws the component cards of one entity. shown (17 entries, indexed like the
+// drawers) limits which sections appear; null draws all of them.
+static void DrawComponentSections(EditorFrameContext& ctx, EntityID selected, const bool* shown = nullptr)
+{
+    const bool isCamera = ctx.world.Has<CameraComponent>(selected);
+    const auto* activeComp = ctx.world.Get<ActiveComponent>(selected);
+    const bool isInactive = !isCamera && activeComp && !activeComp->active;
+    if (isInactive) ImGui::BeginDisabled();
+
+    using SectionDrawer = void (*)(EditorFrameContext&, EntityID);
+    static constexpr std::array<SectionDrawer, 17> drawers = {
+        DrawTransformSection, DrawCameraSection, DrawLightSection, DrawMeshSection,
+        DrawMaterialSlotsSection, DrawRigidBodySection, DrawColliderSection,
+        DrawOBBSection, DrawCharacterControllerSection,
+        DrawAudioSourceSection, DrawAudioListenerSection, DrawParticleEmitterSection,
+        DrawMaterialSection, DrawScriptSection, DrawAnimatorSection, DrawReflectionProbeSection,
+        DrawPostProcessVolumeSection
+    };
+    static std::array<int, 17> order = {0, 1, 2, 15, 16, 3, 4, 5, 12, 14, 6, 7, 8, 9, 10, 11, 13};
+    // Each component as a card: subtle background, border and its type colour
+    // as a stripe down the whole section. The background goes into a lower
+    // draw channel because the section height is known only afterwards.
+    ImDrawList* cardDrawList = ImGui::GetWindowDrawList();
+    constexpr float kCardInset = 7.f;
+    value_ui::InlineLabelScope rows;
+    for (int section : order)
+    {
+        if (shown && !shown[section])
+            continue;
+        currentInspectorSection = section;
+        sectionHeaderDrawn = false;
+        const float cardLeft = ImGui::GetCursorScreenPos().x - 2.f;
+        const float cardRight = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x + 3.f;
+        ImDrawListSplitter splitter;
+        splitter.Split(cardDrawList, 2);
+        splitter.SetCurrentChannel(cardDrawList, 1);
+        ImGui::Indent(kCardInset);
+        drawers[section](ctx, selected);
+        ImGui::Unindent(kCardInset);
+        splitter.SetCurrentChannel(cardDrawList, 0);
+        if (sectionHeaderDrawn)
+        {
+            ImGui::Dummy(ImVec2(0.f, 2.f));
+            const float bottom = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y + 2.f;
+            const ImVec2 cardMin(cardLeft, sectionHeaderTop - kCardInset * 0.5f);
+            const ImVec2 cardMax(cardRight, bottom);
+            ImVec4 fill = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
+            fill.w *= 0.45f;
+            cardDrawList->AddRectFilled(cardMin, cardMax, ImGui::GetColorU32(fill), 5.f);
+            cardDrawList->AddRect(cardMin, cardMax, ImGui::GetColorU32(theme::kBorder), 5.f);
+        }
+        splitter.Merge(cardDrawList);
+    }
+    currentInspectorSection = -1;
+    // Erst nach dem Zeichnen umordnen, damit keine Sektion doppelt erscheint.
+    if (movedInspectorSection >= 0 && targetInspectorSection >= 0 &&
+        movedInspectorSection != targetInspectorSection)
+    {
+        const auto source = std::find(order.begin(), order.end(), movedInspectorSection);
+        const auto target = std::find(order.begin(), order.end(), targetInspectorSection);
+        if (source != order.end() && target != order.end())
+        {
+            const auto destination = target + (insertInspectorSectionAfter ? 1 : 0);
+            if (source < destination)
+                std::rotate(source, source + 1, destination);
+            else if (destination < source)
+                std::rotate(destination, source, source + 1);
+        }
+    }
+    movedInspectorSection = targetInspectorSection = -1;
+
+    if (isInactive) ImGui::EndDisabled();
+}
+
+// Runs add on every target that lacks the component; with several targets all
+// additions form one undo step.
+static void AddComponentToTargets(EditorFrameContext& ctx, std::span<const EntityID> targets, const char* label,
+                                  const std::function<bool(EntityID)>& lacks,
+                                  const std::function<void(EntityID)>& add)
+{
+    const bool opened = targets.size() > 1 && BeginEditorTransaction(ctx, label);
+    for (const EntityID entity : targets)
+        if (ctx.world.IsAlive(entity) && lacks(entity))
+            add(entity);
+    if (opened)
+        CommitEditorTransaction(ctx);
+}
+
+template<typename T>
+static bool AllTargetsHave(EditorFrameContext& ctx, std::span<const EntityID> targets)
+{
+    return std::all_of(targets.begin(), targets.end(), [&](EntityID e) { return ctx.world.Has<T>(e); });
+}
+
+// "Add component" popup (right click or "+" button) for one or several entities.
+static void DrawAddComponentPopup(EditorFrameContext& ctx, std::span<const EntityID> targets)
+{
+    if (targets.empty() || !ImGui::BeginPopup("AddComponentPopup##inspector"))
+        return;
+    value_ui::TextDisabled(Translate("inspector.add_component_title"));
+    ImGui::Separator();
+    if (targets.size() == 1)
+    {
+        DrawPasteComponentAsNewItem(ctx, targets[0]);
+        DrawPasteScriptAsNewItem(ctx, targets[0]);
+    }
+    const char* addLabel = "history.add_component";
+
+    // Mesh: empty component; the model is dropped onto the Mesh section afterwards.
+    const bool hasMeshComponent = AllTargetsHave<MeshComponent>(ctx, targets);
+    if (hasMeshComponent) ImGui::BeginDisabled();
+    if (ImGui::MenuItem("Mesh"))
+        AddComponentToTargets(ctx, targets, addLabel,
+            [&](EntityID e) { return !ctx.world.Has<MeshComponent>(e); },
+            [&](EntityID e) {
+                EditComponents<MeshComponent, BoundsComponent>(ctx, addLabel, e, [&] {
+                    ctx.world.Add<MeshComponent>(e, MeshComponent{});
+                    if (!ctx.world.Has<BoundsComponent>(e))
+                        ctx.world.Add<BoundsComponent>(e);
+                });
+            });
+    if (hasMeshComponent) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", Translate(hasMeshComponent ? "mesh.exists" : "mesh.add_tip"));
+
+    const bool hasAnimator = AllTargetsHave<AnimationPlayerComponent>(ctx, targets);
+    if (hasAnimator) ImGui::BeginDisabled();
+    if (ImGui::MenuItem(TranslateLabel("component.animator", "Animator##animator_hdr").c_str()))
+        AddComponentToTargets(ctx, targets, addLabel,
+            [&](EntityID e) { return !ctx.world.Has<AnimationPlayerComponent>(e); },
+            [&](EntityID e) {
+                EditComponents<AnimationPlayerComponent>(ctx, addLabel, e, [&] {
+                    AnimationPlayerComponent player;
+                    player.playing = true;
+                    player.looping = true;
+                    ctx.world.Add<AnimationPlayerComponent>(e, player);
+                });
+            });
+    if (hasAnimator) ImGui::EndDisabled();
+
+    auto hasMaterialAsset = [&](EntityID e) {
+        const auto* mc = ctx.world.Get<MaterialComponent>(e);
+        return mc && !mc->materialAssetPath.empty();
+    };
+    const bool hasMaterial = std::all_of(targets.begin(), targets.end(), hasMaterialAsset);
+
+    // Kollision: Formen (Box/Kugel/Kapsel, beliebig viele) an den Mesh-Bounds.
+    if (ImGui::BeginMenu(TranslateLabel("component.collider", "add_collider_menu").c_str()))
+    {
+        ColliderShapeType type = ColliderShapeType::Box;
+        if (ColliderShapeTypeMenuItems(type))
+            AddComponentToTargets(ctx, targets, "history.add_collider_shape",
+                [](EntityID) { return true; },
+                [&](EntityID e) { AddColliderShape(ctx, e, type); });
+        ImGui::EndMenu();
+    }
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", Translate(AllTargetsHave<ColliderComponent>(ctx, targets)
+                                              ? "collider.menu_add_tip" : "collider.menu_tip"));
+
+    // Trigger-Zone (OBB mit isTrigger) — auch ohne Mesh.
+    const bool hasOBB = AllTargetsHave<OBBComponent>(ctx, targets);
+    if (hasOBB) ImGui::BeginDisabled();
+    if (ImGui::MenuItem(TranslateLabel("physics.trigger_zone", "add_trigger_zone").c_str()))
+        AddComponentToTargets(ctx, targets, addLabel,
+            [&](EntityID e) { return !ctx.world.Has<OBBComponent>(e); },
+            [&](EntityID e) {
+                OBBComponent fresh;
+                fresh.isTrigger = true;
+                fresh.showInEditor = true;
+                if (const auto* b = ctx.world.Get<BoundsComponent>(e))
+                {
+                    fresh.centerOffset = b->centerLocal;
+                    fresh.halfExtents  = b->extentsLocal;
+                }
+                EditComponents<OBBComponent>(ctx, addLabel, e, [&] { ctx.world.Add<OBBComponent>(e, fresh); });
+            });
+    if (hasOBB) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", Translate(hasOBB ? "physics.trigger_zone_exists" : "physics.trigger_zone_tip"));
+
+    // Spielfigur — Kapsel um die Mesh-Bounds, Ursprung an den Fuessen.
+    const bool hasCharacter = AllTargetsHave<CharacterControllerComponent>(ctx, targets);
+    if (hasCharacter) ImGui::BeginDisabled();
+    if (ImGui::MenuItem(TranslateLabel("component.character", "Spielfigur (Character Controller)").c_str()))
+        AddComponentToTargets(ctx, targets, addLabel,
+            [&](EntityID e) { return !ctx.world.Has<CharacterControllerComponent>(e); },
+            [&](EntityID e) {
+                CharacterControllerComponent fresh;
+                if (const auto* bounds = ctx.world.Get<BoundsComponent>(e))
+                {
+                    const math::Vec3 ext = bounds->extentsLocal;
+                    fresh.radius = std::max(0.05f, std::max(ext.x, ext.z));
+                    fresh.height = std::max(fresh.radius * 2.f, ext.y * 2.f);
+                }
+                EditComponents<CharacterControllerComponent>(ctx, addLabel, e,
+                    [&] { ctx.world.Add<CharacterControllerComponent>(e, fresh); });
+            });
+    if (hasCharacter) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip(hasCharacter ? Translate("physics.character_exists")
+                                       : Translate("physics.character_help"));
+
+    // Audio
+    ImGui::Separator();
+    const bool hasAudioSource = AllTargetsHave<AudioSourceComponent>(ctx, targets);
+    if (hasAudioSource) ImGui::BeginDisabled();
+    if (ImGui::MenuItem(TranslateLabel("component.audio_source", "Audio-Quelle").c_str()))
+        AddComponentToTargets(ctx, targets, addLabel,
+            [&](EntityID e) { return !ctx.world.Has<AudioSourceComponent>(e); },
+            [&](EntityID e) {
+                EditComponents<AudioSourceComponent>(ctx, addLabel, e,
+                    [&] { ctx.world.Add<AudioSourceComponent>(e, AudioSourceComponent{}); });
+            });
+    if (hasAudioSource) ImGui::EndDisabled();
+    const bool hasAudioListener = AllTargetsHave<AudioListenerComponent>(ctx, targets);
+    if (hasAudioListener) ImGui::BeginDisabled();
+    if (ImGui::MenuItem(TranslateLabel("component.audio_listener", "Audio-Listener").c_str()))
+        AddComponentToTargets(ctx, targets, addLabel,
+            [&](EntityID e) { return !ctx.world.Has<AudioListenerComponent>(e); },
+            [&](EntityID e) {
+                EditComponents<AudioListenerComponent>(ctx, addLabel, e,
+                    [&] { ctx.world.Add<AudioListenerComponent>(e, AudioListenerComponent{}); });
+            });
+    if (hasAudioListener) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip(Translate("audio.listener_tip"));
+    ImGui::Separator();
+
+    // Effekte
+    const bool hasEmitter = AllTargetsHave<ParticleEmitterComponent>(ctx, targets);
+    if (hasEmitter) ImGui::BeginDisabled();
+    if (ImGui::MenuItem(TranslateLabel("component.particles", "Partikel-Emitter").c_str()))
+        AddComponentToTargets(ctx, targets, addLabel,
+            [&](EntityID e) { return !ctx.world.Has<ParticleEmitterComponent>(e); },
+            [&](EntityID e) {
+                EditComponents<ParticleEmitterComponent>(ctx, addLabel, e,
+                    [&] { ctx.world.Add<ParticleEmitterComponent>(e, ParticleEmitterComponent{}); });
+            });
+    if (hasEmitter) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip(hasEmitter ? Translate("particles.exists")
+                                     : Translate("particles.help"));
+    const bool hasProbe = AllTargetsHave<ReflectionProbeComponent>(ctx, targets);
+    if (hasProbe) ImGui::BeginDisabled();
+    if (ImGui::MenuItem(TranslateLabel("component.reflection_probe", "Reflection Probe").c_str()))
+        AddComponentToTargets(ctx, targets, addLabel,
+            [&](EntityID e) { return !ctx.world.Has<ReflectionProbeComponent>(e); },
+            [&](EntityID e) {
+                EditComponents<ReflectionProbeComponent>(ctx, addLabel, e, [&] {
+                    ReflectionProbeComponent fresh;
+                    fresh.probeId = engine::addons::probes::GenerateProbeId();
+                    ctx.world.Add<ReflectionProbeComponent>(e, fresh);
+                });
+            });
+    if (hasProbe) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", Translate("probe.help"));
+    const bool hasVolume = AllTargetsHave<PostProcessVolumeComponent>(ctx, targets);
+    if (hasVolume) ImGui::BeginDisabled();
+    if (ImGui::MenuItem(TranslateLabel("component.post_process", "Post Process").c_str()))
+        AddComponentToTargets(ctx, targets, addLabel,
+            [&](EntityID e) { return !ctx.world.Has<PostProcessVolumeComponent>(e); },
+            [&](EntityID e) {
+                EditComponents<PostProcessVolumeComponent>(ctx, addLabel, e,
+                    [&] { ctx.world.Add<PostProcessVolumeComponent>(e, PostProcessVolumeComponent{}); });
+            });
+    if (hasVolume) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+        ImGui::SetTooltip("%s", Translate("ppv.help"));
+    ImGui::Separator();
+
+    // Rigidbody — legt bei Bedarf gleich eine Box-Kollision aus der Mesh-AABB an.
+    const bool hasRigidBody = AllTargetsHave<RigidBodyComponent>(ctx, targets);
+    if (hasRigidBody) ImGui::BeginDisabled();
+    if (ImGui::MenuItem(TranslateLabel("component.rigidbody", "Rigidbody").c_str()))
+        AddComponentToTargets(ctx, targets, "history.add_rigidbody",
+            [&](EntityID e) { return !ctx.world.Has<RigidBodyComponent>(e); },
+            [&](EntityID e) {
+                EditComponents<ColliderComponent, RigidBodyComponent>(ctx, "history.add_rigidbody", e, [&] {
+                    uint32_t childColliders = 0u;
+                    CountChildColliders(ctx.world, e, childColliders);
+                    if (!HasPhysicsCollider(ctx.world, e) && childColliders == 0u)
+                    {
+                        const ColliderShape box = MakeFittedColliderShape(ColliderShapeType::Box,
+                                                                          ctx.world.Get<BoundsComponent>(e));
+                        if (auto* collider = ctx.world.Get<ColliderComponent>(e))
+                        {
+                            collider->shapes.push_back(box);
+                        }
+                        else
+                        {
+                            ColliderComponent fresh;
+                            fresh.shapes.push_back(box);
+                            ctx.world.Add<ColliderComponent>(e, std::move(fresh));
+                        }
+                        ctx.state.colliderEditShape = 0;
+                    }
+                    ctx.world.Add<RigidBodyComponent>(e, RigidBodyComponent{});
+                });
+            });
+    if (hasRigidBody) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
+    {
+        if (hasRigidBody) ImGui::SetTooltip(Translate("physics.rigidbody_exists"));
+        else              ImGui::SetTooltip(Translate("physics.dynamic_help"));
+    }
+
+    ImGui::Separator();
+
+    // Material
+    if (hasMaterial) ImGui::BeginDisabled();
+    if (ImGui::MenuItem("Material"))
+        AddComponentToTargets(ctx, targets, "history.assign_material",
+            [&](EntityID e) { return !hasMaterialAsset(e); },
+            [&](EntityID e) {
+                EditComponents<MaterialComponent>(ctx, "history.assign_material", e,
+                                                 [&] { AssignDefaultMaterialToEntity(ctx, e); });
+            });
+    if (hasMaterial) ImGui::EndDisabled();
+    if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && hasMaterial)
+        ImGui::SetTooltip(Translate("material.assigned_tip"));
+
+    ImGui::EndPopup();
+}
+
+// Multi-selection: components every selected entity has are drawn with the
+// values of the primary entity; changed fields go to all of them.
+static void DrawSharedComponentSections(EditorFrameContext& ctx, std::span<const EntityID> selection)
+{
+    struct SharedSection { int section; uint32_t typeId; };
+    const SharedSection candidates[] = {
+        {1, ComponentTypeID<CameraComponent>::Get()},
+        {2, ComponentTypeID<LightComponent>::Get()},
+        {5, ComponentTypeID<RigidBodyComponent>::Get()},
+        {6, ComponentTypeID<ColliderComponent>::Get()},
+        {7, ComponentTypeID<OBBComponent>::Get()},
+        {8, ComponentTypeID<CharacterControllerComponent>::Get()},
+        {9, ComponentTypeID<AudioSourceComponent>::Get()},
+        {10, ComponentTypeID<AudioListenerComponent>::Get()},
+        {11, ComponentTypeID<ParticleEmitterComponent>::Get()},
+        {15, ComponentTypeID<ReflectionProbeComponent>::Get()},
+        {16, ComponentTypeID<PostProcessVolumeComponent>::Get()},
+    };
+    std::array<bool, 17> shown{};
+    std::vector<uint32_t> types;
+    for (const auto& candidate : candidates)
+    {
+        if (!std::all_of(selection.begin(), selection.end(),
+                         [&](EntityID e) { return ctx.world.Get(e, candidate.typeId) != nullptr; }))
+            continue;
+        shown[candidate.section] = true;
+        types.push_back(candidate.typeId);
+    }
+    if (types.empty())
+        return;
+    value_ui::TextDisabled(Translate("inspector.group_components"));
+    BeginInspectorMultiEdit(ctx, selection[0], selection.subspan(1), types);
+    DrawComponentSections(ctx, selection[0], shown.data());
+    EndInspectorMultiEdit(ctx);
+}
+
 void DrawInspector(EditorFrameContext& ctx)
 {
     SolidEditorPanelStyleScope solidPanelStyle;
@@ -4885,7 +5248,56 @@ void DrawInspector(EditorFrameContext& ctx)
         }
 
         ImGui::Separator();
+
+        // Primary entity: the active one if it belongs to the group, else the first.
+        std::vector<EntityID> group;
+        if (IsEntityInMultiSelection(ctx.state, selected) && ctx.world.IsAlive(selected))
+            group.push_back(selected);
+        for (const EntityID e : ctx.state.multiSelection)
+            if (e != selected && e.IsValid() && ctx.world.IsAlive(e))
+                group.push_back(e);
+
+        ImGui::PushID("##multi_selection");
+        if (group.size() >= 2)
+            DrawSharedComponentSections(ctx, group);
+
+        ImGui::Separator();
         value_ui::TextDisabled(Translate("inspector.group_tip"));
+        if (!group.empty() && !ctx.state.prefabModeReadOnly)
+        {
+            // Drop zone: one material for every selected object.
+            {
+                const ImVec2 size(std::max(1.f, ImGui::GetContentRegionAvail().x), 44.f);
+                const ImVec2 min = ImGui::GetCursorScreenPos();
+                ImGui::InvisibleButton("##GroupMaterialDrop", size);
+                const ImGuiPayload* dragged = ImGui::GetDragDropPayload();
+                const bool dragging = dragged && dragged->IsDataType("KROM_ASSET_MATERIAL");
+                ImDrawList* drawList = ImGui::GetWindowDrawList();
+                const ImVec2 max(min.x + size.x, min.y + size.y);
+                drawList->AddRect(min, max, ImGui::GetColorU32(dragging ? ImGuiCol_DragDropTarget : ImGuiCol_Border),
+                                  5.f, 0, dragging ? 2.f : 1.f);
+                const char* hint = Translate("inspector.group_material_drop");
+                const ImVec2 textSize = ImGui::CalcTextSize(hint);
+                drawList->AddText(ImVec2(min.x + std::max(0.f, (size.x - textSize.x) * 0.5f),
+                                         min.y + (size.y - textSize.y) * 0.5f),
+                                  ImGui::GetColorU32(ImGuiCol_TextDisabled), hint);
+                if (ImGui::BeginDragDropTarget())
+                {
+                    if (const ImGuiPayload* payload = ImGui::AcceptDragDropPayload("KROM_ASSET_MATERIAL"))
+                    {
+                        const char* materialPath = static_cast<const char*>(payload->Data);
+                        if (materialPath && materialPath[0] != '\0')
+                            AssignMaterialAssetToEntities(ctx, group, PathFromUtf8(materialPath));
+                    }
+                    ImGui::EndDragDropTarget();
+                }
+            }
+            if (EditorActionButton(TranslateLabel("inspector.add_component", "+ Komponente").c_str(),
+                                   ImVec2(-1.f, 36.f), EditorButtonTone::Primary))
+                ImGui::OpenPopup("AddComponentPopup##inspector");
+            DrawAddComponentPopup(ctx, group);
+        }
+        ImGui::PopID();
         ImGui::End();
         return;
     }
@@ -5185,75 +5597,7 @@ void DrawInspector(EditorFrameContext& ctx)
         // No separator here: every component header draws its own line above.
     }
 
-    // Alle Sektionen deaktivieren wenn Entity inaktiv ist (Kameras ausgenommen)
-    {
-        const bool isCamera = ctx.world.Has<CameraComponent>(selected);
-        const auto* activeComp = ctx.world.Get<ActiveComponent>(selected);
-        const bool isInactive = !isCamera && activeComp && !activeComp->active;
-        if (isInactive) ImGui::BeginDisabled();
-
-        using SectionDrawer = void (*)(EditorFrameContext&, EntityID);
-        static constexpr std::array<SectionDrawer, 17> drawers = {
-            DrawTransformSection, DrawCameraSection, DrawLightSection, DrawMeshSection,
-            DrawMaterialSlotsSection, DrawRigidBodySection, DrawColliderSection,
-            DrawOBBSection, DrawCharacterControllerSection,
-            DrawAudioSourceSection, DrawAudioListenerSection, DrawParticleEmitterSection,
-            DrawMaterialSection, DrawScriptSection, DrawAnimatorSection, DrawReflectionProbeSection,
-            DrawPostProcessVolumeSection
-        };
-        static std::array<int, 17> order = {0, 1, 2, 15, 16, 3, 4, 5, 12, 14, 6, 7, 8, 9, 10, 11, 13};
-        // Each component as a card: subtle background, border and its type colour
-        // as a stripe down the whole section. The background goes into a lower
-        // draw channel because the section height is known only afterwards.
-        ImDrawList* cardDrawList = ImGui::GetWindowDrawList();
-        constexpr float kCardInset = 7.f;
-        value_ui::InlineLabelScope rows;
-        for (int section : order)
-        {
-            currentInspectorSection = section;
-            sectionHeaderDrawn = false;
-            const float cardLeft = ImGui::GetCursorScreenPos().x - 2.f;
-            const float cardRight = ImGui::GetCursorScreenPos().x + ImGui::GetContentRegionAvail().x + 3.f;
-            ImDrawListSplitter splitter;
-            splitter.Split(cardDrawList, 2);
-            splitter.SetCurrentChannel(cardDrawList, 1);
-            ImGui::Indent(kCardInset);
-            drawers[section](ctx, selected);
-            ImGui::Unindent(kCardInset);
-            splitter.SetCurrentChannel(cardDrawList, 0);
-            if (sectionHeaderDrawn)
-            {
-                ImGui::Dummy(ImVec2(0.f, 2.f));
-                const float bottom = ImGui::GetCursorScreenPos().y - ImGui::GetStyle().ItemSpacing.y + 2.f;
-                const ImVec2 cardMin(cardLeft, sectionHeaderTop - kCardInset * 0.5f);
-                const ImVec2 cardMax(cardRight, bottom);
-                ImVec4 fill = ImGui::GetStyleColorVec4(ImGuiCol_FrameBg);
-                fill.w *= 0.45f;
-                cardDrawList->AddRectFilled(cardMin, cardMax, ImGui::GetColorU32(fill), 5.f);
-                cardDrawList->AddRect(cardMin, cardMax, ImGui::GetColorU32(theme::kBorder), 5.f);
-            }
-            splitter.Merge(cardDrawList);
-        }
-        currentInspectorSection = -1;
-        // Erst nach dem Zeichnen umordnen, damit keine Sektion doppelt erscheint.
-        if (movedInspectorSection >= 0 && targetInspectorSection >= 0 &&
-            movedInspectorSection != targetInspectorSection)
-        {
-            const auto source = std::find(order.begin(), order.end(), movedInspectorSection);
-            const auto target = std::find(order.begin(), order.end(), targetInspectorSection);
-            if (source != order.end() && target != order.end())
-            {
-                const auto destination = target + (insertInspectorSectionAfter ? 1 : 0);
-                if (source < destination)
-                    std::rotate(source, source + 1, destination);
-                else if (destination < source)
-                    std::rotate(destination, source, source + 1);
-            }
-        }
-        movedInspectorSection = targetInspectorSection = -1;
-
-        if (isInactive) ImGui::EndDisabled();
-    }
+    DrawComponentSections(ctx, selected);
 
     // ── Drag-Drop-Zone für Material ───────────────────────────────────────────
     // Füllt den restlichen freien Raum oberhalb des "+ Komponente"-Buttons.
@@ -5270,12 +5614,7 @@ void DrawInspector(EditorFrameContext& ctx)
                 {
                     const char* matPath = static_cast<const char*>(payload->Data);
                     if (matPath && matPath[0] != '\0')
-                    {
-                        EditComponents<MaterialComponent>(ctx, "history.assign_material", selected, [&] {
-                            SelectMaterialAsset(ctx, PathFromUtf8(matPath));
-                            ApplyMaterialAssetToEntity(ctx, selected, PathFromUtf8(matPath));
-                        });
-                    }
+                        AssignMaterialAssetToEntities(ctx, {&selected, 1}, PathFromUtf8(matPath));
                 }
                 ImGui::EndDragDropTarget();
             }
@@ -5313,186 +5652,7 @@ void DrawInspector(EditorFrameContext& ctx)
     if (EditorActionButton(TranslateLabel("inspector.add_component", "+ Komponente").c_str(), ImVec2(-1.f, 36.f), EditorButtonTone::Primary))
         ImGui::OpenPopup("AddComponentPopup##inspector");
 
-    // ── "Komponente hinzufügen"-Popup (Rechtsklick oder "+" Button) ───────────
-    if (ImGui::BeginPopup("AddComponentPopup##inspector"))
-    {
-        value_ui::TextDisabled(Translate("inspector.add_component_title"));
-        ImGui::Separator();
-        DrawPasteComponentAsNewItem(ctx, selected);
-        DrawPasteScriptAsNewItem(ctx, selected);
-
-        // Mesh: empty component; the model is dropped onto the Mesh section afterwards.
-        const bool hasMeshComponent = ctx.world.Has<MeshComponent>(selected);
-        if (hasMeshComponent) ImGui::BeginDisabled();
-        if (ImGui::MenuItem("Mesh"))
-            EditComponents<MeshComponent, BoundsComponent>(ctx, "history.add_component", selected, [&] {
-                ctx.world.Add<MeshComponent>(selected, MeshComponent{});
-                if (!ctx.world.Has<BoundsComponent>(selected))
-                    ctx.world.Add<BoundsComponent>(selected);
-            });
-        if (hasMeshComponent) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("%s", Translate(hasMeshComponent ? "mesh.exists" : "mesh.add_tip"));
-
-        const bool hasAnimator = ctx.world.Has<AnimationPlayerComponent>(selected);
-        if (hasAnimator) ImGui::BeginDisabled();
-        if (ImGui::MenuItem(TranslateLabel("component.animator", "Animator##animator_hdr").c_str()))
-            EditComponents<AnimationPlayerComponent>(ctx, "history.add_component", selected, [&] {
-                AnimationPlayerComponent player;
-                player.playing = true;
-                player.looping = true;
-                ctx.world.Add<AnimationPlayerComponent>(selected, player);
-            });
-        if (hasAnimator) ImGui::EndDisabled();
-
-        const bool hasMaterial = [&]() {
-            auto* mc = ctx.world.Get<MaterialComponent>(selected);
-            return mc && !mc->materialAssetPath.empty();
-        }();
-
-        // Kollision: Formen (Box/Kugel/Kapsel, beliebig viele) an den Mesh-Bounds.
-        if (ImGui::BeginMenu(TranslateLabel("component.collider", "add_collider_menu").c_str()))
-        {
-            ColliderShapeType type = ColliderShapeType::Box;
-            if (ColliderShapeTypeMenuItems(type))
-                AddColliderShape(ctx, selected, type);
-            ImGui::EndMenu();
-        }
-        if (ImGui::IsItemHovered())
-            ImGui::SetTooltip("%s", Translate(ctx.world.Has<ColliderComponent>(selected)
-                                                  ? "collider.menu_add_tip" : "collider.menu_tip"));
-
-        // Trigger-Zone (OBB mit isTrigger) — auch ohne Mesh.
-        const bool hasOBB = ctx.world.Has<OBBComponent>(selected);
-        if (hasOBB) ImGui::BeginDisabled();
-        if (ImGui::MenuItem(TranslateLabel("physics.trigger_zone", "add_trigger_zone").c_str()))
-        {
-            OBBComponent fresh;
-            fresh.isTrigger = true;
-            fresh.showInEditor = true;
-            if (const auto* b = ctx.world.Get<BoundsComponent>(selected))
-            {
-                fresh.centerOffset = b->centerLocal;
-                fresh.halfExtents  = b->extentsLocal;
-            }
-            EditComponents<OBBComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<OBBComponent>(selected, fresh); });
-        }
-        if (hasOBB) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("%s", Translate(hasOBB ? "physics.trigger_zone_exists" : "physics.trigger_zone_tip"));
-
-        // Spielfigur — Kapsel um die Mesh-Bounds, Ursprung an den Fuessen.
-        const auto* addBounds = ctx.world.Get<BoundsComponent>(selected);
-        const bool hasCharacter = ctx.world.Has<CharacterControllerComponent>(selected);
-        if (hasCharacter) ImGui::BeginDisabled();
-        if (ImGui::MenuItem(TranslateLabel("component.character", "Spielfigur (Character Controller)").c_str()))
-        {
-            CharacterControllerComponent fresh;
-            if (addBounds)
-            {
-                const math::Vec3 e = addBounds->extentsLocal;
-                fresh.radius = std::max(0.05f, std::max(e.x, e.z));
-                fresh.height = std::max(fresh.radius * 2.f, e.y * 2.f);
-            }
-            EditComponents<CharacterControllerComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<CharacterControllerComponent>(selected, fresh); });
-        }
-        if (hasCharacter) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip(hasCharacter ? Translate("physics.character_exists")
-                                           : Translate("physics.character_help"));
-
-        // Audio
-        ImGui::Separator();
-        const bool hasAudioSource = ctx.world.Has<AudioSourceComponent>(selected);
-        if (hasAudioSource) ImGui::BeginDisabled();
-        if (ImGui::MenuItem(TranslateLabel("component.audio_source", "Audio-Quelle").c_str()))
-            EditComponents<AudioSourceComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<AudioSourceComponent>(selected, AudioSourceComponent{}); });
-        if (hasAudioSource) ImGui::EndDisabled();
-        const bool hasAudioListener = ctx.world.Has<AudioListenerComponent>(selected);
-        if (hasAudioListener) ImGui::BeginDisabled();
-        if (ImGui::MenuItem(TranslateLabel("component.audio_listener", "Audio-Listener").c_str()))
-            EditComponents<AudioListenerComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<AudioListenerComponent>(selected, AudioListenerComponent{}); });
-        if (hasAudioListener) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip(Translate("audio.listener_tip"));
-        ImGui::Separator();
-
-        // Effekte
-        const bool hasEmitter = ctx.world.Has<ParticleEmitterComponent>(selected);
-        if (hasEmitter) ImGui::BeginDisabled();
-        if (ImGui::MenuItem(TranslateLabel("component.particles", "Partikel-Emitter").c_str()))
-            EditComponents<ParticleEmitterComponent>(ctx, "history.add_component", selected, [&] { ctx.world.Add<ParticleEmitterComponent>(selected, ParticleEmitterComponent{}); });
-        if (hasEmitter) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip(hasEmitter ? Translate("particles.exists")
-                                         : Translate("particles.help"));
-        const bool hasProbe = ctx.world.Has<ReflectionProbeComponent>(selected);
-        if (hasProbe) ImGui::BeginDisabled();
-        if (ImGui::MenuItem(TranslateLabel("component.reflection_probe", "Reflection Probe").c_str()))
-            EditComponents<ReflectionProbeComponent>(ctx, "history.add_component", selected, [&] {
-                ReflectionProbeComponent fresh;
-                fresh.probeId = engine::addons::probes::GenerateProbeId();
-                ctx.world.Add<ReflectionProbeComponent>(selected, fresh);
-            });
-        if (hasProbe) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("%s", Translate("probe.help"));
-        const bool hasVolume = ctx.world.Has<PostProcessVolumeComponent>(selected);
-        if (hasVolume) ImGui::BeginDisabled();
-        if (ImGui::MenuItem(TranslateLabel("component.post_process", "Post Process").c_str()))
-            EditComponents<PostProcessVolumeComponent>(ctx, "history.add_component", selected,
-                [&] { ctx.world.Add<PostProcessVolumeComponent>(selected, PostProcessVolumeComponent{}); });
-        if (hasVolume) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-            ImGui::SetTooltip("%s", Translate("ppv.help"));
-        ImGui::Separator();
-
-        // Rigidbody — legt bei Bedarf gleich eine Box-Kollision aus der Mesh-AABB an.
-        const bool hasRigidBody = ctx.world.Has<RigidBodyComponent>(selected);
-        if (hasRigidBody) ImGui::BeginDisabled();
-        if (ImGui::MenuItem(TranslateLabel("component.rigidbody", "Rigidbody").c_str()))
-        EditComponents<ColliderComponent, RigidBodyComponent>(ctx, "history.add_rigidbody", selected, [&]
-        {
-            uint32_t childColliders = 0u;
-            CountChildColliders(ctx.world, selected, childColliders);
-            if (!HasPhysicsCollider(ctx.world, selected) && childColliders == 0u)
-            {
-                const ColliderShape box = MakeFittedColliderShape(ColliderShapeType::Box,
-                                                                  ctx.world.Get<BoundsComponent>(selected));
-                if (auto* collider = ctx.world.Get<ColliderComponent>(selected))
-                {
-                    collider->shapes.push_back(box);
-                }
-                else
-                {
-                    ColliderComponent fresh;
-                    fresh.shapes.push_back(box);
-                    ctx.world.Add<ColliderComponent>(selected, std::move(fresh));
-                }
-                ctx.state.colliderEditShape = 0;
-            }
-            ctx.world.Add<RigidBodyComponent>(selected, RigidBodyComponent{});
-        });
-        if (hasRigidBody) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled))
-        {
-            if (hasRigidBody) ImGui::SetTooltip(Translate("physics.rigidbody_exists"));
-            else              ImGui::SetTooltip(Translate("physics.dynamic_help"));
-        }
-
-        ImGui::Separator();
-
-        // Material
-        if (hasMaterial) ImGui::BeginDisabled();
-        if (ImGui::MenuItem("Material"))
-            EditComponents<MaterialComponent>(ctx, "history.assign_material", selected,
-                                             [&] { AssignDefaultMaterialToEntity(ctx, selected); });
-        if (hasMaterial) ImGui::EndDisabled();
-        if (ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled) && hasMaterial)
-            ImGui::SetTooltip(Translate("material.assigned_tip"));
-
-        ImGui::EndPopup();
-    }
+    DrawAddComponentPopup(ctx, {&selected, 1});
 
     ImGui::PopID();
     ImGui::End();

@@ -167,6 +167,16 @@ struct EditorHistoryState
     std::vector<std::pair<std::string, PendingComponentEdit>> pendingComponentEdits;
     std::optional<EditorHistoryEntry> openTransaction;
     bool applyingHistory = false;
+
+    // Inspector multi-object editing: the inspector draws the primary entity, and
+    // changed fields of these component types are copied to every peer.
+    struct MultiEdit
+    {
+        EntityID primary;
+        std::vector<EntityID> peers;
+        std::vector<std::pair<uint32_t, std::string>> baseline; // primary JSON per type
+    };
+    std::optional<MultiEdit> multiEdit;
 };
 
 static std::unordered_map<EditorState*, EditorHistoryState> g_editorHistory;
@@ -503,13 +513,168 @@ static PendingComponentEdit CaptureComponentEdit(EditorFrameContext& ctx, const 
                 ? static_cast<const MaterialComponent*>(previous) : ctx.world.Get<MaterialComponent>(entity));
         edit.components.push_back(std::move(operation));
     }
+    // While the inspector edits several entities, an edit of the primary also
+    // records the same component of every peer, so one undo step covers all.
+    if (const auto& multi = GetEditorHistory(ctx.state).multiEdit)
+    {
+        for (const auto& [entity, typeId] : targets)
+        {
+            if (entity != multi->primary ||
+                std::none_of(multi->baseline.begin(), multi->baseline.end(),
+                             [&](const auto& item) { return item.first == typeId; }))
+                continue;
+            for (const EntityID peer : multi->peers)
+            {
+                if (!ctx.world.IsAlive(peer) || !ctx.world.Get(peer, typeId))
+                    continue;
+                const EditorEntityId peerId = GetStableEditorEntityId(ctx, peer);
+                const bool recorded = std::any_of(edit.components.begin(), edit.components.end(),
+                    [&](const ComponentOperation& op) { return op.entity == peerId && op.typeId == typeId; });
+                if (!recorded)
+                    edit.components.push_back(ComponentOperation{peerId, typeId,
+                        serializer.SerializeComponent(peer, typeId), {}, {}, {}, {}, {}});
+            }
+        }
+    }
     return edit;
+}
+
+static bool SameJson(const serialization::JsonValue& a, const serialization::JsonValue& b)
+{
+    using serialization::JsonType;
+    if (a.type != b.type)
+        return false;
+    switch (a.type)
+    {
+    case JsonType::Null:   return true;
+    case JsonType::Bool:   return a.boolVal == b.boolVal;
+    case JsonType::Number: return a.numVal == b.numVal;
+    case JsonType::String: return a.strVal == b.strVal;
+    case JsonType::Array:
+        return a.arrayVal.size() == b.arrayVal.size() &&
+               std::equal(a.arrayVal.begin(), a.arrayVal.end(), b.arrayVal.begin(), SameJson);
+    case JsonType::Object:
+        return a.objectVal.size() == b.objectVal.size() &&
+               std::equal(a.objectVal.begin(), a.objectVal.end(), b.objectVal.begin(),
+                          [](const auto& x, const auto& y) { return x.first == y.first && SameJson(x.second, y.second); });
+    }
+    return false;
+}
+
+// Applies only what changed from before to after onto target, so fields the user
+// did not touch keep each entity's own value. Lists of different length are
+// replaced only on entities whose list matched the primary's old list.
+static void ApplyJsonChange(serialization::JsonValue& target, const serialization::JsonValue& before,
+                            const serialization::JsonValue& after)
+{
+    if (before.IsObject() && after.IsObject() && target.IsObject())
+    {
+        auto find = [&](const std::string& key) -> serialization::JsonValue* {
+            for (auto& [name, value] : target.objectVal)
+                if (name == key) return &value;
+            return nullptr;
+        };
+        for (const auto& [key, value] : after.objectVal)
+        {
+            const auto* old = before.Get(key);
+            if (old && SameJson(*old, value))
+                continue;
+            if (auto* destination = find(key))
+            {
+                if (old) ApplyJsonChange(*destination, *old, value);
+                else     *destination = value;
+            }
+            else
+            {
+                target.objectVal.emplace_back(key, value);
+            }
+        }
+        for (const auto& [key, value] : before.objectVal)
+        {
+            if (after.Get(key))
+                continue;
+            std::erase_if(target.objectVal, [&](const auto& item) { return item.first == key; });
+        }
+        return;
+    }
+    if (before.IsArray() && after.IsArray() && target.IsArray())
+    {
+        if (before.arrayVal.size() == after.arrayVal.size() && target.arrayVal.size() == after.arrayVal.size())
+        {
+            for (size_t i = 0; i < after.arrayVal.size(); ++i)
+                if (!SameJson(before.arrayVal[i], after.arrayVal[i]))
+                    ApplyJsonChange(target.arrayVal[i], before.arrayVal[i], after.arrayVal[i]);
+        }
+        else if (SameJson(target, before))
+        {
+            target = after;
+        }
+        return;
+    }
+    target = after;
+}
+
+// Copies every change of the primary since the last call to the peers.
+static void SyncInspectorMultiEdit(EditorFrameContext& ctx)
+{
+    auto& history = GetEditorHistory(ctx.state);
+    if (!history.multiEdit || history.applyingHistory)
+        return;
+    auto& multi = *history.multiEdit;
+    if (!ctx.world.IsAlive(multi.primary))
+        return;
+    const auto serializer = MakeEditorSceneSerializer(ctx);
+    std::optional<serialization::SceneDeserializer> deserializer;
+    for (auto& [typeId, baseline] : multi.baseline)
+    {
+        std::string current = serializer.SerializeComponent(multi.primary, typeId);
+        if (current == baseline)
+            continue;
+        if (current.empty())
+        {
+            for (const EntityID peer : multi.peers)
+                if (ctx.world.IsAlive(peer) && ctx.world.Get(peer, typeId))
+                    ctx.world.Remove(peer, typeId);
+        }
+        else if (!baseline.empty())
+        {
+            std::string error;
+            const auto before = serialization::JsonParser::Parse(baseline, error);
+            auto after = serialization::JsonParser::Parse(current, error);
+            if (!error.empty())
+            {
+                baseline = std::move(current);
+                continue;
+            }
+            // Only one camera can be the main camera.
+            if (typeId == ComponentTypeID<CameraComponent>::Get())
+                for (auto& [key, value] : after.objectVal)
+                    if (key == "isMain")
+                        if (const auto* old = before.Get(key)) value = *old;
+            if (!deserializer)
+                deserializer.emplace(MakeEditorSceneDeserializer(ctx));
+            for (const EntityID peer : multi.peers)
+            {
+                if (!ctx.world.IsAlive(peer) || !ctx.world.Get(peer, typeId))
+                    continue;
+                auto value = serialization::JsonParser::Parse(serializer.SerializeComponent(peer, typeId), error);
+                if (!error.empty())
+                    continue;
+                ApplyJsonChange(value, before, after);
+                if (!deserializer->DeserializeComponent(peer, value))
+                    Debug::LogError("Editor: multi-edit of component %u on entity %u failed", typeId, peer.value);
+            }
+        }
+        baseline = std::move(current);
+    }
 }
 
 static bool FinishComponentEdit(EditorFrameContext& ctx, PendingComponentEdit edit)
 {
     if (edit.components.empty())
         return false;
+    // Peers must hold the primary's change before their new state is recorded.
+    SyncInspectorMultiEdit(ctx);
     std::vector<HistoryOperation> operations;
     std::vector<uint64_t> retainedProbeIds;
     const auto serializer = MakeEditorSceneSerializer(ctx);
@@ -1619,6 +1784,47 @@ static bool EditHierarchy(EditorFrameContext& ctx, const char* label, std::vecto
 
 } // namespace
 
+void BeginInspectorMultiEdit(EditorFrameContext& ctx, EntityID primary, std::span<const EntityID> peers,
+                             std::span<const uint32_t> typeIds)
+{
+    auto& history = GetEditorHistory(ctx.state);
+    EditorHistoryState::MultiEdit multi{primary, {peers.begin(), peers.end()}, {}};
+    const auto serializer = MakeEditorSceneSerializer(ctx);
+    for (const uint32_t typeId : typeIds)
+        multi.baseline.emplace_back(typeId, serializer.SerializeComponent(primary, typeId));
+    history.multiEdit = std::move(multi);
+}
+
+bool AssignMaterialAssetToEntities(EditorFrameContext& ctx, std::span<const EntityID> entities,
+                                   const std::filesystem::path& material)
+{
+    std::vector<EditorComponentTarget> targets;
+    for (const EntityID entity : entities)
+        if (ctx.world.IsAlive(entity))
+            targets.push_back({entity, ComponentTypeID<MaterialComponent>::Get()});
+    if (targets.empty() || material.empty())
+        return false;
+    bool assigned = false;
+    EditComponents(ctx, "history.assign_material", targets, [&] {
+        SelectMaterialAsset(ctx, material);
+        for (const auto& target : targets)
+        {
+            // A material dropped on an object replaces all its materials; slot
+            // materials would otherwise keep covering their submeshes.
+            if (auto* component = ctx.world.Get<MaterialComponent>(target.entity))
+                component->slotOverrides.clear();
+            assigned = ApplyMaterialAssetToEntity(ctx, target.entity, material) || assigned;
+        }
+    });
+    return assigned;
+}
+
+void EndInspectorMultiEdit(EditorFrameContext& ctx)
+{
+    SyncInspectorMultiEdit(ctx);
+    GetEditorHistory(ctx.state).multiEdit.reset();
+}
+
 EditorEntityId GetStableEditorEntityId(EditorFrameContext& ctx, EntityID entity)
 {
     if (!ctx.world.IsAlive(entity))
@@ -2514,6 +2720,23 @@ void AddToMultiSelection(EditorFrameContext& ctx, EntityID id)
         }
     }
     st.multiSelection.push_back(id);
+    UpdateMultiSelectionPivot(ctx);
+}
+
+void SetMultiSelection(EditorFrameContext& ctx, std::span<const EntityID> entities, EntityID active)
+{
+    ClearMultiSelection(ctx);
+    ctx.state.selectedEntity = active;
+    std::vector<EntityID> selection;
+    if (active.IsValid() && ctx.world.IsAlive(active))
+        selection.push_back(active);
+    for (const EntityID entity : entities)
+        if (entity.IsValid() && ctx.world.IsAlive(entity) &&
+            std::find(selection.begin(), selection.end(), entity) == selection.end())
+            selection.push_back(entity);
+    if (selection.size() < 2)
+        return;
+    ctx.state.multiSelection = std::move(selection);
     UpdateMultiSelectionPivot(ctx);
 }
 

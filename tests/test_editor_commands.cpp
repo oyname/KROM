@@ -1004,6 +1004,115 @@ static void TestComponentHistoryPreservesOtherEntities(test::TestContext& ctx)
                 Milliseconds(transactionTime).count(), Milliseconds(snapshotTime).count());
 }
 
+static void TestInspectorMultiEditCopiesChangedFields(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterPhysicsComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    const EntityID first = world.CreateEntity();
+    const EntityID second = world.CreateEntity();
+    const EntityID third = world.CreateEntity();
+    world.Add<RigidBodyComponent>(first).friction = 0.5f;
+    world.Add<RigidBodyComponent>(second).friction = 0.7f;
+    world.Get<RigidBodyComponent>(second)->mass = 2.f;
+    world.Add<RigidBodyComponent>(third).friction = 0.9f;
+
+    const std::vector<EntityID> peers = {second, third};
+    const uint32_t types[] = {ComponentTypeID<RigidBodyComponent>::Get()};
+    const std::string key = MakeEditHistoryKey(first, "rigidbody");
+
+    // A drag over two frames, like ComponentUndoScope in the inspector.
+    for (const float mass : {5.f, 6.f})
+    {
+        BeginInspectorMultiEdit(editor, first, peers, types);
+        const RigidBodyComponent before = *world.Get<RigidBodyComponent>(first);
+        world.Get<RigidBodyComponent>(first)->mass = mass;
+        BeginPendingComponentEdit<RigidBodyComponent>(editor, key, "history.edit_rigidbody", first, &before);
+        if (mass == 6.f)
+            CHECK(ctx, CommitPendingComponentEdit(editor, key));
+        EndInspectorMultiEdit(editor);
+        CHECK_EQ(ctx, world.Get<RigidBodyComponent>(second)->mass, mass);
+        CHECK_EQ(ctx, world.Get<RigidBodyComponent>(third)->mass, mass);
+    }
+    // Fields the user did not touch keep each entity's own value.
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(second)->friction, 0.7f);
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(third)->friction, 0.9f);
+
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, !CanUndoEditorHistory(state));
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(first)->mass, 1.f);
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(second)->mass, 2.f);
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(third)->mass, 1.f);
+    CHECK(ctx, RedoEditorHistory(editor));
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(second)->mass, 6.f);
+
+    // Removing the component from the primary removes it from all, in one step.
+    BeginInspectorMultiEdit(editor, first, peers, types);
+    CHECK(ctx, EditComponents<RigidBodyComponent>(editor, "history.remove_component", first,
+        [&] { world.Remove<RigidBodyComponent>(first); }));
+    EndInspectorMultiEdit(editor);
+    CHECK(ctx, !world.Has<RigidBodyComponent>(second) && !world.Has<RigidBodyComponent>(third));
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, world.Has<RigidBodyComponent>(first) && world.Has<RigidBodyComponent>(second) &&
+               world.Has<RigidBodyComponent>(third));
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(third)->friction, 0.9f);
+
+    // Outside a multi-edit only the edited entity changes.
+    CHECK(ctx, EditComponents<RigidBodyComponent>(editor, "history.edit_rigidbody", first,
+        [&] { world.Get<RigidBodyComponent>(first)->mass = 9.f; }));
+    CHECK_EQ(ctx, world.Get<RigidBodyComponent>(second)->mass, 6.f);
+
+    // Range selection keeps the active entity first.
+    const EntityID range[] = {first, second, third};
+    SetMultiSelection(editor, range, third);
+    CHECK_EQ(ctx, state.selectedEntity, third);
+    CHECK(ctx, state.multiSelection.size() == 3u && state.multiSelection[0] == third);
+}
+
+static void TestMaterialDropReplacesSlotMaterials(test::TestContext& ctx)
+{
+    auto meta = CreateEditorCommandsRegistry();
+    RegisterMeshRendererComponents(meta);
+    World world(meta);
+    MaterialSystem materials;
+    assets::AssetRegistry assets;
+    EditorState state;
+    auto editor = CreateEditorContext(world, materials, assets, state);
+    const EntityID first = world.CreateEntity();
+    const EntityID second = world.CreateEntity();
+    for (const EntityID entity : {first, second})
+    {
+        world.Add<MeshComponent>(entity);
+        MaterialComponent material;
+        material.materialAssetPath = "Materials/old.mat";
+        world.Add<MaterialComponent>(entity, material);
+    }
+    MaterialComponent::SlotOverride slot;
+    slot.submeshIndex = 0u;
+    slot.materialAssetPath = "Materials/slot.mat";
+    world.Get<MaterialComponent>(first)->slotOverrides.push_back(slot);
+
+    const EntityID targets[] = {first, second};
+    CHECK(ctx, AssignMaterialAssetToEntities(editor, targets, "Materials/new.mat"));
+    for (const EntityID entity : targets)
+    {
+        const auto* material = world.Get<MaterialComponent>(entity);
+        CHECK(ctx, material->slotOverrides.empty());
+        CHECK(ctx, material->materialAssetPath.find("new.mat") != std::string::npos);
+    }
+
+    CHECK(ctx, UndoEditorHistory(editor));
+    CHECK(ctx, !CanUndoEditorHistory(state));
+    const auto* restored = world.Get<MaterialComponent>(first);
+    CHECK(ctx, restored->slotOverrides.size() == 1u &&
+               restored->slotOverrides[0].materialAssetPath == "Materials/slot.mat");
+    CHECK_EQ(ctx, world.Get<MaterialComponent>(second)->materialAssetPath, std::string("Materials/old.mat"));
+}
+
 static void TestComponentHistoryGroupsAddRemoveAndSelection(test::TestContext& ctx)
 {
     auto meta = CreateEditorCommandsRegistry();
@@ -6258,6 +6367,8 @@ int RunEditorCommandTests()
     suite.Add("Inspector entity reference reveals target and preserves dropdown assignment", TestInspectorRevealsEntityReference);
     suite.Add("Camera deletion requires confirmation", TestInspectorCameraDeleteConfirmation);
     suite.Add("Delete shortcut removes the whole selection in one undo step", TestDeleteSelectionShortcut);
+    suite.Add("Inspector multi-edit copies only changed fields in one undo step", TestInspectorMultiEditCopiesChangedFields);
+    suite.Add("Material drop replaces slot materials on all targets", TestMaterialDropReplacesSlotMaterials);
     suite.Add("Viewport move, box drags and snap undo in one step", TestViewportDragUndo);
     suite.Add("Local position and scale edits restore their initial values", TestLocalTransformFieldUndo);
     suite.Add("Transform Inspector is consistent across selection sources", TestTransformInspectorSelectionSource);

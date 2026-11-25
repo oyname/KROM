@@ -434,6 +434,12 @@ void DrawEntityList(EditorFrameContext& ctx)
         rowPitch = ImGui::GetTextLineHeightWithSpacing();
     const ImRect listClip = ImGui::GetCurrentWindow()->InnerClipRect;
     float skippedHeight = 0.f;
+    // Shown rows in display order. Shift+click selects a range from the rows
+    // of the previous frame, since rows below the click are not walked yet.
+    static std::vector<EntityID> shownRows;
+    static std::vector<EntityID> previousShownRows;
+    previousShownRows.swap(shownRows);
+    shownRows.clear();
     auto flushSkippedRows = [&] {
         if (skippedHeight <= 0.f)
             return;
@@ -464,6 +470,8 @@ void DrawEntityList(EditorFrameContext& ctx)
         const bool visibleDescendant = hasVisibleDescendant(hasVisibleDescendant, entityRow, depth);
         if (!visibleSelf && !visibleDescendant)
             return;
+        if (visibleSelf)
+            shownRows.push_back(id);
 
         // The row to reveal and its ancestors are always built: they may have to
         // open and to scroll into view.
@@ -685,8 +693,22 @@ void DrawEntityList(EditorFrameContext& ctx)
             !ShouldCancelSelectionChangeForActiveInput())
         {
             highlighted = NULL_ENTITY;
+            const EntityID anchor = ctx.state.selectedEntity;
             if (ImGui::GetIO().KeyCtrl)
                 AddToMultiSelection(ctx, id);
+            else if (ImGui::GetIO().KeyShift && anchor.IsValid() && anchor != id && ctx.world.IsAlive(anchor))
+            {
+                // Range from the active row to the clicked one; the active row stays the anchor.
+                const auto first = std::find(previousShownRows.begin(), previousShownRows.end(), anchor);
+                const auto last  = std::find(previousShownRows.begin(), previousShownRows.end(), id);
+                if (first != previousShownRows.end() && last != previousShownRows.end())
+                {
+                    std::vector<EntityID> range = first < last ? std::vector<EntityID>(first, last + 1)
+                                                               : std::vector<EntityID>(last, first + 1);
+                    SetMultiSelection(ctx, range, anchor);
+                }
+                ctx.state.selectionSource = SelectionSource::Outliner;
+            }
             else
             {
                 ClearMultiSelection(ctx);
@@ -777,10 +799,10 @@ void DrawEntityList(EditorFrameContext& ctx)
                 const char* materialPath = static_cast<const char*>(payload->Data);
                 if (materialPath && materialPath[0] != '\0')
                 {
-                    EditComponents<MaterialComponent>(ctx, "history.assign_material", id, [&] {
-                        SelectMaterialAsset(ctx, PathFromUtf8(materialPath));
-                        ApplyMaterialAssetToEntity(ctx, id, PathFromUtf8(materialPath));
-                    });
+                    // Dropped on a row of the multi-selection: the whole selection gets it.
+                    const std::vector<EntityID> targets = IsEntityInMultiSelection(ctx.state, id)
+                        ? GetSelectedEntities(ctx) : std::vector<EntityID>{id};
+                    AssignMaterialAssetToEntities(ctx, targets, PathFromUtf8(materialPath));
                 }
             }
             AcceptScriptFileDrop(ctx, id);
