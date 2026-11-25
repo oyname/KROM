@@ -695,6 +695,17 @@ void DrawEntityList(EditorFrameContext& ctx)
             }
         }
 
+        // Arrow-key navigation selects the row it lands on, like a click,
+        // so the inspector follows the keyboard.
+        if (visibleSelf && rowId != 0 && GImGui->NavJustMovedToId == rowId &&
+            ctx.state.selectedEntity != id && !ShouldCancelSelectionChangeForActiveInput())
+        {
+            highlighted = NULL_ENTITY;
+            ClearMultiSelection(ctx);
+            ctx.state.selectedEntity  = id;
+            ctx.state.selectionSource = SelectionSource::Outliner;
+        }
+
         if (ImGui::IsItemHovered() && ImGui::IsMouseDoubleClicked(ImGuiMouseButton_Left) &&
             visibleSelf && !ShouldCancelSelectionChangeForActiveInput())
         {

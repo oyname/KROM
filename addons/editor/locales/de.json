@@ -70,6 +70,8 @@
   "menu.export_project": "Projekt exportieren",
   "menu.hierarchy": "Hierarchie",
   "menu.reset_layout": "Layout zurücksetzen",
+  "menu.reset_layout_confirm": "Das Fensterlayout wird auf den Standard zurückgesetzt. Wirklich fortfahren?",
+  "common.ok": "OK",
   "menu.editor_settings": "Editor-Einstellungen",
   "menu.switch_scene": "Wechseln",
   "menu.additive": "Additiv laden",

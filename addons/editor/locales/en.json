@@ -70,6 +70,8 @@
   "menu.export_project": "Export Project",
   "menu.hierarchy": "Hierarchy",
   "menu.reset_layout": "Reset Layout",
+  "menu.reset_layout_confirm": "The window layout will be reset to the default. Do you really want to continue?",
+  "common.ok": "OK",
   "menu.editor_settings": "Editor Settings",
   "menu.switch_scene": "Switch Scene",
   "menu.additive": "Load Additively",

@@ -2457,6 +2457,51 @@ static void ResetEditorLayout(EditorFrameContext& ctx)
     ctx.resetDockLayout = true;
 }
 
+// Asks before the layout is reset. Drawn at the popup level of the caller, so the
+// settings dialog keeps its own copy (opening it at top level would close that modal).
+static void DrawResetLayoutConfirm(EditorFrameContext& ctx, bool request)
+{
+    const std::string title = std::string(Translate("menu.reset_layout")) + "###reset_layout_confirm";
+    if (request)
+        ImGui::OpenPopup(title.c_str());
+
+    ImGui::SetNextWindowBgAlpha(1.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(20.f, 18.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 6.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 5.f);
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(10.f, 8.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_ItemSpacing, ImVec2(12.f, 10.f));
+    ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 1.f);
+    ImGui::PushStyleColor(ImGuiCol_PopupBg, theme::kPanel);
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, theme::kWindowBg);
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, theme::kWindowBg);
+    ImGui::PushStyleColor(ImGuiCol_Button, theme::kPanel);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, theme::kMenuHover);
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, theme::kMenuOpen);
+    bool dialogOpen = true;
+    if (ImGui::BeginPopupModal(title.c_str(), &dialogOpen, ImGuiWindowFlags_AlwaysAutoResize))
+    {
+        ImGui::TextUnformatted(Translate("menu.reset_layout_confirm"));
+        ImGui::Separator();
+        ImGui::Spacing();
+        ImGui::PushStyleColor(ImGuiCol_Button, theme::kAccent);
+        const bool ok = ImGui::Button(LocalizedLabel("common.ok").c_str(), ImVec2(130.f, 32.f));
+        ImGui::PopStyleColor();
+        if (ok)
+        {
+            ResetEditorLayout(ctx);
+            ImGui::CloseCurrentPopup();
+        }
+        ImGui::SameLine();
+        if (ImGui::Button(LocalizedLabel("common.cancel").c_str(), ImVec2(130.f, 32.f)) ||
+            ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+            ImGui::CloseCurrentPopup();
+        ImGui::EndPopup();
+    }
+    ImGui::PopStyleColor(6);
+    ImGui::PopStyleVar(6);
+}
+
 static void DrawEditorWorkflowSettings(EditorFrameContext& ctx)
 {
     auto& preferences = ctx.state.editorPreferences;
@@ -2507,8 +2552,7 @@ static void DrawEditorWorkflowSettings(EditorFrameContext& ctx)
         }
         ImGui::EndDisabled();
         ImGui::SameLine();
-        if (ImGui::Button(LocalizedLabel("menu.reset_layout").c_str()))
-            ResetEditorLayout(ctx);
+        DrawResetLayoutConfirm(ctx, ImGui::Button(LocalizedLabel("menu.reset_layout").c_str()));
     });
     SettingsCard("##settings_shortcuts", "settings.shortcuts", ICON_LC_TERMINAL, [&] {
         constexpr const char* labels[] = {"menu.save_scene", "menu.undo", "menu.redo", "settings.shortcut_move", "settings.shortcut_rotate", "settings.shortcut_scale"};
@@ -2802,6 +2846,7 @@ void RunEditorHistoryShortcuts(EditorFrameContext& ctx)
 void DrawFileMenuBar(EditorFrameContext& ctx)
 {
     bool requestExport = false;
+    bool requestResetLayout = false;
     RunFileShortcutActions(ctx);
     const bool canUndo = CanUndoEditorHistory(ctx.state);
     const bool canRedo = CanRedoEditorHistory(ctx.state);
@@ -2898,7 +2943,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
             ImGui::MenuItem(LocalizedLabel("menu.controller", ICON_LC_LIST_TREE "  ").c_str(), nullptr, &ctx.state.controllerWindowOpen);
             ImGui::MenuItem(LocalizedLabel("profiler.title", ICON_LC_ACTIVITY "  ").c_str(), nullptr, &ctx.state.showProfiler);
             if (ImGui::MenuItem(LocalizedLabel("menu.reset_layout", ICON_LC_LAYOUT_TEMPLATE "  ").c_str()))
-                ResetEditorLayout(ctx);
+                requestResetLayout = true;
             ImGui::Separator();
             if (ImGui::MenuItem(LocalizedLabel("menu.editor_settings", ICON_LC_WRENCH "  ", "…").c_str()))
             {
@@ -2974,6 +3019,7 @@ void DrawFileMenuBar(EditorFrameContext& ctx)
     if (requestExport)
         ImGui::OpenPopup(LocalizedLabel("export.title").c_str());
     DrawExportConfirmation(ctx);
+    DrawResetLayoutConfirm(ctx, requestResetLayout);
     DrawEditorToolbar(ctx);
     DrawEditorLogo(ctx);
 
