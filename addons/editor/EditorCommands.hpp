@@ -48,6 +48,10 @@ bool ExecuteSceneMutation(EditorFrameContext& ctx,
                           const char*         label,
                           const std::function<void()>& mutation);
 bool AssignModelMesh(EditorFrameContext& ctx, EntityID entity, const std::filesystem::path& model);
+// Gives all entities this material asset (slot materials included) in one undo
+// step and opens it in the material editor.
+bool AssignMaterialAssetToEntities(EditorFrameContext& ctx, std::span<const EntityID> entities,
+                                   const std::filesystem::path& material);
 void BeginPendingSceneEdit(EditorFrameContext& ctx,
                            const std::string&  key,
                            const char*         label);
@@ -87,6 +91,13 @@ void BeginPendingSelectionComponentEdit(EditorFrameContext& ctx, const std::stri
                                         const char* label, uint32_t typeId);
 bool CommitPendingComponentEdit(EditorFrameContext& ctx, const std::string& key);
 void CommitPendingComponentEdits(EditorFrameContext& ctx);
+
+// Inspector multi-object editing. Between Begin and End the inspector draws the
+// primary entity; component edits of the primary for these types also record the
+// peers in the same undo step, and End copies the changed fields to every peer.
+void BeginInspectorMultiEdit(EditorFrameContext& ctx, EntityID primary, std::span<const EntityID> peers,
+                             std::span<const uint32_t> typeIds);
+void EndInspectorMultiEdit(EditorFrameContext& ctx);
 
 template<typename T>
 void BeginPendingComponentEdit(EditorFrameContext& ctx, const std::string& key, const char* label,
@@ -189,5 +200,7 @@ std::vector<EntityID> GetSelectedEntities(const EditorFrameContext& ctx);
 bool IsEntityInMultiSelection(const EditorState& state, EntityID id);
 void AddToMultiSelection(EditorFrameContext& ctx, EntityID id);
 void ClearMultiSelection(EditorFrameContext& ctx);
+// Selects exactly these entities; active becomes the inspector's primary entity.
+void SetMultiSelection(EditorFrameContext& ctx, std::span<const EntityID> entities, EntityID active);
 
 } // namespace engine::renderer::addons::editor
