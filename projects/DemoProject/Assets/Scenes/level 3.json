@@ -4,8 +4,8 @@
   "entityCount": 6,
   "entities": [
     {
-      "entityId": 2562306,
-      "entityIndex": 10009,
+      "entityId": 2560258,
+      "entityIndex": 10001,
       "entityGeneration": 2,
       "components": [
         {
@@ -67,8 +67,8 @@
       ]
     },
     {
-      "entityId": 2562562,
-      "entityIndex": 10010,
+      "entityId": 2560514,
+      "entityIndex": 10002,
       "entityGeneration": 2,
       "components": [
         {
@@ -101,68 +101,8 @@
       ]
     },
     {
-      "entityId": 2562818,
-      "entityIndex": 10011,
-      "entityGeneration": 2,
-      "components": [
-        {
-          "type": "NameComponent",
-          "name": "Sphere"
-        },
-        {
-          "type": "GuidComponent",
-          "guid": "prefab-184522712264500-2"
-        },
-        {
-          "type": "ParentComponent",
-          "parentId": 2562562
-        },
-        {
-          "type": "ActiveComponent",
-          "active": true
-        },
-        {
-          "type": "TransformComponent",
-          "localPosition": [0, 0, 0],
-          "localRotation": [0, 0, 0, 1],
-          "localScale": [1, 1, 1],
-          "inheritParentScale": true
-        },
-        {
-          "type": "BoundsComponent",
-          "centerLocal": [0, 0, 0],
-          "extentsLocal": [1, 1, 1]
-        },
-        {
-          "type": "MeshComponent",
-          "meshAssetPath": "Models/sphere.glb#mesh/0",
-          "visible": true,
-          "castShadows": true,
-          "layerMask": 1
-        },
-        {
-          "type": "MaterialComponent",
-          "submeshIndex": 0,
-          "slots": [
-            {
-              "submeshIndex": 0,
-              "materialAssetPath": "Materials/Schwarz.mat"
-            }
-          ]
-        },
-        {
-          "type": "PrefabSourceComponent",
-          "recordId": "legacy-1"
-        },
-        {
-          "type": "EditorHierarchyComponent",
-          "order": 0
-        }
-      ]
-    },
-    {
-      "entityId": 2563074,
-      "entityIndex": 10012,
+      "entityId": 2560770,
+      "entityIndex": 10003,
       "entityGeneration": 2,
       "components": [
         {
@@ -213,8 +153,68 @@
       ]
     },
     {
-      "entityId": 2563330,
-      "entityIndex": 10013,
+      "entityId": 2561026,
+      "entityIndex": 10004,
+      "entityGeneration": 2,
+      "components": [
+        {
+          "type": "NameComponent",
+          "name": "Sphere"
+        },
+        {
+          "type": "GuidComponent",
+          "guid": "prefab-184522712264500-2"
+        },
+        {
+          "type": "ParentComponent",
+          "parentId": 2560514
+        },
+        {
+          "type": "ActiveComponent",
+          "active": true
+        },
+        {
+          "type": "TransformComponent",
+          "localPosition": [0, 0, 0],
+          "localRotation": [0, 0, 0, 1],
+          "localScale": [1, 1, 1],
+          "inheritParentScale": true
+        },
+        {
+          "type": "BoundsComponent",
+          "centerLocal": [0, 0, 0],
+          "extentsLocal": [1, 1, 1]
+        },
+        {
+          "type": "MeshComponent",
+          "meshAssetPath": "Models/sphere.glb#mesh/0",
+          "visible": true,
+          "castShadows": true,
+          "layerMask": 1
+        },
+        {
+          "type": "MaterialComponent",
+          "submeshIndex": 0,
+          "slots": [
+            {
+              "submeshIndex": 0,
+              "materialAssetPath": "Materials/Schwarz.mat"
+            }
+          ]
+        },
+        {
+          "type": "PrefabSourceComponent",
+          "recordId": "legacy-1"
+        },
+        {
+          "type": "EditorHierarchyComponent",
+          "order": 0
+        }
+      ]
+    },
+    {
+      "entityId": 2561282,
+      "entityIndex": 10005,
       "entityGeneration": 2,
       "components": [
         {
@@ -259,9 +259,9 @@
   ]
 ,
   "editorCamera":{
-    "position":[-6.02063131, 1.67936707, 9.87365055],
-    "pitchDeg":-32.2764168,
-    "yawDeg":381.171967,
+    "position":[7.34339237, 35.8494186, 71.5796509],
+    "pitchDeg":-38.6014214,
+    "yawDeg":351.747223,
     "moveSpeed":5,
     "fovDeg":60,
     "nearPlane":0.0500000007,
