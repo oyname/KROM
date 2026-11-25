@@ -781,7 +781,6 @@
   "field.persistent": "Persistent",
   "inspector.group_tip": "Strg+Klick nimmt ein Objekt hinzu oder heraus, Umschalt+Klick wählt einen Bereich.\nEin Material auf eine ausgewählte Zeile der Hierarchie ziehen gibt es allen.\nEin einfacher Klick hebt die Gruppenauswahl auf.",
   "inspector.group_material_drop": "Material hierher ziehen: gilt für alle ausgewählten Objekte",
-Ein einfacher Klick hebt die Gruppenauswahl auf.",
   "inspector.group_components": "Gemeinsame Komponenten: angezeigt werden die Werte des ersten Objekts, Änderungen gelten für alle.",
   "inspector.new_tag": "Neuer Tag …",
   "inspector.add_component": "+ Komponente",
