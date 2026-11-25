@@ -410,7 +410,7 @@ Neues Addon `addons/surface_cache`:
 |---|---|
 | 0 Vorprüfung | erledigt (2026-11-25), Test siehe unten |
 | 1 BVH auf der CPU | erledigt (2026-11-25), siehe unten |
-| 2 Trace-Kern | erledigt (2026-11-25), Messwerte unten; Empfehlung: Paket 3 bauen |
+| 2 Trace-Kern | erledigt und im Editor abgenommen (2026-11-25, DX11 und Vulkan); Empfehlung: Paket 3 bauen |
 | 3 Radiance-Cache | offen |
 | 4 Resolve und Anbindung | offen |
 | 5 Abstimmung | offen |
