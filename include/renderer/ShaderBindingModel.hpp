@@ -806,8 +806,9 @@ struct DescriptorRuntimeLayoutDesc
     desc.ranges[5] = BindingRangeDesc{ DescriptorType::UnorderedAccess, 0u, BindingRegisterRanges::UAV(0u),    UAVSlots::COUNT,    BindingRegisterRanges::RegisterSpace, ShaderStageMask::Compute, false };
     // BufSRV (StructuredBuffer / ByteAddressBuffer): StorageBuffer read-only, bindings 64..79
     desc.ranges[6] = BindingRangeDesc{ DescriptorType::StorageBuffer,   0u, BindingRegisterRanges::BufSRV(0u), BufSRVSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment | ShaderStageMask::Compute, false };
-    // Sampler moved to index 7 so that resource-heap ranges 0..6 are contiguous for table[0]
-    desc.ranges[7] = BindingRangeDesc{ DescriptorType::Sampler, 0u, BindingRegisterRanges::SMP(0u), SamplerSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment, false };
+    // Sampler moved to index 7 so that resource-heap ranges 0..6 are contiguous for table[0].
+    // Visible to compute too: the surface cache GI reads the IBL cube maps (doc/PLAN_GI.md, finding 11).
+    desc.ranges[7] = BindingRangeDesc{ DescriptorType::Sampler, 0u, BindingRegisterRanges::SMP(0u), SamplerSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment | ShaderStageMask::Compute, false };
     desc.tableCount = 2u;
     desc.tables[0] = BindingTableDesc{ BindingHeapKind::Resource, 0u, 7u };  // ranges 0..6
     desc.tables[1] = BindingTableDesc{ BindingHeapKind::Sampler,  7u, 1u };  // range  7

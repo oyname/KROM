@@ -350,6 +350,10 @@ struct EditorState
     uint32_t surfaceCacheDebugView = 1u;   // SurfaceCacheDebugView
     float    surfaceCacheOverlay = 1.0f;
     float    surfaceCacheDistance = 50.0f;
+    int      surfaceCacheRayBudgetK = 128;   // thousands of cache rays per frame
+    float    surfaceCacheRayLength = 15.0f;
+    float    surfaceCacheCellSize = 0.5f;
+    int      surfaceCacheHistory = 256;      // sample weight cap of a cell
     // Probe bake passes (1 or 2), saved in the environment block.
     uint32_t probeBakePasses = 2u;
     // Window "Profiler" (EditorProfilerWindow.cpp).
@@ -545,6 +549,7 @@ struct EditorFrameContext
     bool surfaceCacheBenchRunning = false;
     std::function<void()> startSurfaceCacheBench;
     std::function<void()> checkSurfaceCache;
+    std::function<void()> resetSurfaceCache;
     std::string surfaceCacheStatus;
     std::string surfaceCacheCheckResult;
     std::vector<std::string> surfaceCacheBenchResults;

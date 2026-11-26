@@ -36,6 +36,7 @@
 #include <cstdio>
 #include <cstring>
 #include <fstream>
+#include <iterator>
 #include <algorithm>
 #include <set>
 #include <vector>
@@ -2378,6 +2379,8 @@ struct EditorLoadingSmokeTest final : IAppScene
     int giWait = 0;
     std::string giLabel;
     uint32_t giUploads = 0u;
+    float giMeanCascades = 0.f;
+    float giLitCascades = 0.f;
 
     bool UpdateGiBench(AppSceneContext& context)
     {
@@ -2429,6 +2432,10 @@ struct EditorLoadingSmokeTest final : IAppScene
             state.surfaceCacheEnabled = true;
             state.surfaceCacheDebugView = 1u;
             state.surfaceCacheOverlay = 0.f;
+            if (const char* budget = std::getenv("KROM_GI_BUDGET_K"))
+                state.surfaceCacheRayBudgetK = std::max(1, std::atoi(budget));
+            if (const char* history = std::getenv("KROM_GI_HISTORY"))
+                state.surfaceCacheHistory = std::max(1, std::atoi(history));
             giStage = 1;
             giWait = 0;
             break;
@@ -2474,7 +2481,9 @@ struct EditorLoadingSmokeTest final : IAppScene
             struct Shot { const char* file; uint32_t view; float overlay; };
             static const Shot shots[] = { { "gi_scene.ppm", 1u, 0.f }, { "gi_normal.ppm", 1u, 1.f },
                                           { "gi_blend.ppm", 1u, 0.5f }, { "gi_instance.ppm", 3u, 1.f },
-                                          { "gi_nodes.ppm", 4u, 1.f }, { "gi_distance.ppm", 2u, 1.f } };
+                                          { "gi_nodes.ppm", 4u, 1.f }, { "gi_distance.ppm", 2u, 1.f },
+                                          { "gi_cells.ppm", 5u, 1.f }, { "gi_irradiance.ppm", 6u, 1.f },
+                                          { "gi_samples.ppm", 7u, 1.f } };
             const int shot = giWait / 10;
             const int phase = giWait % 10;
             if (shot >= static_cast<int>(std::size(shots)))
@@ -2523,8 +2532,18 @@ struct EditorLoadingSmokeTest final : IAppScene
                 for (const std::string& line : res.bench.results)
                     std::printf("GIBENCH %s\n", line.c_str());
                 Check(!res.bench.results.empty(), "GI bench produced results");
+                const sc::SurfaceCacheCounters counters = sc::SurfaceCacheLastCounters(res);
+                Check(counters.occupied > 0u && counters.full == 0u, "GI bench: radiance cache filled, no full probing range");
+                giMeanCascades = counters.meanRadiance;
+                giLitCascades = counters.sunLit;
+                std::printf("GIBENCH sun lookups: cascades %u, rays %u\n", counters.sunFromCascades, counters.sunRays);
                 std::fflush(stdout);
-                close();
+                // Same scene with the sun visibility from occlusion rays only: the
+                // cascades must give about the same cache.
+                res.settings.useCascades = false;
+                sc::RequestSurfaceCacheReset(res);
+                giStage = 9;
+                giWait = 0;
             }
             else if (giWait > 3000)
             {
@@ -2579,6 +2598,40 @@ struct EditorLoadingSmokeTest final : IAppScene
             else if (giWait > 900)
             {
                 Check(false, "GI bench: check after edits finished");
+                close();
+            }
+            break;
+        case 9:   // cascades against occlusion rays
+            if (giWait == 240)
+            {
+                const sc::SurfaceCacheCounters rayCounters = sc::SurfaceCacheLastCounters(res);
+                const float rays = rayCounters.meanRadiance;
+                Check(rayCounters.sunFromCascades == 0u, "GI bench: cascades off, sun from rays only");
+                const float diff = std::fabs(rays - giMeanCascades) / std::max(std::max(rays, giMeanCascades), 1e-6f);
+                std::printf("GIBENCH sun visibility: cascades meanL=%.4f, occlusion rays meanL=%.4f, difference %.1f %%\n",
+                            giMeanCascades, rays, 100.0f * diff);
+                Check(diff < 0.1f, "GI bench: cascades and occlusion rays agree");
+                std::printf("GIBENCH sunlit share of the shaded hits: cascades %.3f, occlusion rays %.3f\n",
+                            giLitCascades, rayCounters.sunLit);
+                // Far away the coarse cascades lose fine self-shadowing (as in the PBR
+                // shader); a gross error (wrong mapping, all shadowed) is far larger.
+                Check(std::fabs(giLitCascades - rayCounters.sunLit) < 0.15f, "GI bench: sunlit share agrees");
+                res.settings.useCascades = true;
+                std::fflush(stdout);
+                // Switching it off must give everything back.
+                state.surfaceCacheEnabled = false;
+                giStage = 8;
+                giWait = 0;
+            }
+            break;
+        case 8:   // off: no GPU objects left
+            if (giWait == 5)
+            {
+                const bool released = res.worlds.empty() && !res.programsReady && !res.primary.IsValid() &&
+                                      !res.materials.buffer.IsValid();
+                std::printf("GIBENCH off: %s\n", released ? "all GPU data released" : "GPU data still held");
+                Check(released, "GI bench: switched off, nothing kept");
+                std::fflush(stdout);
                 close();
             }
             break;
@@ -3342,5 +3395,35 @@ int main(int argc, char** argv)
         test.externalProjectExport = std::string_view(argv[1]) == "--external-project-export" || test.externalExportOnly;
     }
     test.visualProgress = argc == 1 || std::string_view(argv[1]) == "--visual-progress";
+    // The GI bench edits the scene (dragons, moved and removed meshes) and the
+    // editor saves on scene switch and close: keep the project's scenes and
+    // editor settings as they were.
+    struct ProjectFileGuard
+    {
+        std::vector<std::pair<std::filesystem::path, std::string>> files;
+        ~ProjectFileGuard()
+        {
+            for (const auto& [path, content] : files)
+            {
+                std::ofstream out(path, std::ios::binary | std::ios::trunc);
+                out.write(content.data(), static_cast<std::streamsize>(content.size()));
+            }
+        }
+    } projectFiles;
+    if (test.giBench)
+    {
+        const std::filesystem::path root = engine::PathFromUtf8(test.perfProject).parent_path();
+        std::vector<std::filesystem::path> paths{ root / "editor" / "editor.settings" };
+        std::error_code ec;
+        for (const auto& entry : std::filesystem::directory_iterator(root / "Assets" / "Scenes", ec))
+            if (entry.is_regular_file())
+                paths.push_back(entry.path());
+        for (const auto& path : paths)
+        {
+            std::ifstream in(path, std::ios::binary);
+            if (in)
+                projectFiles.files.emplace_back(path, std::string(std::istreambuf_iterator<char>(in), {}));
+        }
+    }
     return test.Run();
 }

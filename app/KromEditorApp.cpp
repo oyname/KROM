@@ -4520,9 +4520,14 @@ void KromEditorApp::UpdateSurfaceCache()
         return;
     sc::SurfaceCacheGpuResources& res = *m_surfaceCacheResources;
     res.settings.enabled = m_editorState.surfaceCacheEnabled;
-    res.settings.debugView = static_cast<sc::SurfaceCacheDebugView>(std::min(m_editorState.surfaceCacheDebugView, 4u));
+    res.settings.debugView = static_cast<sc::SurfaceCacheDebugView>(
+        std::min(m_editorState.surfaceCacheDebugView, static_cast<uint32_t>(sc::SurfaceCacheDebugView::Count) - 1u));
     res.settings.overlay = m_editorState.surfaceCacheOverlay;
     res.settings.distanceRange = m_editorState.surfaceCacheDistance;
+    res.settings.rayBudget = static_cast<uint32_t>(std::clamp(m_editorState.surfaceCacheRayBudgetK, 1, 4096)) * 1000u;
+    res.settings.rayLength = std::max(m_editorState.surfaceCacheRayLength, 0.0f);
+    res.settings.cellSize = std::clamp(m_editorState.surfaceCacheCellSize, 0.05f, 16.0f);
+    res.settings.maxSamples = static_cast<uint32_t>(std::clamp(m_editorState.surfaceCacheHistory, 1, 65536));
     sc::TickSurfaceCache(res, m_renderLoop.GetRenderSystem().GetGpuPassTimings());
 
     if (!ctx->startSurfaceCacheBench)
@@ -4535,6 +4540,10 @@ void KromEditorApp::UpdateSurfaceCache()
             if (m_surfaceCacheResources)
                 sc::RequestSurfaceCacheValidation(*m_surfaceCacheResources);
         };
+        ctx->resetSurfaceCache = [this] {
+            if (m_surfaceCacheResources)
+                sc::RequestSurfaceCacheReset(*m_surfaceCacheResources);
+        };
     }
     ctx->surfaceCacheBenchRunning = sc::SurfaceCacheBenchRunning(res);
     ctx->surfaceCacheStatus.clear();
@@ -4545,6 +4554,11 @@ void KromEditorApp::UpdateSurfaceCache()
                       static_cast<unsigned long long>(res.lastTriangles), res.lastPendingBlas,
                       static_cast<unsigned long long>(res.lastVersion), res.lastUploads);
         ctx->surfaceCacheStatus = status;
+        const sc::SurfaceCacheCounters counters = sc::SurfaceCacheLastCounters(res);
+        std::snprintf(status, sizeof(status), Translate("surface_cache.cache_status"), counters.occupied,
+                      counters.active, counters.rays, 100.0f * counters.change, counters.full);
+        ctx->surfaceCacheStatus += "\n";
+        ctx->surfaceCacheStatus += status;
     }
     ctx->surfaceCacheCheckResult = res.validation.result;
     ctx->surfaceCacheBenchResults = res.bench.results;

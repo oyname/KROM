@@ -2,10 +2,12 @@
 // =============================================================================
 // KROM Engine - addons/surface_cache/SurfaceCachePass.hpp
 //
-// Passes of the surface cache add-on (package 2):
-//   SurfaceCacheComputePass  (BeforeOpaque)    trace of the debug view, the
-//                            measuring dispatches and the GPU/CPU check, all on
-//                            one compute pipeline (shaders/surface_cache_trace.hlsl)
+// Passes of the surface cache add-on:
+//   SurfaceCacheComputePass  (AfterDepthPrepass) the radiance cache (register,
+//                            ray trace, resolve; shaders/surface_cache_update.hlsl,
+//                            package 3), then the trace of the debug view, the
+//                            measuring dispatches and the GPU/CPU check
+//                            (shaders/surface_cache_trace.hlsl, package 2)
 //   SurfaceCacheOverlayPass  (AfterPostProcess) shows the debug view over the
 //                            finished image, blended by SurfaceCacheSettings::overlay
 //
@@ -24,6 +26,9 @@ namespace engine::renderer::addons::surface_cache {
 extern const char* const kTraceCsHlsl;
 extern const char* const kOverlayPsHlsl;
 extern const char* const kFullscreenVsHlsl;
+// Radiance cache kernels (shaders/surface_cache_update.hlsl), CacheKernel order.
+extern const char* const kCacheKernelHlsl[SurfaceCacheGpuResources::kCacheKernelCount];
+extern const char* const kCacheKernelNames[SurfaceCacheGpuResources::kCacheKernelCount];
 
 // GPU layout of the per-dispatch constants (b3, kTraceCsHlsl).
 struct TraceDispatchConstants
@@ -45,6 +50,8 @@ std::vector<SurfaceCacheBenchPass> MakeBenchPasses();
 
 // Creates shaders and pipelines (once, lazily). False if the backend cannot.
 bool EnsureSurfaceCachePrograms(IDevice& device, SurfaceCacheGpuResources& res);
+// Destroys the radiance cache buffers of one world.
+void ReleaseSurfaceCacheGrid(IDevice& device, SurfaceCacheGrid& grid);
 // Destroys programs, buffers and the per-world BVH data.
 void ReleaseSurfaceCacheGpu(IDevice& device, SurfaceCacheGpuResources& res);
 // Makes sure a structured buffer holds `count` elements; grows with reserve.
@@ -58,7 +65,7 @@ public:
         : m_resources(std::move(resources)) {}
 
     uint32_t  GetContributorId() const noexcept override { return 0x5CAC0001u; }
-    PassPhase GetPhase()         const noexcept override { return PassPhase::BeforeOpaque; }
+    PassPhase GetPhase()         const noexcept override { return PassPhase::AfterDepthPrepass; }
     bool      DeclaresResource(std::string_view name) const noexcept override;
     uint64_t  GetStructureRevision() const noexcept override;
     void      BuildPass(const PassBuildContext& ctx) const override;

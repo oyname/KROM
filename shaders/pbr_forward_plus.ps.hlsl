@@ -365,56 +365,8 @@ float CalcSpotAttenuation(float3 L, float3 spotDir, float cosInner, float cosOut
     return saturate((cosAngle - cosOuter) / max(cosInner - cosOuter, 1e-4f));
 }
 
-// Width of the band at the far end of each cascade, as a fraction of the cascade's
-// depth range, in which the next cascade is mixed in (both filtered). Must match
-// kCascadeBlendBand in addons/shadow/ShadowExtraction.cpp, which extends every
-// cascade by this band towards the camera so the next cascade covers it.
-static const float kKromCascadeBlendBand = 0.2f;
-
-// blendToNext: 0 outside the band, rising to 1 at the far split of the cascade.
-// Fraction of the shadow distance over which directional shadows fade out.
-static const float kKromShadowFadeBand = 0.1f;
-
-// 0 inside the shadow distance, rising to 1 at its end (camera view depth).
-float KromShadowDistanceFade(float3 positionWS, float maxShadowDistance)
-{
-    const float viewDepth = -mul(viewMatrix, float4(positionWS, 1.0f)).z;
-    const float shadowEnd = max(min(farPlane, maxShadowDistance), 1e-3f);
-    return saturate((viewDepth - shadowEnd * (1.0f - kKromShadowFadeBand)) / (shadowEnd * kKromShadowFadeBand));
-}
-
-uint ChooseCascadeIndexFromViewDepth(float3 positionWS, uint viewCount, float maxShadowDistance,
-                                     float cascadeLambdaValue, out float blendToNext)
-{
-    blendToNext = 0.0f;
-    const uint cascadeCount = min(viewCount, 4u);
-    if (cascadeCount <= 1u)
-        return 0u;
-
-    const float viewDepth = max(-mul(viewMatrix, float4(positionWS, 1.0f)).z, nearPlane);
-    const float camNear = max(nearPlane, 1e-4f);
-    const float camFar = min(farPlane, max(maxShadowDistance, camNear + 1.0f));
-    const float lambda = saturate(cascadeLambdaValue);
-    const float countF = (float)cascadeCount;
-
-    float prevSplit = camNear;
-    [loop]
-    for (uint splitIndex = 1u; splitIndex < cascadeCount; ++splitIndex)
-    {
-        const float fi = (float)splitIndex / countF;
-        const float splitLog = camNear * pow(camFar / camNear, fi);
-        const float splitUniform = camNear + (camFar - camNear) * fi;
-        const float splitDepth = lerp(splitUniform, splitLog, lambda);
-        if (viewDepth <= splitDepth)
-        {
-            const float toSplit = (splitDepth - viewDepth) / max(splitDepth - prevSplit, 1e-4f);
-            blendToNext = saturate(1.0f - toSplit / kKromCascadeBlendBand);
-            return splitIndex - 1u;
-        }
-        prevSplit = splitDepth;
-    }
-    return cascadeCount - 1u;
-}
+// Cascade choice and distance fade (shared with compute passes).
+#include "shadow_csm_lookup.hlsl"
 
 float CompareShadowManual(float2 uv, float cmpDepth)
 {

@@ -1,6 +1,6 @@
 # Plan: Surface Cache GI (dynamische diffuse GI ohne Bake)
 
-Stand: 2026-11-25, Paket 0 (Vorprüfung) auf `feature/gi-vorpruefung`, abgezweigt von
+Stand: 2026-11-26, Paket 3 (Radiance-Cache) abgenommen auf `feature/gi-cache`; Paket 0 (Vorprüfung) auf `feature/gi-vorpruefung`, abgezweigt von
 `feature/multi-select-editing` (`ebcd932`). Jede Sitzung der GI-Reihe liest diese Datei zuerst
 und trägt am Ende ein, was erledigt ist, was offen bleibt und was vom Plan abweicht.
 
@@ -411,7 +411,7 @@ Neues Addon `addons/surface_cache`:
 | 0 Vorprüfung | erledigt (2026-11-25), Test siehe unten |
 | 1 BVH auf der CPU | erledigt (2026-11-25), siehe unten |
 | 2 Trace-Kern | erledigt und im Editor abgenommen (2026-11-25, DX11 und Vulkan); Empfehlung: Paket 3 bauen |
-| 3 Radiance-Cache | offen |
+| 3 Radiance-Cache | erledigt und im Editor abgenommen (2026-11-26, DX11 und Vulkan); Empfehlung: Paket 4 bauen |
 | 4 Resolve und Anbindung | offen |
 | 5 Abstimmung | offen |
 
@@ -660,3 +660,159 @@ Offen / Auffälligkeiten:
 - Messlauf neu ausführen:
   `krom_editor_loading_tests_dx11.exe --gi-bench <abs. Pfad>\krom-project.json [Bildordner]`,
   `KROM_PERF_SCENE=<Szene>`, `KROM_GI_BENCH_DRAGONS=64`, `KROM_GI_BENCH_SPACING=26`.
+
+### Paket 3 (2026-11-25, `feature/gi-cache`, abgezweigt von `feature/gi-trace`)
+
+Neu:
+
+- `shaders/surface_cache_common.hlsl`: PerFrame-Block (gleiches Layout wie `pbr_lit.ps.hlsl`),
+  Dispatch-Konstanten `SurfaceCacheParams` (b3), Hash-Grid (Schlüssel, Suche, Stufe nach
+  Kameradistanz) und das Fernfeld `ScFarFieldIrradiance` (lokale Probes per SH aus t19, sonst
+  IBL-Irradiance aus t5, ohne IBL die Umgebungsfarbe × π).
+- `shaders/surface_cache_update.hlsl`: die Kernel des Caches, je einer pro `SC_KERNEL_*`
+  (Begin, Register, Trace, Resolve, Age, Material), eingebettet über
+  `kCacheKernelHlsl` (`SurfaceCachePass.cpp`).
+- `shaders/shadow_csm_lookup.hlsl`: Kaskadenwahl und Ausblendung (`ChooseCascadeIndexFromViewDepth`,
+  `KromShadowDistanceFade`), aus `pbr_lit.ps.hlsl` und `pbr_forward_plus.ps.hlsl` herausgezogen
+  (beide Fassungen waren zeichengleich, beide binden jetzt die Datei ein). Mit
+  `KROM_SHADOW_CSM_LOAD` zusätzlich `KromCsmVisibilityLoad`: Sonnenschatten ohne Ableitungen
+  und ohne Sampler (Shadow Map per `Load`, ein bilinearer Vergleich, fester Zusatz-Bias von
+  1,5 Texel Normalen-Versatz und doppeltem Tiefen-Bias).
+- `ShaderBindingModel.hpp`: Sampler-Range auch für Compute sichtbar (Befund 11, eine Zeile).
+- `addons/surface_cache`: Hash-Grid pro Welt (`SurfaceCacheGrid`), Materialtabelle
+  (`SurfaceCacheMaterialTable`), drei neue Passes, Zähler-Readback, Messlauf für den Cache,
+  `RequestSurfaceCacheReset`, `SurfaceCacheLastCounters`.
+- Editor (Einstellungen → Viewport, unter „Surface Cache GI (Test)“): Debug-Ansichten
+  „Cache: Zellen“, „Cache: Irradiance“, „Cache: Samples“; Regler Strahlen pro Frame
+  (Tausend, Start 128), Strahllänge (15 m), Zellgröße (0,5 m), Verlauf (256 Samples); Knopf
+  „Cache leeren“; zweite Statuszeile mit belegten/sichtbaren Zellen, Strahlen, Änderung pro
+  Frame, Anmeldungen ohne Platz. Nicht gespeichert.
+- Tests: `krom_tests --gi` zwei Furnace-Tests auf WARP (siehe Prüfung), Kernel-Übersetzung für
+  FXC und DXC; `--gi-bench` misst zusätzlich den Cache, vergleicht Kaskaden mit
+  Verdeckungsstrahlen und prüft, dass Ausschalten alles freigibt.
+
+Ablauf pro Frame (Phase `AfterDepthPrepass`, drei RenderGraph-Passes, danach wie bisher
+Debug-Trace, Messpasses, Prüfung):
+
+1. `SurfaceCacheRegister`: neue oder geänderte Materialien mitteln (höchstens 64 pro Frame),
+   Zähler sichern und leeren, dann je 4 × 4 Pixel ein Kamerastrahl auf ein pro Frame
+   wechselndes Pixel. Der Treffer meldet seine Zelle an (`InterlockedCompareExchange` auf den
+   Schlüssel, `InterlockedExchange` auf den Frame); wer die Zelle als Erster in diesem Frame
+   sieht, hängt sie an die Liste der sichtbaren Zellen und schreibt Position und Normale. Neue
+   Zellen starten mit dem Fernfeld (Probe/IBL, Befund 13) und dem Gewicht 4.
+2. `SurfaceCacheRayTrace`: `min(Budget, sichtbare Zellen × 32)` Kosinus-Strahlen aus den
+   Zellen, gekürzt auf 15 m. Gibt es mehr Zellen als Strahlen, kommt jedes Frame ein anderer
+   Teil der Zellen dran. Am Treffer: `Emission + Albedo / π × (Direkt + Cache der Trefferzelle)`;
+   Direkt = jede gerichtete Lichtquelle (Kaskaden, außerhalb ein Verdeckungsstrahl) plus eine
+   zufällig gewählte lokale Lichtquelle mit Verdeckungsstrahl (gewichtet mit der Anzahl);
+   fehlt die Trefferzelle, das Fernfeld. Fehlschuss oder Ende bei 15 m: Fernfeld in
+   Strahlrichtung / π. Summen als Festkomma-Atomics pro Zelle.
+3. `SurfaceCacheResolve`: pro sichtbarer Zelle Mittelwert der Strahlen dieses Frames ×π,
+   gleitend eingemischt mit Gewicht `n / min(Gewicht + n, Verlauf)`. Danach „Age“ über alle
+   Plätze: Zellen ohne Anmeldung seit 300 Frames werden frei; Zellen in geänderten Bereichen
+   (Änderungsliste aus Paket 1, alte und neue Box, vergrößert) fallen auf Gewicht 2 zurück und
+   schwingen schnell neu ein. Alle 16 Frames (im Messlauf alle 4) werden die Zähler kopiert.
+
+Entscheidungen und Abweichungen:
+
+- **Phase `AfterDepthPrepass` statt `BeforeOpaque`.** Die Passes von `BeforeOpaque` stehen im
+  Rezept vor dem Shadow-Pass (`StandardFramePipeline.hpp`, `BuildRecipe`); ein Lesen der Shadow
+  Map dort ergab einen Zyklus im RenderGraph. In `AfterDepthPrepass` ist sie geschrieben (wie in
+  Befund 5 empfohlen). Ein Depth-Prepass wird dadurch nicht erzwungen (keine Opaque-Eingabe).
+- **Der Cache speichert nur indirekte Irradiance.** Das direkte Licht einer Zelle rechnet in
+  Paket 4 weiterhin der PBR-Shader. Deshalb ist die Irradiance-Ansicht in offenen Szenen fast
+  gleichförmig (überwiegend schwacher Himmel; car: IBL-Intensität 0,05) und an Wänden neben
+  besonntem Boden heller. Mehrfachreflexion entsteht über die Cache-Abfrage am Treffpunkt
+  (Wert des Vorframes).
+- **Anmelden über eigene Primärstrahlen** in 1/16 der Auflösung statt über die Tiefe (wie
+  vorgeschlagen): exakte Normale, kein Prepass nötig.
+- **Lichter aus `PerFrame.lights[7]`**, nicht aus dem LightBuffer (der existiert nur mit
+  Forward+). Mehr als 7 Lichter fehlen im Cache.
+- **Schlüssel:** Startplatz aus einem Hash, gespeichert wird ein zweiter 32-Bit-Hash (nie 0);
+  Kollisionen zweier Zellen mit gleichem Startplatz und gleichem Zweithash werden in Kauf
+  genommen. Normale auf 6 Achsenrichtungen quantisiert. 2^18 Plätze, 16 Sondierschritte,
+  15 MB pro Welt (Schlüssel, zwei uint4, Frame, Akkumulator, Liste). Freigegebene Plätze
+  unterbrechen Sondierketten; dahinter liegende Zellen werden neu angemeldet (Startwert) oder
+  altern aus. Bisher in keinem Lauf eine Anmeldung ohne Platz.
+- **Zellgröße:** 0,5 m bis 8 m Kameraabstand, danach Verdopplung je Verdopplung des
+  Abstands (Stufe im Schlüssel). Die Demo-Szenen haben damit nur 570–890 sichtbare Zellen;
+  ein Budget von 128 k wird nie erreicht (höchstens 32 Strahlen pro Zelle und Frame).
+- **Materialtabelle:** Die hochgeladene Instanztabelle trägt statt des Material-Handles den
+  Index in die Tabelle (`GpuBvhInstance::materialId`, nur in der GPU-Kopie);
+  `albedo`/`emission` in `GpuBvhInstance` bleiben ungenutzt. Die Werte kommen aus dem
+  `MaterialSystem` des Frames (Runtime-Handles wie in der Extraktion, Erinnerung
+  „Material-Handle-Räume“): `baseColorFactor` × Mittel der Albedo-Textur, `emissiveFactor` ×
+  Mittel der Emissions-Textur (Mip mit höchstens 8 × 8 Texeln per `Load`). Abweichung von
+  Befund 7: nicht über `MaterialAsset::WithGraphTextures()` (Asset-Seite, anderer
+  Handle-Raum); Graph-Materialien bekommen damit nur Faktor und ggf. Albedo-Slot.
+  Neuberechnung bei neuer Revision.
+- **Verlauf über ein Sample-Gewicht** (Standard 256, Regler), nicht über Frames: gleich
+  starkes Rauschen unabhängig vom Budget. 256 gibt ein Rauschniveau von 1,2–2,9 %
+  Änderung pro Frame bei Einschwingen in etwa 8 Frames; 1024 senkt es auf 0,7 % bei etwa
+  30 Frames (Tabelle unten).
+- Nicht umgesetzt: eine BLAS pro Mesh (das Budget passt, Paket 2) und Upload über einen
+  Staging-Ring. Änderungsboxen gehen über einen `FrameRingBuffer`.
+- Messlauf: `--gi-bench` speichert jetzt die Szenen und `editor.settings` des Projekts vor dem
+  Lauf und schreibt sie danach zurück. Vorher hat der Editor beim Szenenwechsel und beim
+  Schließen die Testbearbeitungen (Drachen, verschobene und gelöschte Meshes) in `car.json`
+  bzw. die geöffnete Szene gespeichert.
+
+Prüfung:
+
+- Furnace auf WARP (`krom_tests --gi`): geschlossene Box, Albedo 0,5, Emission 1, erwartet
+  E = 2π = 6,2832 in jeder Zelle. 16 Strahlen pro Zelle: 768 Zellen, Mittel 6,271, Spanne
+  6,149–6,279, 60 Frames vorher 6,261 (noch leicht steigend, die Kamera dreht durch sechs
+  Richtungen). 256 Strahlen für alle 768 Zellen (Verlauf 8): Mittel 6,280, Spanne
+  6,188–6,280.
+- Kaskaden gegen Verdeckungsstrahlen (Messlauf, Sonnenschatten am Treffpunkt): mittlere
+  Irradiance gleich bis auf 0,0–0,9 %; besonnter Anteil der beleuchteten Treffer car
+  0,73/0,72, Room 0 0,76/0,74, 64 Drachen aus 140 m Abstand 0,82/0,75 (grobe ferne Kaskaden
+  verlieren feine Selbstverschattung, wie im PBR-Shader).
+- Ausschalten gibt alles frei (Messlauf: keine Welt, keine Programme, kein Puffer).
+- Bildvergleich DX11/Vulkan (Zellen, Irradiance, Samples): gleich.
+- `krom_tests` x64-Debug: „ALL TESTS PASSED“, Suite „GI“ 18/18. Gesamter x64-Debug-Build ohne
+  Fehler (nur bekannte Warnungen in nicht berührten Zeilen). `krom_editor_loading_tests_dx11`
+  und `krom_editor_loading_tests` (Vulkan, `KROM_VALIDATION=1`): „editor loop completed without
+  crash“; `--gi-bench` unter Vulkan-Validierung ohne Meldung. Nach allen Messläufen keine
+  Änderung unter `projects/`.
+- Im Editor vom Nutzer abgenommen (2026-11-26, Release-Editor). In der Samples-Ansicht zeigen sich beim Bewegen kurz frische Zellen (Wechsel der Zellstufe, neu sichtbare Flächen); sie sind nach etwa 8 Frames voll.
+
+Messwerte (GTX 1660, x64-Release, Editor 1920×1080, GPU-Zeit der RenderGraph-Passes, Mittel
+über 200 Frames nach 30 Frames Anlauf; Budget 128 k, Strahllänge 15 m, Verlauf 256):
+
+| Szene, Backend | Register | Trace | Resolve + Age | Summe | sichtbare / belegte Zellen | Strahlen | Rauschen | eingeschwungen |
+|---|---|---|---|---|---|---|---|---|
+| car, DX11 | 0,33 | 0,40 | 0,02 | **0,76 ms** | 571 / 702 | 18 272 | 1,16 % | Frame 8 |
+| car, Vulkan | 0,40 | 0,25 | 0,02 | **0,67 ms** | 571 / 702 | 18 272 | 1,18 % | Frame 8 |
+| 64 Drachen, DX11 | 0,23 | 0,61 | 0,03 | **0,87 ms** | 834 / 1 422 | 26 688 | 1,46 % | Frame 12 |
+| 64 Drachen, Vulkan | 0,29 | 0,34 | 0,02 | **0,65 ms** | 834 / 1 422 | 26 688 | 1,46 % | Frame 12 |
+| Room 0, DX11 | 0,19 | 0,51 | 0,02 | **0,73 ms** | 892 / 1 017 | 28 544 | 2,89 % | Frame 8 |
+| Room 0, Vulkan | 0,28 | 0,26 | 0,02 | **0,56 ms** | 893 / 1 017 | 28 576 | 2,88 % | Frame 8 |
+| Room 0, DX11, Verlauf 1024 | 0,19 | 0,50 | 0,02 | 0,71 ms | 892 / 1 017 | 28 544 | 0,74 % | Frame 32 |
+| Room 0, Vulkan, Verlauf 1024 | 0,28 | 0,26 | 0,02 | 0,56 ms | 893 / 1 017 | 28 576 | 0,74 % | Frame 28 |
+
+Rauschen = Median der mittleren relativen Änderung pro Frame in der zweiten Hälfte des Laufs;
+eingeschwungen = erster Frame nach dem Leeren, ab dem die Änderung unter dem 1,5-Fachen davon
+bleibt (Zähler alle 4 Frames gelesen). Register enthält ca. 125 000 Primärstrahlen
+(1920 × 1040 / 16) und die Materialmittelung (nur am Anfang).
+
+Einordnung: Mit 0,6–0,9 ms liegt der Cache gut unter den 2 ms aus Paket 2. Der Trace-Pass ist
+für 18–28 k Strahlen teuer (DX11 0,4–0,6 ms): er startet immer `Budget / 64` Gruppen, von denen
+die meisten sofort enden, und jeder Treffer kostet Sonnen- und Cache-Abfrage. Die
+Anmeldung ist bei 1/16 der Pixel ein fester Sockel von 0,2–0,4 ms.
+
+Offen / für Paket 4 und 5:
+
+- Zellen außerhalb des Bildes werden nicht aufgefrischt; Strahlen, die dort treffen, nehmen
+  den letzten Wert oder das Fernfeld. Abhilfe in Paket 5: Zellen auch an Treffpunkten anmelden
+  (wie SHaRC), mit eigener Liste für den nächsten Frame.
+- Dispatch-Größe des Trace-Passes an die gelesene Zellzahl anpassen (spart die leeren
+  Gruppen), Anmeldung bei Bedarf in 1/64 der Pixel.
+- Zellgröße/Stufen-Abstand für die Demo-Szenen abstimmen (wenige, große Zellen in der Ferne).
+- Neue Zelle beim Wechsel der Zellstufe mit dem Wert der alten Stufe starten statt mit Probe/IBL (falls frische Zellen nach Paket 4 sichtbar flackern).
+- Mehr als 7 Lichter, Punktlicht-Schatten über die Shadow Map (heute nur Verdeckungsstrahl).
+- Graph-Materialien mit prozeduraler Basisfarbe: nur der Faktor (Befund 7).
+- Kollisionen des 32-Bit-Zweithashs sind möglich, aber nicht gezählt.
+- Runtime (`KromWrapper`) registriert das Addon weiterhin nicht.
+- Messlauf neu ausführen wie Paket 2; zusätzlich `KROM_GI_BUDGET_K=<Tausend>` und
+  `KROM_GI_HISTORY=<Samples>`.

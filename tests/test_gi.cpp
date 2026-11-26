@@ -29,6 +29,7 @@
 #include "renderer/ShaderToolPaths.hpp"
 #include "scene/Scene.hpp"
 #include "SurfaceCachePass.hpp"
+#include "renderer/RenderFrameConstants.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -1111,6 +1112,12 @@ void TestSurfaceCacheShadersCompile(test::TestContext& ctx)
         { "surface_cache_trace.cs", sc::kTraceCsHlsl, assets::ShaderStage::Compute },
         { "surface_cache_overlay.ps", sc::kOverlayPsHlsl, assets::ShaderStage::Fragment },
         { "surface_cache_fullscreen.vs", sc::kFullscreenVsHlsl, assets::ShaderStage::Vertex },
+        { sc::kCacheKernelNames[0], sc::kCacheKernelHlsl[0], assets::ShaderStage::Compute },
+        { sc::kCacheKernelNames[1], sc::kCacheKernelHlsl[1], assets::ShaderStage::Compute },
+        { sc::kCacheKernelNames[2], sc::kCacheKernelHlsl[2], assets::ShaderStage::Compute },
+        { sc::kCacheKernelNames[3], sc::kCacheKernelHlsl[3], assets::ShaderStage::Compute },
+        { sc::kCacheKernelNames[4], sc::kCacheKernelHlsl[4], assets::ShaderStage::Compute },
+        { sc::kCacheKernelNames[5], sc::kCacheKernelHlsl[5], assets::ShaderStage::Compute },
     };
     for (const auto& entry : shaders)
     {
@@ -1347,6 +1354,279 @@ void main(uint3 id : SV_DispatchThreadID)
 #endif
 }
 
+// =============================================================================
+// Package 3: radiance cache
+// =============================================================================
+
+// Furnace test of the radiance cache kernels on WARP: a closed box, every wall
+// with albedo a = 0.5 and emission 1. The radiance inside is L = 1 / (1 - a) = 2
+// everywhere, so every cell must settle at E = pi * L = 2 pi. The camera turns
+// through the six axis directions so all walls are registered.
+// rayBudget below the cell count: every frame only a rotating share of the
+// cells gets a ray (one each); a short history keeps the run short.
+void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t maxSamples, const char* label)
+{
+#if defined(_WIN32) && defined(KROM_DX11_BACKEND)
+    namespace sc = engine::renderer::addons::surface_cache;
+    const TestMesh cube = MakeCube(1.f);
+    std::vector<SceneBvhInstanceDesc> descs;
+    descs.push_back(MakeInstance(1u, BuildShared(cube), Mat4::Scaling(Vec3{ 2.f, 2.f, 2.f })));
+    SceneBvh scene;
+    scene.Update(descs);
+    CHECK(ctx, scene.InstanceCount() == 1u);
+
+    using Microsoft::WRL::ComPtr;
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> command;
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+                                   D3D11_SDK_VERSION, &device, nullptr, &command);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+
+    // The kernels of the add-on, compiled with FXC.
+    enum { kBegin = 0, kRegister, kTrace, kResolve, kAge, kKernels };
+    ComPtr<ID3D11ComputeShader> kernels[kKernels];
+    for (int k = 0; k < kKernels; ++k)
+    {
+        assets::ShaderAsset cs{};
+        cs.debugName = sc::kCacheKernelNames[k];
+        cs.stage = assets::ShaderStage::Compute;
+        cs.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+        cs.entryPoint = "main";
+        cs.sourceCode = sc::kCacheKernelHlsl[k];
+        assets::CompiledShaderArtifact compiled{};
+        std::string error;
+        const bool ok = ShaderCompiler::CompileForTarget(cs, assets::ShaderTargetProfile::DirectX11_SM5, compiled, &error);
+        if (!ok)
+            std::fprintf(stderr, "test_gi.cpp: %s: %s\n", sc::kCacheKernelNames[k], error.c_str());
+        CHECK(ctx, ok);
+        if (!ok)
+            return;
+        CHECK(ctx, SUCCEEDED(device->CreateComputeShader(compiled.bytecode.data(), compiled.bytecode.size(), nullptr, &kernels[k])));
+    }
+
+    const auto makeBuffer = [&](const void* data, uint32_t count, uint32_t stride, bool uav, ComPtr<ID3D11Buffer>& buffer,
+                                ComPtr<ID3D11ShaderResourceView>* srv, ComPtr<ID3D11UnorderedAccessView>* view)
+    {
+        count = std::max(count, 1u);
+        std::vector<uint8_t> zero(static_cast<size_t>(count) * stride, 0u);
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = count * stride;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | (uav ? D3D11_BIND_UNORDERED_ACCESS : 0u);
+        desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+        desc.StructureByteStride = stride;
+        D3D11_SUBRESOURCE_DATA init{ data ? data : zero.data(), 0u, 0u };
+        bool ok = SUCCEEDED(device->CreateBuffer(&desc, &init, &buffer));
+        if (ok && srv)
+        {
+            D3D11_SHADER_RESOURCE_VIEW_DESC d{};
+            d.Format = DXGI_FORMAT_UNKNOWN;
+            d.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+            d.Buffer.NumElements = count;
+            ok = SUCCEEDED(device->CreateShaderResourceView(buffer.Get(), &d, srv->GetAddressOf()));
+        }
+        if (ok && view)
+        {
+            D3D11_UNORDERED_ACCESS_VIEW_DESC d{};
+            d.Format = DXGI_FORMAT_UNKNOWN;
+            d.ViewDimension = D3D11_UAV_DIMENSION_BUFFER;
+            d.Buffer.NumElements = count;
+            ok = SUCCEEDED(device->CreateUnorderedAccessView(buffer.Get(), &d, view->GetAddressOf()));
+        }
+        return ok;
+    };
+
+    constexpr uint32_t kCapacity = 1u << 14u;
+    const float materials[8] = { 0.5f, 0.5f, 0.5f, 1.f, 1.f, 1.f, 1.f, 0.f };   // albedo, emission
+    const float dirtyBox[8] = {};
+    // As the add-on uploads them: material id = index into the material table.
+    std::vector<collision::GpuBvhInstance> instances = scene.Instances();
+    for (collision::GpuBvhInstance& instance : instances)
+        instance.materialId = 0u;
+    ComPtr<ID3D11Buffer> sceneBuffers[6];
+    ComPtr<ID3D11ShaderResourceView> sceneViews[6];
+    bool ok = makeBuffer(scene.TlasNodes().data(), static_cast<uint32_t>(scene.TlasNodes().size()), sizeof(collision::BvhNode), false, sceneBuffers[0], &sceneViews[0], nullptr) &&
+              makeBuffer(scene.BlasNodes().data(), static_cast<uint32_t>(scene.BlasNodes().size()), sizeof(collision::BvhNode), false, sceneBuffers[1], &sceneViews[1], nullptr) &&
+              makeBuffer(scene.BlasTriangles().data(), static_cast<uint32_t>(scene.BlasTriangles().size()), sizeof(collision::BvhTriangle), false, sceneBuffers[2], &sceneViews[2], nullptr) &&
+              makeBuffer(instances.data(), static_cast<uint32_t>(instances.size()), sizeof(collision::GpuBvhInstance), false, sceneBuffers[3], &sceneViews[3], nullptr) &&
+              makeBuffer(materials, 2u, 16u, false, sceneBuffers[4], &sceneViews[4], nullptr) &&
+              makeBuffer(dirtyBox, 2u, 16u, false, sceneBuffers[5], &sceneViews[5], nullptr);
+    // u0 keys, u1 cellA, u2 cellB, u3 cellFrame, u4 accum, u5 active list, u6 counters
+    const uint32_t gridCounts[7] = { kCapacity, kCapacity, kCapacity, kCapacity, kCapacity * 4u, kCapacity,
+                                     sc::SurfaceCacheGrid::kCounterWords };
+    const uint32_t gridStrides[7] = { 4u, 16u, 16u, 4u, 4u, 4u, 4u };
+    ComPtr<ID3D11Buffer> grid[7];
+    ComPtr<ID3D11UnorderedAccessView> gridViews[7];
+    for (int i = 0; i < 7 && ok; ++i)
+        ok = makeBuffer(nullptr, gridCounts[i], gridStrides[i], true, grid[i], nullptr, &gridViews[i]);
+    CHECK(ctx, ok);
+    if (!ok)
+        return;
+
+    const auto makeConstants = [&](uint32_t bytes, ComPtr<ID3D11Buffer>& buffer)
+    {
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = (bytes + 15u) & ~15u;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+        return SUCCEEDED(device->CreateBuffer(&desc, nullptr, &buffer));
+    };
+    ComPtr<ID3D11Buffer> perFrame, params;
+    ok = makeConstants(sizeof(FrameConstants), perFrame) && makeConstants(sizeof(sc::SurfaceCacheConstants), params);
+    CHECK(ctx, ok);
+    if (!ok)
+        return;
+
+    constexpr uint32_t kSize = 128u;
+    sc::SurfaceCacheConstants c{};
+    c.capacityMask = kCapacity - 1u;
+    c.rayBudget = rayBudget;
+    c.tlasNodeCount = static_cast<uint32_t>(scene.TlasNodes().size());
+    c.cellSize = 0.5f;
+    c.levelDistance = 8.f;
+    c.rayLength = 0.f;
+    c.maxRaysPerCell = 16u;
+    c.viewportWidth = kSize;
+    c.viewportHeight = kSize;
+    c.registerStep = 4u;
+    c.maxAge = 1000u;
+    c.flags = 0u;              // no IBL, no probes, no shadow map: the far field is the (black) ambient colour
+    c.maxSamples = maxSamples;
+    c.materialCount = 1u;
+
+    ID3D11ShaderResourceView* srvs[12] = { sceneViews[0].Get(), sceneViews[1].Get(), sceneViews[2].Get(), sceneViews[3].Get() };
+    srvs[10] = sceneViews[4].Get();
+    srvs[11] = sceneViews[5].Get();
+    ID3D11UnorderedAccessView* uavs[7] = {};
+    for (int i = 0; i < 7; ++i)
+        uavs[i] = gridViews[i].Get();
+    command->CSSetShaderResources(0u, 12u, srvs);
+    command->CSSetUnorderedAccessViews(0u, 7u, uavs, nullptr);
+    ID3D11Buffer* cb0 = perFrame.Get();
+    ID3D11Buffer* cb3 = params.Get();
+    command->CSSetConstantBuffers(0u, 1u, &cb0);
+    command->CSSetConstantBuffers(3u, 1u, &cb3);
+
+    const Vec3 directions[6] = { { 1.f, 0.f, 0.f }, { -1.f, 0.f, 0.f }, { 0.f, 0.f, 1.f },
+                                 { 0.f, 0.f, -1.f }, { 0.f, 1.f, 0.f }, { 0.f, -1.f, 0.f } };
+    const Mat4 proj = Mat4::PerspectiveFovRH(1.6f, 1.f, 0.05f, 100.f);
+    const auto readCells = [&](double& mean, double& minE, double& maxE, uint32_t& cells, uint32_t& counter2)
+    {
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = kCapacity * 16u;
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Buffer> stagingA, stagingKeys, stagingCounters;
+        device->CreateBuffer(&desc, nullptr, &stagingA);
+        desc.ByteWidth = kCapacity * 4u;
+        device->CreateBuffer(&desc, nullptr, &stagingKeys);
+        desc.ByteWidth = sc::SurfaceCacheGrid::kCounterWords * 4u;
+        device->CreateBuffer(&desc, nullptr, &stagingCounters);
+        command->CopyResource(stagingA.Get(), grid[1].Get());
+        command->CopyResource(stagingKeys.Get(), grid[0].Get());
+        command->CopyResource(stagingCounters.Get(), grid[6].Get());
+        D3D11_MAPPED_SUBRESOURCE ma{}, mk{}, mc{};
+        command->Map(stagingA.Get(), 0u, D3D11_MAP_READ, 0u, &ma);
+        command->Map(stagingKeys.Get(), 0u, D3D11_MAP_READ, 0u, &mk);
+        command->Map(stagingCounters.Get(), 0u, D3D11_MAP_READ, 0u, &mc);
+        const uint32_t* a = static_cast<const uint32_t*>(ma.pData);
+        const uint32_t* k = static_cast<const uint32_t*>(mk.pData);
+        counter2 = static_cast<const uint32_t*>(mc.pData)[2];
+        double sum = 0.0;
+        cells = 0u;
+        minE = 1e30;
+        maxE = 0.0;
+        for (uint32_t i = 0u; i < kCapacity; ++i)
+        {
+            if (k[i] == 0u || a[i * 4u + 3u] < std::min(32u, maxSamples))
+                continue;
+            for (uint32_t ch = 0u; ch < 3u; ++ch)
+            {
+                float e = 0.f;
+                std::memcpy(&e, &a[i * 4u + ch], sizeof(e));
+                sum += e;
+                minE = std::min(minE, static_cast<double>(e));
+                maxE = std::max(maxE, static_cast<double>(e));
+            }
+            ++cells;
+        }
+        command->Unmap(stagingA.Get(), 0u);
+        command->Unmap(stagingKeys.Get(), 0u);
+        command->Unmap(stagingCounters.Get(), 0u);
+        mean = cells > 0u ? sum / (3.0 * cells) : 0.0;
+    };
+
+    constexpr uint32_t kFrames = 480u;
+    double meanBefore = 0.0, minBefore = 0.0, maxBefore = 0.0;
+    uint32_t cellsBefore = 0u, fullBefore = 0u;
+    for (uint32_t frame = 1u; frame <= kFrames; ++frame)
+    {
+        const Vec3 dir = directions[frame % 6u];
+        const Vec3 up = std::fabs(dir.y) > 0.5f ? Vec3{ 0.f, 0.f, 1.f } : Vec3{ 0.f, 1.f, 0.f };
+        const Mat4 view = Mat4::LookAtRH(Vec3{ 0.1f, 0.2f, -0.15f }, Vec3{ 0.1f, 0.2f, -0.15f } + dir, up);
+        const Mat4 viewProj = proj * view;
+        FrameConstants fc{};
+        std::memcpy(fc.viewMatrix, view.Data(), sizeof(fc.viewMatrix));
+        std::memcpy(fc.projMatrix, proj.Data(), sizeof(fc.projMatrix));
+        std::memcpy(fc.viewProjMatrix, viewProj.Data(), sizeof(fc.viewProjMatrix));
+        std::memcpy(fc.invViewProjMatrix, viewProj.Inverse().Data(), sizeof(fc.invViewProjMatrix));
+        fc.cameraPosition[0] = 0.1f;
+        fc.cameraPosition[1] = 0.2f;
+        fc.cameraPosition[2] = -0.15f;
+        fc.cameraPosition[3] = 1.f;
+        fc.nearPlane = 0.05f;
+        fc.farPlane = 100.f;
+        command->UpdateSubresource(perFrame.Get(), 0u, nullptr, &fc, 0u, 0u);
+        c.frame = frame;
+        command->UpdateSubresource(params.Get(), 0u, nullptr, &c, 0u, 0u);
+
+        command->CSSetShader(kernels[kBegin].Get(), nullptr, 0u);
+        command->Dispatch(1u, 1u, 1u);
+        command->CSSetShader(kernels[kRegister].Get(), nullptr, 0u);
+        command->Dispatch((kSize / 4u + 7u) / 8u, (kSize / 4u + 7u) / 8u, 1u);
+        command->CSSetShader(kernels[kTrace].Get(), nullptr, 0u);
+        command->Dispatch((c.rayBudget + 63u) / 64u, 1u, 1u);
+        command->CSSetShader(kernels[kResolve].Get(), nullptr, 0u);
+        command->Dispatch(kCapacity / 64u, 1u, 1u);
+        command->CSSetShader(kernels[kAge].Get(), nullptr, 0u);
+        command->Dispatch(kCapacity / 64u, 1u, 1u);
+        if (frame == kFrames - 60u)
+            readCells(meanBefore, minBefore, maxBefore, cellsBefore, fullBefore);
+    }
+    double mean = 0.0, minE = 0.0, maxE = 0.0;
+    uint32_t cells = 0u, full = 0u;
+    readCells(mean, minE, maxE, cells, full);
+    const double expected = 2.0 * 3.14159265358979;
+    std::fprintf(stdout, "  # test_gi.cpp: WARP furnace (%s): %u cells, mean E %.4f (expected %.4f), min %.4f, max %.4f; "
+                         "60 frames earlier %u cells, mean %.4f\n",
+                 label, cells, mean, expected, minE, maxE, cellsBefore, meanBefore);
+    CHECK(ctx, cells > 100u);
+    CHECK(ctx, std::fabs(mean - expected) < 0.03 * expected);
+    CHECK(ctx, minE > 0.9 * expected);
+    CHECK(ctx, maxE < 1.1 * expected);
+    CHECK(ctx, std::fabs(mean - meanBefore) < 0.01 * expected);   // settled, not drifting
+    CHECK_EQ(ctx, full, 0u);
+#else
+    (void)ctx;
+    (void)rayBudget;
+    (void)maxSamples;
+    (void)label;
+    std::fprintf(stdout, "  # test_gi.cpp: no DX11 backend, WARP furnace skipped\n");
+#endif
+}
+
+void TestSurfaceCacheFurnaceOnWarp(test::TestContext& ctx)
+{
+    RunSurfaceCacheFurnace(ctx, 16384u, 128u, "16 rays per cell");
+}
+
+void TestSurfaceCacheFurnaceSmallBudgetOnWarp(test::TestContext& ctx)
+{
+    RunSurfaceCacheFurnace(ctx, 256u, 8u, "256 rays for all cells");
+}
+
 } // namespace
 
 int RunGiTests()
@@ -1368,6 +1648,8 @@ int RunGiTests()
          .Add("Scene BVH from the ECS (MeshSceneBvh)", TestMeshSceneBvhFromWorld)
          .Add("Scene BVH timings (1000 / 10000 instances)", TestSceneBvhTimings)
          .Add("Surface cache shaders compile for DX11 and Vulkan", TestSurfaceCacheShadersCompile)
-         .Add("Surface cache trace kernel on WARP against the CPU BVH", TestSurfaceCacheTraceOnWarp);
+         .Add("Surface cache trace kernel on WARP against the CPU BVH", TestSurfaceCacheTraceOnWarp)
+         .Add("Radiance cache settles in a closed box (furnace, WARP)", TestSurfaceCacheFurnaceOnWarp)
+         .Add("Radiance cache settles with fewer rays than cells (furnace, WARP)", TestSurfaceCacheFurnaceSmallBudgetOnWarp);
     return suite.Run();
 }

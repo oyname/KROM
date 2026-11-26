@@ -2,9 +2,10 @@
 // =============================================================================
 // KROM Engine - addons/surface_cache/SurfaceCacheTypes.hpp
 //
-// Surface cache GI, package 2 (doc/PLAN_GI.md): the scene BVH on the GPU, a
-// compute trace kernel (shaders/surface_cache_trace.hlsl), a debug view and a
-// measuring mode. No cache and no GI yet.
+// Surface cache GI (doc/PLAN_GI.md): the scene BVH on the GPU, a compute trace
+// kernel (shaders/surface_cache_trace.hlsl), a debug view and a measuring mode
+// (package 2); the radiance cache in world space (package 3,
+// shaders/surface_cache_update.hlsl). Not yet used for shading (package 4).
 //
 // Off by default. While off nothing is built, uploaded or added to the frame
 // graph; switching it off releases every GPU object again.
@@ -32,6 +33,9 @@ enum class SurfaceCacheDebugView : uint32_t
     Distance,      // hit distance
     InstanceColor, // one colour per instance
     NodeHeatmap,   // BVH nodes visited by the primary ray
+    CacheCells,    // one colour per cache cell
+    CacheIrradiance, // irradiance stored in the cell (/ pi, tonemapped)
+    CacheSamples,  // sample weight of the cell (blue: new, red: full history)
     Count,
 };
 
@@ -41,6 +45,67 @@ struct SurfaceCacheSettings
     SurfaceCacheDebugView debugView = SurfaceCacheDebugView::Normal;
     float                 overlay   = 1.0f;   // 1 = debug view only, 0 = scene only
     float                 distanceRange = 50.0f;   // metres shown white in the distance view
+
+    // Radiance cache (package 3).
+    uint32_t rayBudget      = 128000u;  // cache rays per frame
+    float    rayLength      = 15.0f;    // m; rest from probe/IBL; 0 = unbounded
+    float    cellSize       = 0.5f;     // m, cell size near the camera
+    float    levelDistance  = 8.0f;     // m from the camera with the smallest cells; doubles per level
+    uint32_t maxSamples     = 256u;     // history length (sample weight cap)
+    uint32_t maxRaysPerCell = 32u;      // per frame
+    bool     useCascades    = true;     // sun visibility from the CSM where it covers the hit (else rays)
+    uint32_t registerStep   = 4u;       // one registration ray per 4 x 4 pixels
+    uint32_t maxAge         = 300u;     // frames without registration until a cell is freed
+};
+
+// GPU layout of the dispatch constants of the cache kernels and the overlay
+// (cbuffer SurfaceCacheParams, shaders/surface_cache_common.hlsl).
+struct SurfaceCacheConstants
+{
+    uint32_t capacityMask = 0u;
+    uint32_t frame = 0u;
+    uint32_t rayBudget = 0u;
+    uint32_t tlasNodeCount = 0u;
+    float    cellSize = 0.5f;
+    float    levelDistance = 8.0f;
+    float    rayLength = 0.0f;
+    uint32_t maxRaysPerCell = 0u;
+    uint32_t viewportWidth = 0u;
+    uint32_t viewportHeight = 0u;
+    uint32_t registerStep = 4u;
+    uint32_t dirtyBoxCount = 0u;
+    uint32_t maxAge = 0u;
+    uint32_t flags = 0u;          // kSurfaceCacheFlag*
+    uint32_t maxSamples = 0u;
+    uint32_t materialCount = 0u;
+    uint32_t materialIndex = 0u;
+    uint32_t view = 0u;           // overlay
+    float    overlayAlpha = 1.0f;
+    float    viewScale = 50.0f;   // overlay: distance range or irradiance exposure
+    float    albedoFactor[4] = { 1.0f, 1.0f, 1.0f, 0.0f };    // w: albedo texture bound
+    float    emissionFactor[4] = { 0.0f, 0.0f, 0.0f, 0.0f };  // w: emission texture bound
+};
+static_assert(sizeof(SurfaceCacheConstants) == 112u, "SurfaceCacheConstants layout");
+
+inline constexpr uint32_t kSurfaceCacheFlagIbl       = 1u << 0u;
+inline constexpr uint32_t kSurfaceCacheFlagShadowMap = 1u << 1u;
+inline constexpr uint32_t kSurfaceCacheFlagProbes    = 1u << 2u;
+
+// Counters of the cache kernels (SC_COUNTER_*, shaders/surface_cache_update.hlsl).
+struct SurfaceCacheCounters
+{
+    uint32_t active = 0u;     // cells registered this frame
+    uint32_t created = 0u;    // new cells
+    uint32_t full = 0u;       // registrations that found no free slot
+    uint32_t rays = 0u;
+    uint32_t occupied = 0u;   // slots in use
+    uint32_t evicted = 0u;
+    float    change = 0.0f;   // mean relative change of the resolved cells (0..1)
+    uint32_t resolved = 0u;
+    float    meanRadiance = 0.0f;   // mean luminance of E / pi of the resolved cells
+    uint32_t sunFromCascades = 0u;  // sun visibility lookups served by the CSM
+    uint32_t sunRays = 0u;          // sun visibility from occlusion rays
+    float    sunLit = 0.0f;         // mean sun visibility of those lookups (0..1)
 };
 
 // Ray kinds of the measuring mode.
@@ -82,11 +147,75 @@ struct SurfaceCacheSceneGpu
     uint32_t blasUploads = 0u;
 };
 
+// The radiance cache of one world (package 3): an open-addressing hash grid in
+// persistent buffers, held by the add-on (the render graph has no buffer
+// import, doc/PLAN_GI.md finding 5).
+struct SurfaceCacheGrid
+{
+    static constexpr uint32_t kCapacity = 1u << 18u;   // slots (power of two)
+    static constexpr uint32_t kMaxDirtyBoxes = 64u;
+    static constexpr uint32_t kCounterWords = 32u;
+    static constexpr uint32_t kReadbackInterval = 16u;   // frames between counter readbacks
+    static constexpr uint32_t kReadbackFrames = 4u;
+
+    BufferHandle keys;        // uint per slot
+    BufferHandle cellA;       // uint4 per slot: irradiance, weight
+    BufferHandle cellB;       // uint4 per slot: position, normal
+    BufferHandle cellFrame;   // uint per slot
+    BufferHandle accum;       // 4 uint per slot
+    BufferHandle activeList;  // uint per slot
+    BufferHandle counters;    // kCounterWords uint
+    BufferHandle readback;    // CPU copy of the counters
+    FrameRingBuffer dirtyBoxes;   // 2 float4 per box
+    uint32_t frame = 0u;      // 1-based, advanced per update
+    bool     ready = false;
+
+    // Changed regions (SceneBvh change list) waiting for the next update.
+    std::vector<float> pendingBoxes;   // 8 floats per box: min xyz, pad, max xyz, pad
+
+    uint32_t readbackWait = 0u;        // frames until the copied counters can be read
+    uint32_t readbackFrameOfCopy = 0u;
+    bool     readbackPending = false;
+    SurfaceCacheCounters lastCounters;
+    uint32_t lastCountersFrame = 0u;
+};
+
 struct SurfaceCacheWorldState
 {
     mesh_renderer::MeshSceneBvh bvh;
     SurfaceCacheSceneGpu        gpu;
+    SurfaceCacheGrid            grid;
     uint32_t                    idleExtractions = 0u;
+};
+
+// Mean albedo and emission per material (doc/PLAN_GI.md, finding 7), filled on
+// the GPU from the smallest mips. The uploaded instance table carries the index
+// into this table instead of the material handle.
+struct SurfaceCacheMaterialTable
+{
+    struct Entry
+    {
+        uint32_t materialId = 0u;      // MaterialHandle value (MaterialSystem)
+        uint64_t revision = UINT64_MAX;
+        bool     dirty = true;
+    };
+    static constexpr uint32_t kUpdatesPerFrame = 64u;
+
+    BufferHandle buffer;               // 2 float4 per entry
+    uint64_t     capacity = 0u;        // float4 elements
+    std::vector<Entry> entries;
+    std::unordered_map<uint32_t, uint32_t> indexById;
+
+    uint32_t IndexOf(uint32_t materialId)
+    {
+        const auto it = indexById.find(materialId);
+        if (it != indexById.end())
+            return it->second;
+        const uint32_t index = static_cast<uint32_t>(entries.size());
+        entries.push_back(Entry{ materialId });
+        indexById.emplace(materialId, index);
+        return index;
+    }
 };
 
 // What the extraction step hands to the passes of this view.
@@ -113,6 +242,15 @@ struct SurfaceCacheBench
     uint32_t instances = 0u;
     uint64_t triangles = 0u;
     std::vector<std::string> results;   // finished log lines of the last run
+
+    // Radiance cache passes (package 3), averaged like the bench passes.
+    static constexpr size_t kCachePassCount = 3u;
+    static constexpr const char* kCachePassNames[kCachePassCount] = {
+        "SurfaceCacheRegister", "SurfaceCacheRayTrace", "SurfaceCacheResolve" };
+    std::array<double, kCachePassCount>   cacheSumMs{};
+    std::array<uint32_t, kCachePassCount> cacheSamples{};
+    struct CacheSample { uint32_t frame; float change; uint32_t active; uint32_t occupied; };
+    std::vector<CacheSample> cacheTimeline;   // counter readbacks during the run
 };
 
 // GPU-against-CPU check of a grid of camera rays.
@@ -144,6 +282,12 @@ struct SurfaceCacheGpuResources
     ShaderHandle   vsFullscreen;
     ShaderHandle   psOverlay;
     PipelineHandle traceCompute;
+    // Radiance cache kernels (shaders/surface_cache_update.hlsl).
+    enum CacheKernel : uint32_t { kBegin = 0, kRegister, kTrace, kResolve, kAge, kMaterial, kCacheKernelCount };
+    std::array<ShaderHandle, kCacheKernelCount>   cacheShaders{};
+    std::array<PipelineHandle, kCacheKernelCount> cachePipelines{};
+    SurfaceCacheMaterialTable materials;
+    bool resetRequested = false;       // clear every cache on the next update
     std::unordered_map<uint32_t, PipelineHandle> overlayPipelines;   // by output Format
 
     // Per-pixel results and statistics.
