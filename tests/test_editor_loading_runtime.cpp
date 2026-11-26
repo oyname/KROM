@@ -2948,6 +2948,29 @@ struct EditorLoadingSmokeTest final : IAppScene
                 flickerRgb[i * 3u + 2u] += b;
                 frameLuma += compare ? std::fabs(luma - flickerReference[i]) : luma;
             }
+            // KROM_GI_FLICKER_PROBE="u,v;u,v;...": luma of these pixels (0..1 of
+            // the image) every frame, one line per frame.
+            if (const char* probe = std::getenv("KROM_GI_FLICKER_PROBE"))
+            {
+                std::printf("GIPROBE %s %d", fc.name, flickerCaptured);
+                for (const char* p = probe; *p;)
+                {
+                    char* end = nullptr;
+                    const float u = std::strtof(p, &end);
+                    if (end == p || *end != ',')
+                        break;
+                    p = end + 1;
+                    const float v = std::strtof(p, &end);
+                    if (end == p)
+                        break;
+                    p = *end == ';' ? end + 1 : end;
+                    const size_t x = std::min(static_cast<size_t>(u * static_cast<float>(width)), static_cast<size_t>(width) - 1u);
+                    const size_t y = std::min(static_cast<size_t>(v * static_cast<float>(height)), static_cast<size_t>(height) - 1u);
+                    const size_t i = y * width + x;
+                    std::printf(" %.1f", 0.2126f * rgba[i * 4u] + 0.7152f * rgba[i * 4u + 1u] + 0.0722f * rgba[i * 4u + 2u]);
+                }
+                std::printf("\n");
+            }
             flickerTimeline.push_back(static_cast<float>(frameLuma / static_cast<double>(pixels)));
             flickerCreated = std::max(flickerCreated, counters.created);
             flickerEvicted = std::max(flickerEvicted, counters.evicted);

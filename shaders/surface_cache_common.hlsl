@@ -124,6 +124,10 @@ static const uint  SC_SHORT_HISTORY_FRAMES = 8u;
 static const uint  SC_ACCUM_WORDS = 12u;          // gAccum words per slot: 0-2 sums, 3 count, 4-6 short mean, 7 noise power,
                                                   // 8-10 display value (irradiance averaged with the neighbours)
 static const uint  SC_ACCUM_DISPLAY = 8u;
+// Word 11: squared distance of the cell's anchor (position in cellB) to the
+// centre of the cell, SC_ANCHOR_FREE while any camera ray may replace it.
+static const uint  SC_ACCUM_ANCHOR = 11u;
+static const float SC_ANCHOR_FREE = 1e30f;
 // Sample weight from which a cell counts in full, in the display average and in
 // the resolve for shading.
 static const float SC_CONFIDENT_SAMPLES = 1024.0f;
@@ -180,6 +184,14 @@ uint ScLevel(float3 p)
 float ScCellSizeOfLevel(uint level)
 {
     return scCellSize * exp2((float)level);
+}
+
+// Squared distance of p to the centre of its cell.
+float ScAnchorDistance(float3 p)
+{
+    const float size = ScCellSizeOfLevel(ScLevel(p));
+    const float3 d = p - (floor(p / size) + 0.5f) * size;
+    return dot(d, d);
 }
 
 // Dominant axis of the normal with sign: 0..5.

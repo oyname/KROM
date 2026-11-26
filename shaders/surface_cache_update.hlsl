@@ -24,7 +24,7 @@
 //                       the smallest mips of its textures
 //
 // UAVs of the cache kernels: u0 keys, u1 cellA, u2 cellB, u3 cellFrame,
-// u4 accum (12 uint per slot: rgb sums, sample count, change detector, display value), u5 active list,
+// u4 accum (12 uint per slot: rgb sums, sample count, change detector, display value, anchor distance), u5 active list,
 // u6 counters (SC_COUNTER_*; 16..31 hold the previous frame's values),
 // u7 pending list (cells hit by cache rays, registered next frame).
 // =============================================================================
@@ -201,7 +201,20 @@ void main(uint3 dtid : SV_DispatchThreadID)
     uint index;
     InterlockedAdd(gCounters[SC_COUNTER_ACTIVE], 1u, index);
     gActiveList[index] = slot;
-    gCellB[slot] = uint4(asuint(p), ScOctEncode(n));
+    // The anchor (the point the cell's rays start from and the resolve and
+    // the neighbour average weight the cell by) stays where it is: only a
+    // hit clearly closer to the centre of the cell replaces it, so it comes
+    // to rest after a few frames. Taking this frame's jittered hit every
+    // time moved it every frame; where a cell holds more than one surface
+    // or a curved one (a ramp over the floor, a small box, a detailed mesh)
+    // those weights then jumped from frame to frame and the image flickered.
+    const uint anchor = slot * SC_ACCUM_WORDS + SC_ACCUM_ANCHOR;
+    const float anchorDistance = ScAnchorDistance(p);
+    if (lastFrame == 0u || anchorDistance < 0.8f * asfloat(gAccum[anchor]))
+    {
+        gCellB[slot] = uint4(asuint(p), ScOctEncode(n));
+        gAccum[anchor] = asuint(anchorDistance);
+    }
     if (lastFrame == 0u)
     {
         gCellA[slot] = uint4(asuint(ScFarFieldIrradiance(p, n)), SC_START_WEIGHT);
@@ -398,6 +411,8 @@ void main(uint3 dtid : SV_DispatchThreadID)
                 indirect = float3(0.0f, 0.0f, 0.0f);
                 gCellA[hitSlot] = uint4(asuint(ScFarFieldIrradiance(hp, hn)), SC_START_WEIGHT);
                 gCellB[hitSlot] = uint4(asuint(hp), ScOctEncode(hn));
+                // A point the camera may not see: the first camera ray replaces it.
+                gAccum[hitSlot * SC_ACCUM_WORDS + SC_ACCUM_ANCHOR] = asuint(SC_ANCHOR_FREE);
                 uint created;
                 InterlockedAdd(gCounters[SC_COUNTER_NEW], 1u, created);
             }
@@ -614,6 +629,8 @@ void main(uint3 dtid : SV_DispatchThreadID)
         const float3 hi = gDirtyBoxes[i * 2u + 1u].xyz;
         if (all(p >= lo) && all(p <= hi))
         {
+            // The anchor may lie on a surface that is gone: the next camera ray sets it anew.
+            gAccum[slot * SC_ACCUM_WORDS + SC_ACCUM_ANCHOR] = asuint(SC_ANCHOR_FREE);
             const uint4 cell = gCellA[slot];
             // The short history, not none: while something keeps moving the
             // cells around it would otherwise show the raw noise of one frame.
