@@ -257,8 +257,8 @@ float ScCalcAttenuation(float dist, float range)
     return (ratio * ratio) / max(dist * dist, 1e-4f);
 }
 
-// Direct irradiance at p (normal n): every directional light (cascades or an
-// occlusion ray), one local light picked at random (occlusion ray, weighted
+// Direct irradiance at p (normal n): every directional light (an occlusion
+// ray), one local light picked at random (occlusion ray, weighted
 // by the number of local lights).
 float3 ScDirectIrradiance(float3 p, float3 n, inout uint seed, inout TraceStats stats)
 {
@@ -273,9 +273,16 @@ float3 ScDirectIrradiance(float3 p, float3 n, inout uint seed, inout TraceStats 
             const float NoL = dot(n, L);
             if (NoL <= 0.0f)
                 continue;
+            // The sun's visibility comes from an occlusion ray, never from the
+            // shadow cascades (SC_SUN_FROM_CASCADES). In Room 0 the cascade
+            // lookup called points inside a sealed niche between solid blocks
+            // lit: the sun (and everything it bounced off) filled a room that
+            // no ray can leave. A ray is exact for the geometry the cache
+            // traces anyway, and costs little (Room 0: cache total 1.38 ms
+            // Vulkan, 1.68 ms DX11 on a GTX 1660).
             float visibility = 1.0f;
             bool inside = false;
-            if ((scFlags & SC_FLAG_SHADOW_MAP) != 0u)
+            if (SC_SUN_FROM_CASCADES && (scFlags & SC_FLAG_SHADOW_MAP) != 0u)
                 visibility = KromCsmVisibilityLoad(p, n, L, i, inside);
             uint previous;
             if (!inside)
