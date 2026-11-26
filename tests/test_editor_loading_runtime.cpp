@@ -2882,6 +2882,9 @@ struct EditorLoadingSmokeTest final : IAppScene
             state.surfaceCacheOverlay = fc.overlay;
             state.gtaoSettings.enabled = flickerGtao && fc.gtao;
             state.ssrEnabled = flickerSsr && fc.ssr;
+            // KROM_GI_FLICKER_PARTICLES=1: every emitter plays as with the toolbar switch.
+            if (std::getenv("KROM_GI_FLICKER_PARTICLES"))
+                state.playAllParticles = true;
             state.editorDebugFlags = fc.debugFlags;
             if (app.m_editorFrameCtx->setEditorDebugFlags)
                 app.m_editorFrameCtx->setEditorDebugFlags(fc.debugFlags);
