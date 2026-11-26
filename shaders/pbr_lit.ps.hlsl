@@ -539,6 +539,7 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
             // (dDepth_dUV) adaptiv ab, daher darf baseBias klein sein. Ein grosser
             // Floor wuerde Peter-Panning (Schatten loest sich vom Objekt) erzwingen.
             float baseBias = KromShadowReceiverBias(biasValue, shadowVP);
+            gKromShadowPlaneLimit = KromShadowPlaneLimit(shadowVP, atlasRect.z / max(shadowTexelSize, 1e-8f), depth);
             float visibility = 0.0f;
 
             if (gKromShadowFilter == 3u)

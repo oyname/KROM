@@ -543,6 +543,7 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
             // Bias wird vom Slider gesteuert. Acne faengt der slope-scaled Term
             // (dDepth_dUV) adaptiv ab; ein grosser Floor wuerde Peter-Panning erzwingen.
             float baseBias = KromShadowReceiverBias(biasValue, shadowVP);
+            gKromShadowPlaneLimit = KromShadowPlaneLimit(shadowVP, atlasRect.z / max(shadowTexelSize, 1e-8f), depth);
             float visibility = 0.0f;
 
             if (gKromShadowFilter == 3u)
