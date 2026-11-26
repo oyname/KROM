@@ -75,7 +75,8 @@ static KromSceneData ParseKscene(const std::string& json)
         {
             if (const auto* path = env->Get("texturePath"); path && path->IsString())
             {
-                data.environmentTexturePath = path->AsString();
+                // Scenes saved on Windows may hold "Textures\\sky.hdr".
+                data.environmentTexturePath = engine::ToPortablePathSeparators(path->AsString());
                 data.hasEnvironment = !data.environmentTexturePath.empty();
             }
             if (const auto* enable = env->Get("enableIBL"); enable && enable->IsBool())

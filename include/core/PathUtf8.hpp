@@ -19,11 +19,34 @@
 
 namespace engine {
 
+// A stored path with every '\\' turned into '/'. Asset references are
+// stored with '/', but files written on Windows may carry '\\' (a sky texture
+// dropped into the editor: "Textures\\sky.hdr"). '\\' separates directories
+// only on Windows; elsewhere it would be part of a file name and the file is
+// not found.
+[[nodiscard]] inline std::string ToPortablePathSeparators(std::string_view utf8)
+{
+    std::string out(utf8);
+    for (char& c : out)
+        if (c == '\\')
+            c = '/';
+    return out;
+}
+
 // UTF-8-String -> Pfad. Ungültiges UTF-8 (Altbestand mit ANSI-Bytes, z. B.
 // "einheitsw\xFCrfel") wird wie früher über die native Codepage gelesen,
 // statt eine Exception zu werfen.
 [[nodiscard]] inline std::filesystem::path PathFromUtf8(std::string_view utf8)
 {
+#if !defined(_WIN32)
+    // Outside Windows a '\\' in a stored path is read as '/' (ToPortablePathSeparators).
+    std::string portable;
+    if (utf8.find('\\') != std::string_view::npos)
+    {
+        portable = ToPortablePathSeparators(utf8);
+        utf8 = portable;
+    }
+#endif
     try
     {
         return std::filesystem::path(
