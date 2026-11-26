@@ -210,6 +210,11 @@ if(KROM_BUILD_SDK)
     target_compile_definitions(engine_core PUBLIC KROM_SDK_BUILD_ID="${KROM_SDK_BUILD_ID}")
 endif()
 target_link_libraries(engine_core PRIVATE ${CMAKE_DL_LIBS})
+# Static libraries that call each other: MSVC resolves this by itself, GNU ld needs
+# the dependency declared so the archives are repeated on the link line.
+# AssetPipeline uses Scene and StdFilesystem (engine_core), the shader runtime uses PipelineCache.
+target_link_libraries(engine_asset_pipeline PRIVATE engine_core)
+target_link_libraries(engine_shader_layer PRIVATE engine_renderer_runtime_layer)
 if(WIN32)
     # Ole32: benoetigt fuer CoInitializeEx / CoCreateInstance (IFileOpenDialog)
     target_link_libraries(engine_core PRIVATE Ole32)

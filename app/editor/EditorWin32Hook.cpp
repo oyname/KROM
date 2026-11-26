@@ -5,10 +5,12 @@
 #ifndef NOMINMAX
 #define NOMINMAX
 #endif
+#ifdef _WIN32
 #include <windows.h>
+#endif
 
 // imgui_impl_win32.h setzt HWND voraus, daher nach <windows.h>
-#ifdef KROM_EDITOR_HAS_IMGUI
+#if defined(_WIN32) && defined(KROM_EDITOR_HAS_IMGUI)
 #ifdef KROM_IMGUI_HAS_WIN32
 #include "imgui_impl_win32.h"
 // ImGui versteckt WndProcHandler hinter #if 0 um <windows.h>-Abhaengigkeit im Header zu vermeiden.
@@ -21,7 +23,7 @@ extern IMGUI_IMPL_API LRESULT ImGui_ImplWin32_WndProcHandler(HWND hWnd, UINT msg
 
 namespace engine::app {
 
-#if defined(KROM_EDITOR_HAS_IMGUI) && defined(KROM_IMGUI_HAS_WIN32)
+#if defined(_WIN32) && defined(KROM_EDITOR_HAS_IMGUI) && defined(KROM_IMGUI_HAS_WIN32)
 
 namespace {
     static WNDPROC g_origWndProc = nullptr;

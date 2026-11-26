@@ -5314,6 +5314,7 @@ static void TestLightingFrameConstantsTrackPackedAndDroppedLights(test::TestCont
     device.Shutdown();
 }
 
+#if defined(_WIN32) && defined(KROM_DX11_BACKEND)
 static void TestBackendShadowClipSpaceAdjustmentDx11(test::TestContext& ctx)
 {
     engine::renderer::dx11::DX11Device dx11;
@@ -5325,6 +5326,7 @@ static void TestBackendShadowClipSpaceAdjustmentDx11(test::TestContext& ctx)
     CHECK(ctx, NearlyEqual(dx11Shadow.m[2][2], 1.0f));
     CHECK(ctx, NearlyEqual(dx11Shadow.m[3][3], 1.0f));
 }
+#endif
 
 static void TestShadowDrawListIncludesAllCastersForSelectedDirectionalRequest(test::TestContext& ctx)
 {
@@ -7429,7 +7431,9 @@ int RunRendererTests()
         .Add("Shadow view builder clamps spot/point far plane", TestShadowViewBuilderClampsSpotAndPointFarPlaneToMaxDistance)
         .Add("Lighting extraction sorts shadowed first", TestLightingExtractionSortsShadowedAndDirectionalFirst)
         .Add("Lighting frame constants track packed/dropped lights", TestLightingFrameConstantsTrackPackedAndDroppedLights)
+#if defined(_WIN32) && defined(KROM_DX11_BACKEND)
         .Add("Backend shadow clip-space adjustment DX11", TestBackendShadowClipSpaceAdjustmentDx11)
+#endif
         .Add("Shadow draw list includes all selected casters", TestShadowDrawListIncludesAllCastersForSelectedDirectionalRequest)
         .Add("RenderFrame state",         TestRenderFrameExecutionState)
         .Add("Frame TaskGraph parallel",   TestFrameTaskGraphParallelStructure)
