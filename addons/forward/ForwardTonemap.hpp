@@ -74,6 +74,9 @@ struct TonemapSettings
     // Bloom strength the tonemap pass adds; negative = the feature's configured
     // bloomIntensity. Set by hosts that blend post-process volumes; not saved.
     float           bloomIntensity = -1.0f;
+    // Brightness on screen (after the exposure) from which bloom starts;
+    // negative = the feature's configured bloomThreshold. Set by hosts; not saved.
+    float           bloomThreshold = -1.0f;
 
     [[nodiscard]] float ExposureScale() const noexcept { return std::exp2(exposureEv); }
 };

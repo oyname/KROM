@@ -170,6 +170,24 @@ void DrawEntityList(EditorFrameContext& ctx)
         ImGui::Spacing();
     }
 
+    // Name search: shows matching entities with their parents, opened.
+    static char searchText[128] = "";
+    ImGui::PushStyleVar(ImGuiStyleVar_FramePadding, ImVec2(8, 6));
+    ImGui::SetNextItemWidth(ImGui::GetContentRegionAvail().x);
+    ImGui::InputTextWithHint("##hierarchySearch", Translate("hierarchy.search_hint"), searchText, sizeof(searchText));
+    if (ImGui::IsItemHovered())
+        ImGui::SetTooltip("%s", Translate("hierarchy.search_tip"));
+    ImGui::PopStyleVar();
+    // Case-insensitive (ASCII) substring match; names are UTF-8.
+    auto lowerAscii = [](std::string text) {
+        for (char& c : text)
+            if (c >= 'A' && c <= 'Z')
+                c = static_cast<char>(c - 'A' + 'a');
+        return text;
+    };
+    const std::string searchLower = lowerAscii(searchText);
+    const bool searching = !searchLower.empty();
+
     static bool showMeshes = true;
     static bool showCameras = true;
     static bool showLights = true;
@@ -263,8 +281,15 @@ void DrawEntityList(EditorFrameContext& ctx)
                 mc->layerMask == renderer::LAYER_EDITOR_MATERIAL_PREVIEW ||
                 mc->layerMask == renderer::LAYER_EDITOR_ASSET_THUMBNAIL)
                 return false;
+        // The highlighted row (just created or picked in the viewport) always shows.
         if (id == highlighted)
             return true;
+        if (searching)
+        {
+            const auto* nc = ctx.world.Get<NameComponent>(id);
+            if (!nc || lowerAscii(nc->name).find(searchLower) == std::string::npos)
+                return false;
+        }
         const bool isCamera = ctx.world.Get<CameraComponent>(id) != nullptr;
         const bool isLight = ctx.world.Get<LightComponent>(id) != nullptr;
         const bool isMesh = ctx.world.Get<MeshComponent>(id) != nullptr;
@@ -485,7 +510,7 @@ void DrawEntityList(EditorFrameContext& ctx)
                 // Same id, open state and indent as the tree node of a built row.
                 const ImGuiID nodeId = ImGui::GetID(
                     reinterpret_cast<void*>(static_cast<uintptr_t>(GetStableEditorEntityId(ctx, id))));
-                const bool* stored = storedFoldout(id);
+                const bool* stored = searching ? nullptr : storedFoldout(id);
                 if (stored ? *stored : ImGui::GetStateStorage()->GetInt(nodeId, 1) != 0)
                 {
                     ImGui::Indent();
@@ -539,7 +564,8 @@ void DrawEntityList(EditorFrameContext& ctx)
         const auto* guid = !prefabMode ? ctx.world.Get<GuidComponent>(id) : nullptr;
         const std::string& scene = origin && !origin->sceneName.empty()
             ? origin->sceneName : ctx.currentEditorSceneName;
-        const bool persistentFoldout = visibleDescendant && guid && !guid->guid.empty() && !scene.empty();
+        // While searching the rows use their own open state (see the search ID scope).
+        const bool persistentFoldout = !searching && visibleDescendant && guid && !guid->guid.empty() && !scene.empty();
         const bool* storedOpen = nullptr;
         if (persistentFoldout)
         {
@@ -825,6 +851,10 @@ void DrawEntityList(EditorFrameContext& ctx)
         }
     };
 
+    // Search results get their own tree state: every parent of a hit starts open,
+    // and folding there leaves the saved foldouts of the scene unchanged.
+    if (searching)
+        ImGui::PushID("hierarchySearch");
     for (uint32_t row = 0u; row < rowCount; ++row)
     {
         const auto* pc = ctx.world.Get<ParentComponent>(entities[row]);
@@ -833,6 +863,8 @@ void DrawEntityList(EditorFrameContext& ctx)
         drawEntity(drawEntity, row, 0u);
     }
     flushSkippedRows();
+    if (searching)
+        ImGui::PopID();
 
     // Always leave some empty space below the last row to drop onto.
     const ImVec2 listEnd = ImGui::GetCursorScreenPos();

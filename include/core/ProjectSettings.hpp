@@ -53,6 +53,11 @@ struct ProjectRenderSettings
     float    contactShadowThickness = 0.05f;  // world-space metres
     float    contactShadowIntensity = 1.0f;   // 0 = none
     uint32_t contactShadowSteps = 12u;
+    // Bloom (forward add-on). Off forces the bloom intensity to 0, also over
+    // post-process volumes. Post-process volumes override the intensity per area.
+    bool     bloomEnabled = true;
+    float    bloomIntensity = 0.12f;  // strength of the glow
+    float    bloomThreshold = 1.0f;   // brightness on screen (after the exposure) from which bloom starts
     // Post-process AA after tonemapping: off, fxaa, smaa (forward add-on).
     std::string postAA = "off";
     // Shadow maps (shadow add-on): tile edge of each sun cascade and of each
@@ -232,6 +237,9 @@ inline void ReadRenderSettingKeys(const serialization::JsonValue& object, Projec
     number("contactShadowIntensity", out.contactShadowIntensity, 0.0f, 1.0f);
     if (const auto* v = object.Get("contactShadowSteps"); v && v->IsNumber() && std::isfinite(v->numVal))
         out.contactShadowSteps = static_cast<uint32_t>(std::clamp(v->numVal, 4.0, 32.0));
+    flag("bloomEnabled", out.bloomEnabled);
+    number("bloomIntensity", out.bloomIntensity, 0.0f, 4.0f);
+    number("bloomThreshold", out.bloomThreshold, 0.0f, 16.0f);
 
     // Shadow quality (since 2026-11-21). Files without it take the values of the
     // quality level their other options match, so the level stays the same.
@@ -398,6 +406,9 @@ inline void WriteProjectSettings(serialization::JsonWriter& out, const ProjectSe
     out.WriteFloat("contactShadowThickness", settings.rendering.contactShadowThickness);
     out.WriteFloat("contactShadowIntensity", settings.rendering.contactShadowIntensity);
     out.WriteUint("contactShadowSteps", settings.rendering.contactShadowSteps);
+    out.WriteBool("bloomEnabled", settings.rendering.bloomEnabled);
+    out.WriteFloat("bloomIntensity", settings.rendering.bloomIntensity);
+    out.WriteFloat("bloomThreshold", settings.rendering.bloomThreshold);
     out.WriteUint("shadowSunResolution", settings.rendering.shadowSunResolution);
     out.WriteUint("shadowLocalResolution", settings.rendering.shadowLocalResolution);
     out.WriteUint("shadowFilter", settings.rendering.shadowFilter);

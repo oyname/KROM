@@ -1590,6 +1590,19 @@ static void DrawProjectRenderSettings(EditorFrameContext& ctx)
     }
     ImGui::PopID();
 
+    ImGui::SeparatorText(Translate("bloom.title"));
+    ImGui::PushID("bloom");
+    ImGui::Checkbox(TranslateLabel("bloom.enabled", "Enabled").c_str(), &rendering.bloomEnabled);
+    ImGui::SetItemTooltip("%s", Translate("bloom.enabled_tip"));
+    if (!rendering.bloomEnabled) ImGui::BeginDisabled();
+    ImGui::SliderFloat(TranslateLabel("bloom.intensity", "Intensity").c_str(), &rendering.bloomIntensity, 0.0f, 1.0f, "%.2f");
+    ImGui::SetItemTooltip("%s", Translate("bloom.intensity_tip"));
+    ImGui::SliderFloat(TranslateLabel("bloom.threshold", "Threshold").c_str(), &rendering.bloomThreshold, 0.0f, 16.0f, "%.2f",
+                       ImGuiSliderFlags_Logarithmic);
+    ImGui::SetItemTooltip("%s", Translate("bloom.threshold_tip"));
+    if (!rendering.bloomEnabled) ImGui::EndDisabled();
+    ImGui::PopID();
+
     ImGui::SeparatorText(Translate("contact_shadow.title"));
     // Own ID scope: "Enabled"/"Intensity"/"Thickness" also label GTAO and SSR controls.
     ImGui::PushID("contact_shadow");

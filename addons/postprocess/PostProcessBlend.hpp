@@ -23,6 +23,7 @@ struct PostProcessValues
 {
     renderer::addons::forward::TonemapSettings tonemap{};
     float bloomIntensity = 0.12f;
+    float bloomThreshold = 1.f;
     float gtaoIntensity = 0.65f;
     float ssrIntensity = 1.f;
     float contactShadowIntensity = 1.f;

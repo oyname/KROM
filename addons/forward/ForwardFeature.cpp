@@ -311,12 +311,23 @@ float4 main(PSInput IN) : SV_TARGET
     return float4(uInput.SampleLevel(uSampler, finalUv, 0.0f).rgb, center.a);
 })";
 
+        // The threshold applies to the exposed image (as in Unreal/Unity): 1.0 means
+        // "brighter than white on screen", whatever the light intensities are. The
+        // extract is unexposed again so the tonemap applies the exposure once.
         constexpr const char* kBloomExtractPsHlsl = R"(Texture2D    uHDRInput : register(t8);
 SamplerState uSampler  : register(s1);
 
+// Automatic exposure state (ForwardAutoExposure.hpp): element 0, x = EV. Same slot as the tonemap.
+#ifdef __spirv__
+[[vk::binding(64 + 13)]] StructuredBuffer<float4> uAutoExposure : register(t13);
+#else
+StructuredBuffer<float4> uAutoExposure : register(t13);
+#endif
+
 cbuffer PerPass : register(b3)
 {
-    float4 bloomParams; // x=threshold, y=intensity, z=blurRadius
+    float4 bloomParams;    // x=threshold, y=intensity, z=blurRadius
+    float4 exposureParams; // x=exposure scale (2^EV), z=1: automatic exposure, w=correction EV
 };
 
 struct PSInput
@@ -327,13 +338,17 @@ struct PSInput
 
 float4 main(PSInput IN) : SV_TARGET
 {
-    const float3 hdr = uHDRInput.Sample(uSampler, IN.uv).rgb;
+    float exposure = max(exposureParams.x, 0.0f);
+    if (exposureParams.z > 0.5f)
+        exposure = exp2(uAutoExposure[0].x + exposureParams.w);
+    exposure = max(exposure, 1e-6f);
+    const float3 hdr = uHDRInput.Sample(uSampler, IN.uv).rgb * exposure;
     const float luminance = dot(hdr, float3(0.2126f, 0.7152f, 0.0722f));
     const float knee = max(bloomParams.x * 0.25f, 1e-4f);
     const float soft = saturate((luminance - bloomParams.x + knee) / (2.0f * knee));
     const float contribution = max(luminance - bloomParams.x, 0.0f) + soft * soft * knee;
     const float scale = contribution / max(luminance, 1e-4f);
-    return float4(hdr * scale, 1.0f);
+    return float4(hdr * (scale / exposure), 1.0f);
 })";
 
         constexpr const char* kBloomBlurHPsHlsl = R"(Texture2D    uHDRInput : register(t8);
@@ -673,6 +688,17 @@ float4 main(PSInput IN) : SV_TARGET
             float pad = 0.0f;
         };
 
+        // PerPass block of the bloom shaders (the blur passes read only bloomParams).
+        struct BloomGpuConstants
+        {
+            BloomPassConstants bloom{};
+            float exposureScale = 1.0f;
+            float pad = 0.0f;
+            float autoExposure = 0.0f;   // 1: exposure from the auto-exposure state buffer
+            float correctionEv = 0.0f;   // added to the automatic exposure
+        };
+        static_assert(sizeof(BloomGpuConstants) == 32u, "BloomGpuConstants must match PerPass in the bloom extract shader");
+
         // PerPass block of the tonemap shader (shaders/passthrough.ps.hlsl).
         struct TonemapPassConstants
         {
@@ -722,9 +748,33 @@ float4 main(PSInput IN) : SV_TARGET
             PipelineHandle blurHPipeline = PipelineHandle::Invalid();
             PipelineHandle blurVPipeline = PipelineHandle::Invalid();
             BufferHandle perPassCB = BufferHandle::Invalid();
-            UploadedConstants<BloomPassConstants> perPassContents;
+            UploadedConstants<BloomGpuConstants> perPassContents;
             bool initialized = false;
         };
+
+        // Same exposure as the tonemap pass. The automatic exposure is read from the
+        // state buffer written last frame (the adaptation runs right before the tonemap).
+        // All three bloom passes share one constant buffer, so they must build the same
+        // value: a different one per pass would rewrite the buffer several times a frame.
+        [[nodiscard]] BloomGpuConstants BuildBloomGpuConstants(const BloomPassConstants& base,
+                                                               const TonemapSettings& settings,
+                                                               bool autoExposureReady)
+        {
+            BloomGpuConstants constants{};
+            constants.bloom = base;
+            if (settings.bloomThreshold >= 0.0f)
+                constants.bloom.threshold = settings.bloomThreshold;
+            if (settings.exposureMode == ExposureMode::Auto && autoExposureReady)
+            {
+                constants.autoExposure = 1.0f;
+                constants.correctionEv = std::clamp(settings.exposureEv, kMinExposureEv, kMaxExposureEv);
+            }
+            else
+            {
+                constants.exposureScale = std::exp2(std::clamp(settings.exposureEv, kMinExposureEv, kMaxExposureEv));
+            }
+            return constants;
+        }
 
         [[nodiscard]] ShaderHandle CreateSkyShader(IDevice& device,
                                                    assets::ShaderTargetProfile target,
@@ -1758,94 +1808,63 @@ float4 main(PSInput IN) : SV_TARGET
                         [](const rendergraph::RGExecContext& /*execCtx*/) {});
                 }
 
-                if (!callbacks.Has(StandardFrameExecutors::BloomExtract))
+                // Extract, then a separable blur, all at half resolution with one constant buffer.
                 {
-                    auto state = pipelineState;
-                    auto bloomResources = m_bloomResources;
-                    const BloomPassConstants bloomConstants{
+                    const BloomPassConstants bloomBase{
                         std::max(0.0f, m_config.bloomThreshold),
                         std::max(0.0f, m_config.bloomIntensity),
                         std::max(0.0f, m_config.bloomBlurRadius),
                         0.0f
                     };
-                    callbacks.Register(StandardFrameExecutors::BloomExtract,
-                        [state, bloomResources, bloomConstants](const rendergraph::RGExecContext& execCtx)
-                        {
-                            if (!execCtx.cmd || !execCtx.device || !state->ready || !bloomResources ||
-                                !bloomResources->initialized || !bloomResources->extractPipeline.IsValid())
-                                return;
+                    auto registerBloomPass = [&](std::string_view executor, PipelineHandle BloomGpuResources::* pipeline,
+                                                 rendergraph::RGResourceID StandardFrameBuildResult::* source,
+                                                 bool bindsExposure)
+                    {
+                        if (callbacks.Has(executor))
+                            return;
+                        auto state = pipelineState;
+                        auto bloomResources = m_bloomResources;
+                        auto tonemapSettings = m_config.tonemapSettings;
+                        auto autoExposureResources = params.autoExposureEnabled ? viewAutoExposure
+                                                                                : std::shared_ptr<AutoExposureGpuResources>{};
+                        callbacks.Register(executor,
+                            [state, bloomResources, tonemapSettings, autoExposureResources, bloomBase, pipeline, source,
+                             bindsExposure](const rendergraph::RGExecContext& execCtx)
+                            {
+                                if (!execCtx.cmd || !execCtx.device || !state->ready || !bloomResources ||
+                                    !bloomResources->initialized || !((*bloomResources).*pipeline).IsValid())
+                                    return;
 
-                            const TextureHandle sourceTex = execCtx.GetTexture(state->resources.hdrSceneColor);
-                            if (!sourceTex.IsValid())
-                                return;
+                                const TextureHandle sourceTex = execCtx.GetTexture(state->resources.*source);
+                                if (!sourceTex.IsValid())
+                                    return;
 
-                            bloomResources->perPassContents.Upload(*execCtx.device, bloomResources->perPassCB, bloomConstants);
-                            execCtx.cmd->SetPipeline(bloomResources->extractPipeline);
-                            execCtx.cmd->SetConstantBuffer(CBSlots::PerPass, bloomResources->perPassCB, ShaderStageMask::Fragment);
-                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Fragment);
-                            execCtx.cmd->SetSampler(SamplerSlots::LinearClamp, SamplerSlots::LinearClamp, ShaderStageMask::Fragment);
-                            execCtx.cmd->Draw(3u, 1u, 0u, 0u);
-                        });
-                }
-
-                if (!callbacks.Has(StandardFrameExecutors::BloomBlurH))
-                {
-                    auto state = pipelineState;
-                    auto bloomResources = m_bloomResources;
-                    const BloomPassConstants bloomConstants{
-                        std::max(0.0f, m_config.bloomThreshold),
-                        std::max(0.0f, m_config.bloomIntensity),
-                        std::max(0.0f, m_config.bloomBlurRadius),
-                        0.0f
+                                const TonemapSettings settings = tonemapSettings ? *tonemapSettings : TonemapSettings{};
+                                const BloomGpuConstants constants = BuildBloomGpuConstants(bloomBase, settings,
+                                    autoExposureResources && autoExposureResources->ready);
+                                const bool readsAutoExposure = bindsExposure && constants.autoExposure > 0.5f;
+                                bloomResources->perPassContents.Upload(*execCtx.device, bloomResources->perPassCB, constants);
+                                execCtx.cmd->SetPipeline((*bloomResources).*pipeline);
+                                execCtx.cmd->SetConstantBuffer(CBSlots::PerPass, bloomResources->perPassCB, ShaderStageMask::Fragment);
+                                execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Fragment);
+                                if (readsAutoExposure)
+                                    execCtx.cmd->SetShaderResource(kAutoExposureBufferSlot, autoExposureResources->state,
+                                                                   ShaderStageMask::Fragment);
+                                execCtx.cmd->SetSampler(SamplerSlots::LinearClamp, SamplerSlots::LinearClamp, ShaderStageMask::Fragment);
+                                execCtx.cmd->Draw(3u, 1u, 0u, 0u);
+                                // The adaptation later this frame writes the buffer as UAV; DX11 must
+                                // not find it still bound as pixel shader input.
+                                if (readsAutoExposure)
+                                    execCtx.cmd->SetShaderResource(kAutoExposureBufferSlot, BufferHandle::Invalid(),
+                                                                   ShaderStageMask::Fragment);
+                            });
                     };
-                    callbacks.Register(StandardFrameExecutors::BloomBlurH,
-                        [state, bloomResources, bloomConstants](const rendergraph::RGExecContext& execCtx)
-                        {
-                            if (!execCtx.cmd || !execCtx.device || !state->ready || !bloomResources ||
-                                !bloomResources->initialized || !bloomResources->blurHPipeline.IsValid())
-                                return;
-
-                            const TextureHandle sourceTex = execCtx.GetTexture(state->resources.bloomExtracted);
-                            if (!sourceTex.IsValid())
-                                return;
-
-                            bloomResources->perPassContents.Upload(*execCtx.device, bloomResources->perPassCB, bloomConstants);
-                            execCtx.cmd->SetPipeline(bloomResources->blurHPipeline);
-                            execCtx.cmd->SetConstantBuffer(CBSlots::PerPass, bloomResources->perPassCB, ShaderStageMask::Fragment);
-                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Fragment);
-                            execCtx.cmd->SetSampler(SamplerSlots::LinearClamp, SamplerSlots::LinearClamp, ShaderStageMask::Fragment);
-                            execCtx.cmd->Draw(3u, 1u, 0u, 0u);
-                        });
-                }
-
-                if (!callbacks.Has(StandardFrameExecutors::BloomBlurV))
-                {
-                    auto state = pipelineState;
-                    auto bloomResources = m_bloomResources;
-                    const BloomPassConstants bloomConstants{
-                        std::max(0.0f, m_config.bloomThreshold),
-                        std::max(0.0f, m_config.bloomIntensity),
-                        std::max(0.0f, m_config.bloomBlurRadius),
-                        0.0f
-                    };
-                    callbacks.Register(StandardFrameExecutors::BloomBlurV,
-                        [state, bloomResources, bloomConstants](const rendergraph::RGExecContext& execCtx)
-                        {
-                            if (!execCtx.cmd || !execCtx.device || !state->ready || !bloomResources ||
-                                !bloomResources->initialized || !bloomResources->blurVPipeline.IsValid())
-                                return;
-
-                            const TextureHandle sourceTex = execCtx.GetTexture(state->resources.bloomBlurH);
-                            if (!sourceTex.IsValid())
-                                return;
-
-                            bloomResources->perPassContents.Upload(*execCtx.device, bloomResources->perPassCB, bloomConstants);
-                            execCtx.cmd->SetPipeline(bloomResources->blurVPipeline);
-                            execCtx.cmd->SetConstantBuffer(CBSlots::PerPass, bloomResources->perPassCB, ShaderStageMask::Fragment);
-                            execCtx.cmd->SetShaderResource(TexSlots::PassSRV0, sourceTex, ShaderStageMask::Fragment);
-                            execCtx.cmd->SetSampler(SamplerSlots::LinearClamp, SamplerSlots::LinearClamp, ShaderStageMask::Fragment);
-                            execCtx.cmd->Draw(3u, 1u, 0u, 0u);
-                        });
+                    registerBloomPass(StandardFrameExecutors::BloomExtract, &BloomGpuResources::extractPipeline,
+                                      &StandardFrameBuildResult::hdrSceneColor, true);
+                    registerBloomPass(StandardFrameExecutors::BloomBlurH, &BloomGpuResources::blurHPipeline,
+                                      &StandardFrameBuildResult::bloomExtracted, false);
+                    registerBloomPass(StandardFrameExecutors::BloomBlurV, &BloomGpuResources::blurVPipeline,
+                                      &StandardFrameBuildResult::bloomBlurH, false);
                 }
 
                 if (!callbacks.Has(StandardFrameExecutors::Tonemap) && context.defaultTonemapMaterial.IsValid() && context.tonemapMaterialSystem)

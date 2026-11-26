@@ -75,6 +75,7 @@ void ApplyPostProcessVolume(PostProcessValues& values, const PostProcessVolumeCo
     if (v.Overrides(O::GradingGamma))       LerpWheel(g.gamma, vg.gamma, t);
     if (v.Overrides(O::GradingGain))        LerpWheel(g.gain, vg.gain, t);
     if (v.Overrides(O::BloomIntensity))         values.bloomIntensity = Lerp(values.bloomIntensity, v.bloomIntensity, t);
+    if (v.Overrides(O::BloomThreshold))         values.bloomThreshold = Lerp(values.bloomThreshold, v.bloomThreshold, t);
     if (v.Overrides(O::GtaoIntensity))          values.gtaoIntensity = Lerp(values.gtaoIntensity, v.gtaoIntensity, t);
     if (v.Overrides(O::SsrIntensity))           values.ssrIntensity = Lerp(values.ssrIntensity, v.ssrIntensity, t);
     if (v.Overrides(O::ContactShadowIntensity)) values.contactShadowIntensity =

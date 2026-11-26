@@ -2343,6 +2343,9 @@ EntityID CreateEntityTree(EditorFrameContext& ctx, const char* label,
         change = CompareEntities(std::move(before), CaptureEntities(ctx, roots, true));
     change.added = CaptureEntities(ctx, entities);
     RecordStructureChange(ctx, label, std::move(selection), std::move(change));
+    // Show the new entity in the hierarchy: open its parents and scroll to it.
+    ctx.state.hierarchyRevealEntity = root;
+    ctx.state.hierarchyRevealFocus = false;
     return root;
 }
 
