@@ -187,6 +187,16 @@ static void TestSerializerCatchesAllEntities(test::TestContext& ctx)
     const JsonValue* entities = root.Get("entities");
     CHECK(ctx, entities != nullptr && entities->IsArray());
     CHECK_EQ(ctx, entities->arrayVal.size(), 3u);  // BUGFIX: war vorher 1
+
+    // With an entity filter the header counts only the written entities.
+    ser.SetEntityFilter([named](EntityID id) { return id != named; });
+    root = JsonParser::Parse(ser.SerializeToJson("TestScene"), err);
+    CHECK(ctx, err.empty());
+    count = root.Get("entityCount");
+    entities = root.Get("entities");
+    CHECK(ctx, count != nullptr && entities != nullptr && entities->IsArray());
+    CHECK_EQ(ctx, entities->arrayVal.size(), 2u);
+    CHECK_EQ(ctx, count->AsUint(), 2u);
 }
 
 // ==========================================================================

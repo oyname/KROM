@@ -42,8 +42,9 @@ enum class PostProcessOverride : uint32_t
     GtaoIntensity          = 1u << 14,
     SsrIntensity           = 1u << 15,
     ContactShadowIntensity = 1u << 16,
+    BloomThreshold         = 1u << 17,  // brightness on screen (after the exposure) from which bloom starts
 };
-inline constexpr uint32_t kPostProcessOverrideCount = 17u;
+inline constexpr uint32_t kPostProcessOverrideCount = 18u;
 
 [[nodiscard]] constexpr uint32_t PostProcessOverrideBit(PostProcessOverride o) noexcept
 {
@@ -71,6 +72,7 @@ struct PostProcessVolumeComponent
     renderer::addons::forward::ColorGradingSettings grading{};
     // Effect intensities (defaults = project defaults)
     float bloomIntensity = 0.12f;
+    float bloomThreshold = 1.f;
     float gtaoIntensity = 0.65f;
     float ssrIntensity = 1.f;
     float contactShadowIntensity = 1.f;
@@ -109,6 +111,7 @@ struct PostProcessVolumeComponent
     case PostProcessOverride::GtaoIntensity:          return "gtaoIntensity";
     case PostProcessOverride::SsrIntensity:           return "ssrIntensity";
     case PostProcessOverride::ContactShadowIntensity: return "contactShadowIntensity";
+    case PostProcessOverride::BloomThreshold:         return "bloomThreshold";
     }
     return "";
 }

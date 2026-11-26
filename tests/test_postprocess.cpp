@@ -205,9 +205,10 @@ void TestBlendGradingAndLook(test::TestContext& ctx)
     v.grading.colorFilter = {0.5f, 1.f, 1.f};
     v.grading.lift = {{0.f, 0.f, 1.f}, 0.4f};
     v.bloomIntensity = 0.32f;
+    v.bloomThreshold = 3.f;
     for (PostProcessOverride o : {PostProcessOverride::GradingLook, PostProcessOverride::GradingTemperature,
                                   PostProcessOverride::GradingColorFilter, PostProcessOverride::GradingLift,
-                                  PostProcessOverride::BloomIntensity})
+                                  PostProcessOverride::BloomIntensity, PostProcessOverride::BloomThreshold})
         v.SetOverride(o, true);
 
     PostProcessValues r = base;
@@ -217,6 +218,7 @@ void TestBlendGradingAndLook(test::TestContext& ctx)
     CHECK(ctx, Near(r.tonemap.grading.colorFilter[0], 0.75f));
     CHECK(ctx, Near(r.tonemap.grading.lift.color[0], 0.5f) && Near(r.tonemap.grading.lift.value, 0.2f));
     CHECK(ctx, Near(r.bloomIntensity, (base.bloomIntensity + 0.32f) * 0.5f));
+    CHECK(ctx, Near(r.bloomThreshold, (base.bloomThreshold + 3.f) * 0.5f));
 
     r = base;
     ApplyPostProcessVolume(r, v, 0.51f);  // above half: switches

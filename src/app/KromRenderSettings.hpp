@@ -44,6 +44,9 @@ struct RenderSettingsState
     float baseGtaoIntensity = 0.65f;
     float baseSsrIntensity = 1.0f;
     float baseContactShadowIntensity = 1.0f;
+    bool  bloomEnabled = true;   // project switch; off forces the bloom intensity to 0
+    float baseBloomIntensity = kRuntimeBloomIntensity;
+    float bloomThreshold = 1.0f;
     // Reset request of the automatic exposure on scene loads.
     std::shared_ptr<engine::renderer::addons::forward::AutoExposureStatus> autoExposureStatus =
         std::make_shared<engine::renderer::addons::forward::AutoExposureStatus>();

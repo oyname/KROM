@@ -45,6 +45,9 @@ void ApplyProjectRenderSettings(RenderSettingsState& render,
     render.baseGtaoIntensity = rendering.gtaoIntensity;
     render.baseSsrIntensity = rendering.ssrIntensity;
     render.baseContactShadowIntensity = rendering.contactShadowIntensity;
+    render.bloomEnabled = rendering.bloomEnabled;
+    render.baseBloomIntensity = rendering.bloomIntensity;
+    render.bloomThreshold = rendering.bloomThreshold;
     if (render.userQualityLevel && !editorLiveState)
         engine::ApplyRenderQualityLevel(rendering, *render.userQualityLevel);
     if (render.tonemapSettings &&
@@ -144,14 +147,16 @@ void ApplyPostProcessVolumes(RenderSettingsState& render,
 {
     engine::addons::postprocess::PostProcessValues ppBase;
     ppBase.tonemap = *render.tonemapSettings;
-    ppBase.bloomIntensity = kRuntimeBloomIntensity;
+    ppBase.bloomIntensity = render.baseBloomIntensity;
+    ppBase.bloomThreshold = render.bloomThreshold;
     ppBase.gtaoIntensity = render.baseGtaoIntensity;
     ppBase.ssrIntensity = render.baseSsrIntensity;
     ppBase.contactShadowIntensity = render.baseContactShadowIntensity;
     const engine::addons::postprocess::PostProcessValues pp =
         engine::addons::postprocess::BlendPostProcessVolumes(world, cameraPosition, ppBase);
     *render.effectiveTonemapSettings = pp.tonemap;
-    render.effectiveTonemapSettings->bloomIntensity = pp.bloomIntensity;
+    render.effectiveTonemapSettings->bloomIntensity = render.bloomEnabled ? pp.bloomIntensity : 0.0f;
+    render.effectiveTonemapSettings->bloomThreshold = pp.bloomThreshold;
     if (render.gtaoResources)
         render.gtaoResources->settings.intensity = pp.gtaoIntensity;
     if (render.ssrResources)
