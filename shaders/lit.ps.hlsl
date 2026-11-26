@@ -308,6 +308,7 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
 
             float2 dDepth_dUV = KromShadowDepthGradient(depth, uv);
             float baseBias = KromShadowReceiverBias(biasValue, shadowVP);
+            gKromShadowPlaneLimit = KromShadowPlaneLimit(shadowVP, atlasRect.z / max(shadowTexelSize, 1e-8f), depth);
 
             float visibility = 0.0f;
 
@@ -318,7 +319,7 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
                 for (int x = -1; x <= 1; ++x)
                 {
                     float2 offset = float2((float)x, (float)y) * shadowTexelSize;
-                    float depthRef = depth + dot(dDepth_dUV, offset) - baseBias;
+                    float depthRef = depth + KromShadowPlaneTerm(dDepth_dUV, offset) - baseBias;
                     visibility += CompareShadowManualBilinear(uv + offset, depthRef, atlasRect);
                 }
             }
