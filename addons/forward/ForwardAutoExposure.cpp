@@ -7,16 +7,17 @@
 
 namespace engine::renderer::addons::forward::auto_exposure {
 
-#define KROM_AE_PER_PASS R"(
-cbuffer PerPass : register(b3)
-{
-    float4 meter;    // x = min log2 luminance, y = log2 range, z = width, w = height
-    float4 adapt;    // x = dt (s), y = EV/s brighter, z = EV/s darker, w = reset
-    float4 limits;   // x = min EV, y = max EV, z = freeze, w = low percentile
-    float4 extra;    // x = high percentile
-};
-static const uint kBins = 64u;
-)"
+// Plain string literals: GCC before 13 cannot parse a multi-line raw string inside #define.
+#define KROM_AE_PER_PASS \
+    "\n" \
+    "cbuffer PerPass : register(b3)\n" \
+    "{\n" \
+    "    float4 meter;    // x = min log2 luminance, y = log2 range, z = width, w = height\n" \
+    "    float4 adapt;    // x = dt (s), y = EV/s brighter, z = EV/s darker, w = reset\n" \
+    "    float4 limits;   // x = min EV, y = max EV, z = freeze, w = low percentile\n" \
+    "    float4 extra;    // x = high percentile\n" \
+    "};\n" \
+    "static const uint kBins = 64u;\n"
 
 const char* const kHistogramCsHlsl = KROM_AE_PER_PASS R"(
 Texture2D<float4>        uHDRInput    : register(t8);
