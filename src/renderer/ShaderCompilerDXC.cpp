@@ -2,7 +2,9 @@
 #include "core/PathUtf8.hpp"
 #include "renderer/ShaderBindingModel.hpp"
 #include "renderer/ShaderToolPaths.hpp"
+#include <cerrno>
 #include <cstdlib>
+#include <string>
 #include <filesystem>
 #include <fstream>
 #include <vector>
@@ -10,6 +12,10 @@
 #   include <process.h>
 #   include <windows.h>
 #   include <fileapi.h>
+#else
+#   include <spawn.h>
+#   include <sys/wait.h>
+extern char** environ;
 #endif
 
 namespace engine::renderer::internal {
@@ -33,9 +39,34 @@ static std::wstring ToShortPath(const std::filesystem::path& path)
     return (len > 0u && len < MAX_PATH) ? std::wstring(shortBuf, len) : wide;
 }
 
+#endif
+
 static std::filesystem::path FindDxcExe()
 {
     return FindShaderTool(ShaderTool::Dxc).path;
+}
+
+#ifndef _WIN32
+// Starts the tool with the given arguments (without argv[0]) and waits for it.
+// Returns the exit code, -1 if the process could not be started or was killed.
+static int RunTool(const std::filesystem::path& tool, const std::vector<std::string>& arguments)
+{
+    const std::string toolUtf8 = PathToUtf8(tool);
+    std::vector<char*> argv;
+    argv.reserve(arguments.size() + 2u);
+    argv.push_back(const_cast<char*>(toolUtf8.c_str()));
+    for (const auto& argument : arguments)
+        argv.push_back(const_cast<char*>(argument.c_str()));
+    argv.push_back(nullptr);
+
+    pid_t pid = 0;
+    if (::posix_spawn(&pid, toolUtf8.c_str(), nullptr, nullptr, argv.data(), environ) != 0)
+        return -1;
+    int status = 0;
+    while (::waitpid(pid, &status, 0) < 0)
+        if (errno != EINTR)
+            return -1;
+    return WIFEXITED(status) ? WEXITSTATUS(status) : -1;
 }
 #endif
 
@@ -170,7 +201,6 @@ bool CompileHlslToSpirvWithDxc(const assets::ShaderAsset& asset,
                                 assets::CompiledShaderArtifact& outCompiled,
                                 std::string* outError)
 {
-#ifdef _WIN32
     if (asset.sourceLanguage != assets::ShaderSourceLanguage::HLSL)
     {
         SetError(outError, "Vulkan SPIR-V compilation via DXC requires HLSL shader sources");
@@ -210,6 +240,7 @@ bool CompileHlslToSpirvWithDxc(const assets::ShaderAsset& asset,
     const std::string entryPoint    = asset.entryPoint.empty() ? "main" : asset.entryPoint;
     const std::string targetProfile = GetHlslTargetProfile(asset.stage,
                                                            assets::ShaderTargetProfile::DirectX12_SM6);
+#ifdef _WIN32
     const std::wstring toolW   = ToShortPath(toolPath);
     const std::wstring srcW    = ToShortPath(srcPath);
     const std::wstring spvW    = ToShortPath(spvPath);
@@ -261,6 +292,34 @@ args.push_back(L"-fvk-b-shift"); args.push_back(cbShiftW.c_str());  args.push_ba
     args.push_back(nullptr);
 
     const intptr_t rc = _wspawnv(_P_WAIT, toolW.c_str(), args.data());
+#else
+    std::vector<std::string> arguments = {
+        "-T", targetProfile,
+        "-E", entryPoint,
+        "-spirv",
+        "-fvk-use-dx-layout",
+        "-fvk-b-shift", std::to_string(BindingRegisterRanges::ConstantBufferBase),  std::to_string(BindingRegisterRanges::RegisterSpace),
+        "-fvk-t-shift", std::to_string(BindingRegisterRanges::ShaderResourceBase),  std::to_string(BindingRegisterRanges::RegisterSpace),
+        "-fvk-s-shift", std::to_string(BindingRegisterRanges::SamplerBase),         std::to_string(BindingRegisterRanges::RegisterSpace),
+        "-fvk-u-shift", std::to_string(BindingRegisterRanges::UnorderedAccessBase), std::to_string(BindingRegisterRanges::RegisterSpace),
+        "-HV", "2021",
+        "-Ges",
+        "-Fo", PathToUtf8(spvPath),
+#ifndef NDEBUG
+        "-Zi", "-Od",
+#else
+        "-O3",
+#endif
+    };
+    for (const auto& d : defines)
+    {
+        arguments.push_back("-D");
+        arguments.push_back(d + "=1");
+    }
+    arguments.push_back(PathToUtf8(srcPath));
+
+    const intptr_t rc = RunTool(toolPath, arguments);
+#endif
     if (rc != 0 || !fs::exists(spvPath))
     {
         SetError(outError, "dxc.exe failed to compile Vulkan SPIR-V artifact from HLSL");
@@ -281,11 +340,6 @@ args.push_back(L"-fvk-b-shift"); args.push_back(cbShiftW.c_str());  args.push_ba
     fs::remove(srcPath, ec);
     fs::remove(spvPath, ec);
     return true;
-#else
-    (void)asset; (void)bundle; (void)defines; (void)outCompiled;
-    SetError(outError, "Vulkan SPIR-V compilation via DXC is only available on Windows builds");
-    return false;
-#endif
 }
 
 } // namespace engine::renderer::internal

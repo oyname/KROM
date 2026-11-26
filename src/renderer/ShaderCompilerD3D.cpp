@@ -161,6 +161,8 @@ void* ResolveD3DReflectProc(std::string* outError)
     return proc;
 }
 
+#endif
+
 std::string GetHlslTargetProfile(assets::ShaderStage stage, assets::ShaderTargetProfile target)
 {
     const char* suffix = "vs_5_0";
@@ -175,7 +177,6 @@ std::string GetHlslTargetProfile(assets::ShaderStage stage, assets::ShaderTarget
     }
     return suffix;
 }
-#endif
 
 bool CompileToD3DBytecode(const assets::ShaderAsset& asset,
                           assets::ShaderTargetProfile target,
