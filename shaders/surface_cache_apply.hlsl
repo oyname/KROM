@@ -42,6 +42,11 @@ static int2 gDepthSize;
 static const float SC_APPLY_MIN_AXIS_WEIGHT = 0.05f;
 // Trilinear weight that counts as fully covered by the cache.
 static const float SC_APPLY_FULL_WEIGHT = 0.25f;
+// Sample weight from which a cell counts in full. A younger cell fades in next
+// to its neighbours: its first frames are a mean of a few rays, and shown in
+// full every new cell was a patch that came and went (cells are born all the
+// time, also in a resting view: registration reaches small ones only now and then).
+static const float SC_APPLY_CONFIDENT_SAMPLES = 1024.0f;
 
 float ScApplyLoadDepth(int2 pixel)
 {
@@ -133,6 +138,7 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
 
     float3 sum = float3(0.0f, 0.0f, 0.0f);
     float weight = 0.0f;
+    float found = 0.0f;   // trilinear weight of the cells found, young or not
     [unroll] for (uint axis = 0u; axis < 3u; ++axis)
     {
         const float wa = axisWeight[axis];
@@ -154,6 +160,10 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
                 continue;   // only its start value (the far field), no rays of its own yet
             const float plane = abs(dot(asfloat(gApplyCellB[slot].xyz) - P, n));
             wc *= saturate(1.0f - plane / size);
+            found += wc;
+            // Young cells count little while older ones are around; alone they
+            // still fill the pixel (the sum is normalised).
+            wc *= max(saturate((float)cell.w / SC_APPLY_CONFIDENT_SAMPLES), 0.02f);
             sum += asfloat(cell.xyz) * wc;
             weight += wc;
         }
@@ -162,7 +172,7 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
     // Missing cells drop out and the rest is normalised; the far field only
     // where no cell was found at all. Blending it in by the missing share put
     // sky light into the corners and edges of enclosed rooms.
-    const float coverage = saturate(weight / SC_APPLY_FULL_WEIGHT);
-    const float3 irradiance = weight > 1e-5f ? sum / weight : ScFarFieldIrradiance(P, n);
+    const float coverage = saturate(found / SC_APPLY_FULL_WEIGHT);
+    const float3 irradiance = weight > 1e-7f ? sum / weight : ScFarFieldIrradiance(P, n);
     return float4(max(irradiance, 0.0f), coverage >= 0.5f ? viewDepth : -viewDepth);
 }

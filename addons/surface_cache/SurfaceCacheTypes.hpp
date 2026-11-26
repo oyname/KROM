@@ -63,7 +63,8 @@ struct SurfaceCacheSettings
     uint32_t maxRaysPerCell = 32u;      // per visible cell and frame (cells outside the view: a quarter)
     bool     useCascades    = true;     // sun visibility from the CSM where it covers the hit (else rays)
     uint32_t registerStep   = 4u;       // one registration ray per 4 x 4 pixels
-    uint32_t maxAge         = 300u;     // frames without registration until a cell is freed
+    uint32_t maxAge         = 3600u;    // frames without registration until a cell is freed (a freed cell that
+                                        // comes back starts without history and breaks the probing chain behind it)
 
     // Shading (package 4).
     bool     apply          = true;     // the PBR shaders take the cache as indirect diffuse light
