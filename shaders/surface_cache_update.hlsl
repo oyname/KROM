@@ -499,43 +499,47 @@ void main(uint3 dtid : SV_DispatchThreadID)
     const uint shortCap = samples * SC_SHORT_HISTORY_FRAMES;
     uint weight = min(cell.w + samples, longCap);
 
-    // Change detector: a short mean of the frame values next to the long one
-    // and the noise power of the frame values around the long mean. Where the
-    // short mean leaves the long one by more than its own noise allows (2.5 to
-    // 5 standard deviations, at least 3 %), the light of the cell has changed
-    // (a light moved or switched, a door opened further away): the history
-    // falls back to the short one and the cell follows within a few frames.
-    float3 fast = mean;
-    float power = 0.0f;
+    // Change detector: a two-sided cumulative sum. Every frame the deviation of
+    // the frame value from the long mean, in standard deviations of the frame
+    // values (limited to three), minus half a standard deviation of slack, adds
+    // to the sum of its side (words 4 and 5); a sum never falls below zero.
+    // Noise cancels out, a deviation that lasts to one side adds up, however
+    // noisy the single frame is. From SC_CHANGE_EVIDENCE on the history shortens,
+    // at twice that it is the short one, and it stays short while the deviation
+    // lasts: the light of the cell has changed (a lamp switched, a door opened
+    // further away) and the cell follows within a few frames. One outlier frame
+    // (a few rays that hit a very bright spot) adds at most 2.5.
+    //
+    // The noise power (word 7) learns from the limited deviations, and slowly
+    // while a sum is building up. Learning from the unlimited deviation, a real
+    // change raised the noise estimate with it and was then read as noise: a
+    // lamp switched off faded over the whole long history, and in a bright
+    // enclosed room over one long history per bounce (minutes).
+    float power = 0.25f * lumMean * lumMean;   // a new cell: half its value, until it has learned
+    float sumAbove = 0.0f;
+    float sumBelow = 0.0f;
     if (cell.w > 0u)
     {
-        const float running = min((float)samples / (float)weight, 1.0f);
-        const float alphaFast = max(1.0f / (float)SC_SHORT_HISTORY_FRAMES, running);
-        const float alphaPower = max(1.0f / (2.0f * (float)SC_SHORT_HISTORY_FRAMES), running);
-        // The frame value enters the short mean limited to three standard
-        // deviations of the frame values around the long mean: one outlier
-        // frame (a few rays that hit a very bright spot) then cannot trip the
-        // detector, only a deviation that lasts. Without the limit resting
-        // cells kept falling back to the short history and showed the outlier
-        // as a patch that came and went.
         const float oldPower = asfloat(gAccum[a + 7u]);
-        const float limit = 3.0f * sqrt(oldPower) + 0.03f * lumOld + 1e-5f;
-        const float offset = abs(lumMean - lumOld);
-        const float3 limited = offset > limit ? old + (mean - old) * (limit / offset) : mean;
-        fast = lerp(asfloat(uint3(gAccum[a + 4u], gAccum[a + 5u], gAccum[a + 6u])), limited, alphaFast);
-        power = lerp(oldPower, (lumMean - lumOld) * (lumMean - lumOld), alphaPower);
+        sumAbove = asfloat(gAccum[a + 4u]);
+        sumBelow = asfloat(gAccum[a + 5u]);
+        const float sigma = sqrt(oldPower) + 0.03f * lumOld + 1e-5f;
+        const float z = clamp((lumMean - lumOld) / sigma, -3.0f, 3.0f);
+        sumAbove = clamp(sumAbove + z - 0.5f, 0.0f, 4.0f * SC_CHANGE_EVIDENCE);
+        sumBelow = clamp(sumBelow - z - 0.5f, 0.0f, 4.0f * SC_CHANGE_EVIDENCE);
+        const float evidence = max(sumAbove, sumBelow);
+        const float running = min((float)samples / (float)weight, 1.0f);
+        const float rate = evidence < 2.0f ? 1.0f / (2.0f * (float)SC_SHORT_HISTORY_FRAMES)
+                                           : 1.0f / (8.0f * (float)SC_SHORT_HISTORY_FRAMES);
+        power = lerp(oldPower, z * z * sigma * sigma, max(rate, running));
         if (cell.w >= 2u * shortCap)
         {
-            // Standard deviation of the short mean of independent frame values.
-            const float sigma = max(sqrt(power * alphaFast / (2.0f - alphaFast)), 0.03f * lumOld + 1e-5f);
-            const float deviation = abs(dot(fast, luma) - lumOld);
-            const float changed = saturate((deviation - 2.5f * sigma) / (2.5f * sigma));
+            const float changed = saturate((evidence - SC_CHANGE_EVIDENCE) / SC_CHANGE_EVIDENCE);
             weight = (uint)lerp((float)weight, (float)min(weight, shortCap), changed);
         }
     }
-    gAccum[a + 4u] = asuint(fast.x);
-    gAccum[a + 5u] = asuint(fast.y);
-    gAccum[a + 6u] = asuint(fast.z);
+    gAccum[a + 4u] = asuint(sumAbove);
+    gAccum[a + 5u] = asuint(sumBelow);
     gAccum[a + 7u] = asuint(power);
 
     const float alpha = min((float)samples / (float)max(weight, 1u), 1.0f);

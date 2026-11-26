@@ -121,7 +121,8 @@ static const uint  SC_START_WEIGHT = 0u;
 // SC_SHORT_HISTORY_FRAMES and settles within that time.
 static const uint  SC_LONG_HISTORY_FRAMES  = 256u;
 static const uint  SC_SHORT_HISTORY_FRAMES = 8u;
-static const uint  SC_ACCUM_WORDS = 12u;          // gAccum words per slot: 0-2 sums, 3 count, 4-6 short mean, 7 noise power,
+static const float SC_CHANGE_EVIDENCE = 10.0f;     // cumulative sum of the change detector from which the history shortens
+static const uint  SC_ACCUM_WORDS = 12u;          // gAccum words per slot: 0-2 sums, 3 count, 4-5 change sums (6 free), 7 noise power,
                                                   // 8-10 display value (irradiance averaged with the neighbours)
 static const uint  SC_ACCUM_DISPLAY = 8u;
 // Word 11: squared distance of the cell's anchor (position in cellB) to the
