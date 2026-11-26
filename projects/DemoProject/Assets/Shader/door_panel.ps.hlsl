@@ -5,10 +5,13 @@
 //   • panelTex (t13, eigene Textur aus der .mat) liefert das Blechmuster.
 //   • Warnstreifen laufen diagonal ueber die Tuer, ihre Farbe kommt aus
 //     stripeColor, die Geschwindigkeit aus stripeSpeed (eigene Parameter).
-//   • Einfaches Lambert-Licht vom ersten Richtungslicht plus Ambient.
+//   • Lambert light: the indirect light of the scene (surface cache GI where
+//     it is on, the scene's ambient otherwise) plus the first directional
+//     light. The door is lit like its surroundings, at any exposure.
 //
 // Binding-Modell:
-//   b0 = PerFrame, b2 = PerMaterial, t13 = panelTex, s0 = LinearWrap
+//   b0 = PerFrame, b2 = PerMaterial, t13 = panelTex, t21 = GI (pbr_gi.hlsl),
+//   s0 = LinearWrap
 // =============================================================================
 
 struct GpuLightData
@@ -40,7 +43,22 @@ cbuffer PerFrame : register(b0)
     float        shadowBias;
     float        shadowNormalBias;
     float        shadowStrength;
+    float        shadowTexelSize;
+    uint         debugFlags;
+    uint         shadowFilterMode;
+    float        _shadowPad;
+    float4       shadowLightMeta[4];
+    float4       shadowLightExtra[4];
+    float4       shadowViewRect[16];
+    float4x4     shadowViewProjArray[16];
+    uint         shadowLightCount;
+    uint         shadowViewCount;
+    uint         shadowBufferLightCount;
+    uint         shadowBufferViewCount;
+    float4       featureParams[9]; // add-on parameter blocks (slot 8: surface cache GI)
 };
+
+#include "pbr_gi.hlsl"
 
 cbuffer PerMaterial : register(b2)
 {
@@ -71,16 +89,26 @@ float4 main(PSInput IN) : SV_TARGET
     const float stripe = step(0.5, frac((IN.texCoord.x + IN.texCoord.y) * stripeWidth + t * stripeSpeed));
     float3 albedo = lerp(panel, stripeColor.rgb, saturate(band) * stripe);
 
-    // Lambert vom ersten Richtungslicht.
+    // Irradiance E: the scene's ambient (E = pi * ambient, as in the engine
+    // shaders), replaced by the surface cache GI where it is applied.
+    static const float PI = 3.14159265f;
     const float3 N = normalize(IN.normalWS);
-    float3 diffuse = ambientColor.rgb * 4.0;
+    float3 irradiance = ambientColor.rgb * ambientColor.a * PI;
+    float3 giIrradiance;
+    float giCoverage;
+    if (KromSampleGI(IN.positionCS.xy, IN.positionWS, giIrradiance, giCoverage))
+        irradiance = lerp(irradiance, giIrradiance, giStrength);
+    const float3 indirect = irradiance;
     if (lightCount > 0 && lights[0].params.w < 0.5)
     {
         const float3 L = normalize(-lights[0].positionWS.xyz);
-        diffuse += lights[0].colorIntensity.rgb * lights[0].colorIntensity.w * saturate(dot(N, L));
+        irradiance += lights[0].colorIntensity.rgb * lights[0].colorIntensity.w * saturate(dot(N, L));
     }
 
-    // Streifen leuchten leicht, damit die Tuer auch im Schatten auffaellt.
-    const float3 glow = stripeColor.rgb * saturate(band) * stripe * 0.25;
-    return float4(albedo * diffuse + glow, 1.0);
+    // The stripes glow a little so the door stands out in shadow too: as much
+    // again as the indirect light gives them. A fixed radiance burnt out to
+    // white in a dim scene, and only the bloom around the door still showed
+    // the running stripes (a flicker along the frame).
+    const float3 glow = stripeColor.rgb * saturate(band) * stripe * (indirect / PI);
+    return float4(albedo * irradiance / PI + glow, 1.0);
 }
