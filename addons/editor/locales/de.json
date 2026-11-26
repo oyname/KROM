@@ -1363,7 +1363,7 @@
   "surface_cache.ray_budget": "GI: Strahlen pro Frame",
   "surface_cache.ray_budget_tip": "Festes Strahlenbudget des Radiance-Caches pro Frame (Tausend). Mehr Strahlen: schnelleres, ruhigeres Einschwingen, mehr GPU-Zeit.",
   "surface_cache.ray_length": "GI: Strahllänge",
-  "surface_cache.ray_length_tip": "Längere Strahlen treffen mehr Geometrie, kosten aber mehr. Den Rest liefern Probe oder IBL. 0 = unbegrenzt.",
+  "surface_cache.ray_length_tip": "0 = unbegrenzt (Standard). Eine Grenze spart Zeit in großen Szenen; Flächen dahinter tragen dann kein Licht mehr bei (nur lokale Probes), Himmelslicht kommt nur, wenn dahinter nichts liegt.",
   "surface_cache.cell_size": "GI: Zellgröße",
   "surface_cache.cell_size_tip": "Kantenlänge der Cache-Zellen nahe der Kamera. Ab 8 m Abstand verdoppelt sie sich mit jeder Verdopplung des Abstands.",
   "surface_cache.history": "GI: Verlauf (Samples)",

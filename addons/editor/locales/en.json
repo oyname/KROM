@@ -1363,7 +1363,7 @@
   "surface_cache.ray_budget": "GI: rays per frame",
   "surface_cache.ray_budget_tip": "Fixed ray budget of the radiance cache per frame (thousands). More rays: faster, calmer settling, more GPU time.",
   "surface_cache.ray_length": "GI: ray length",
-  "surface_cache.ray_length_tip": "Longer rays reach more geometry but cost more. Probe or IBL provide the rest. 0 = unbounded.",
+  "surface_cache.ray_length_tip": "0 = unbounded (default). A limit saves time in large scenes; surfaces beyond it no longer contribute light (local probes only), sky light arrives only where nothing lies behind.",
   "surface_cache.cell_size": "GI: cell size",
   "surface_cache.cell_size_tip": "Edge length of the cache cells near the camera. Beyond 8 m it doubles with every doubling of the distance.",
   "surface_cache.history": "GI: history (samples)",

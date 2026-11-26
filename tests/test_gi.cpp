@@ -1372,8 +1372,14 @@ void main(uint3 id : SV_DispatchThreadID)
 // (pending list, package 4).
 // emission 0 with a bright far field (ambient): a dark closed room under a
 // bright sky; every cell must go to 0, the sky must not leak in.
+// rayLength > 0: the cache rays end there. Rays that end inside the closed box
+// (walls 1.8 to 3.5 m from the cells) must not take the sky either.
+// outside: the camera looks at the box from outside. Its faces see nothing but
+// the far field, so every cell must settle at E = pi * ambient, also with a
+// ray length (the ray that ends is free all the way: it sees the sky).
 void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t maxSamples, const char* label,
-                            bool fixedCamera = false, float emission = 1.f, float ambient = 0.f)
+                            bool fixedCamera = false, float emission = 1.f, float ambient = 0.f,
+                            float rayLength = 0.f, bool outside = false)
 {
 #if defined(_WIN32) && defined(KROM_DX11_BACKEND)
     namespace sc = engine::renderer::addons::surface_cache;
@@ -1497,7 +1503,7 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
     c.tlasNodeCount = static_cast<uint32_t>(scene.TlasNodes().size());
     c.cellSize = 0.5f;
     c.levelDistance = 8.f;
-    c.rayLength = 0.f;
+    c.rayLength = rayLength;
     c.maxRaysPerCell = 16u;
     c.viewportWidth = kSize;
     c.viewportHeight = kSize;
@@ -1584,23 +1590,25 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
         mean = cells > 0u ? sum / (3.0 * cells) : 0.0;
     };
 
+    // Outside: on the +x axis, looking back at the box (its face x = 2).
+    const Vec3 cameraPosition = outside ? Vec3{ 6.f, 0.2f, -0.15f } : Vec3{ 0.1f, 0.2f, -0.15f };
     constexpr uint32_t kFrames = 480u;
     double meanBefore = 0.0, minBefore = 0.0, maxBefore = 0.0;
     uint32_t cellsBefore = 0u, fullBefore = 0u;
     for (uint32_t frame = 1u; frame <= kFrames; ++frame)
     {
-        const Vec3 dir = fixedCamera ? directions[0] : directions[frame % 6u];
+        const Vec3 dir = outside ? directions[1] : fixedCamera ? directions[0] : directions[frame % 6u];
         const Vec3 up = std::fabs(dir.y) > 0.5f ? Vec3{ 0.f, 0.f, 1.f } : Vec3{ 0.f, 1.f, 0.f };
-        const Mat4 view = Mat4::LookAtRH(Vec3{ 0.1f, 0.2f, -0.15f }, Vec3{ 0.1f, 0.2f, -0.15f } + dir, up);
+        const Mat4 view = Mat4::LookAtRH(cameraPosition, cameraPosition + dir, up);
         const Mat4 viewProj = proj * view;
         FrameConstants fc{};
         std::memcpy(fc.viewMatrix, view.Data(), sizeof(fc.viewMatrix));
         std::memcpy(fc.projMatrix, proj.Data(), sizeof(fc.projMatrix));
         std::memcpy(fc.viewProjMatrix, viewProj.Data(), sizeof(fc.viewProjMatrix));
         std::memcpy(fc.invViewProjMatrix, viewProj.Inverse().Data(), sizeof(fc.invViewProjMatrix));
-        fc.cameraPosition[0] = 0.1f;
-        fc.cameraPosition[1] = 0.2f;
-        fc.cameraPosition[2] = -0.15f;
+        fc.cameraPosition[0] = cameraPosition.x;
+        fc.cameraPosition[1] = cameraPosition.y;
+        fc.cameraPosition[2] = cameraPosition.z;
         fc.cameraPosition[3] = 1.f;
         fc.nearPlane = 0.05f;
         fc.farPlane = 100.f;
@@ -1628,8 +1636,9 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
     double mean = 0.0, minE = 0.0, maxE = 0.0;
     uint32_t cells = 0u, full = 0u;
     readCells(mean, minE, maxE, cells, full);
-    // L = e / (1 - a) with a = 0.5: E = pi * L = 2 pi e.
-    const double expected = 2.0 * 3.14159265358979 * emission;
+    // L = e / (1 - a) with a = 0.5: E = pi * L = 2 pi e. Outside the convex
+    // box every ray leaves the scene: E = pi * ambient.
+    const double expected = outside ? 3.14159265358979 * ambient : 2.0 * 3.14159265358979 * emission;
     std::fprintf(stdout, "  # test_gi.cpp: WARP furnace (%s): %u cells, mean E %.4f (expected %.4f), min %.4f, max %.4f; "
                          "60 frames earlier %u cells, mean %.4f\n",
                  label, cells, mean, expected, minE, maxE, cellsBefore, meanBefore);
@@ -1640,7 +1649,7 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
                      label, backCells, backMean);
         CHECK(ctx, backCells > 40u);
     }
-    CHECK(ctx, cells > 100u);
+    CHECK(ctx, cells > (outside ? 40u : 100u));
     if (expected > 0.0)
     {
         if (fixedCamera)
@@ -1666,6 +1675,10 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
     (void)maxSamples;
     (void)label;
     (void)fixedCamera;
+    (void)emission;
+    (void)ambient;
+    (void)rayLength;
+    (void)outside;
     std::fprintf(stdout, "  # test_gi.cpp: no DX11 backend, WARP furnace skipped\n");
 #endif
 }
@@ -1688,6 +1701,20 @@ void TestSurfaceCacheFurnaceFixedCameraOnWarp(test::TestContext& ctx)
 void TestSurfaceCacheDarkRoomOnWarp(test::TestContext& ctx)
 {
     RunSurfaceCacheFurnace(ctx, 16384u, 128u, "dark closed room, bright sky outside", true, 0.f, 0.2f);
+}
+
+// The room is larger than the ray length (rays of 3 m in a 4 m box: about half
+// of them end in the air). A ray that ends has not left the room.
+void TestSurfaceCacheDarkRoomShortRaysOnWarp(test::TestContext& ctx)
+{
+    RunSurfaceCacheFurnace(ctx, 16384u, 128u, "dark closed room, rays shorter than the room", false, 0.f, 0.2f, 3.f);
+}
+
+// The other side of the same rule: a ray that ends with nothing ahead still
+// takes the sky (the outer faces of the box, 3 m rays, far field 0.2 pi).
+void TestSurfaceCacheOpenSkyShortRaysOnWarp(test::TestContext& ctx)
+{
+    RunSurfaceCacheFurnace(ctx, 16384u, 128u, "box from outside, short rays", false, 0.f, 0.2f, 3.f, true);
 }
 
 // =============================================================================
@@ -2406,6 +2433,8 @@ int RunGiTests()
          .Add("Radiance cache settles with fewer rays than cells (furnace, WARP)", TestSurfaceCacheFurnaceSmallBudgetOnWarp)
          .Add("Radiance cache knows the wall behind the camera (furnace, WARP)", TestSurfaceCacheFurnaceFixedCameraOnWarp)
          .Add("Closed room without light stays black under a bright sky (WARP)", TestSurfaceCacheDarkRoomOnWarp)
+         .Add("Closed room larger than the ray length stays black (WARP)", TestSurfaceCacheDarkRoomShortRaysOnWarp)
+         .Add("Short rays with nothing ahead still take the sky (WARP)", TestSurfaceCacheOpenSkyShortRaysOnWarp)
          .Add("GI resolve and upsampling: interpolation, holes, fallbacks (WARP)", TestSurfaceCacheApplyOnWarp)
          .Add("GI dims the environment reflection where it is darker (WARP)", TestGiSpecularScaleOnWarp);
     return suite.Run();

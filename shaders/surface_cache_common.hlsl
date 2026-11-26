@@ -258,11 +258,19 @@ float3 ScProbeIrradianceSH(uint probe, float3 n)
 // IBL irradiance cube, or the ambient colour without IBL (pbr_lit: albedo *
 // ambient, so E = pi * ambient). Start value of new cells and the far field
 // of rays that leave the scene or end at scRayLength.
-float3 ScFarFieldIrradiance(float3 p, float3 n)
+// withGlobal false: the local probes only. For a ray that ended at scRayLength
+// with geometry still ahead of it: it has not left the scene, so the sky (IBL,
+// ambient colour) must not count (an enclosed room larger than the ray length
+// would fill with sky light).
+float3 ScFarFieldIrradiance(float3 p, float3 n, bool withGlobal)
 {
-    float3 global = ambientColor.rgb * ambientColor.a * SC_PI;
-    if ((scFlags & SC_FLAG_IBL) != 0u)
-        global = tIBLIrradiance.SampleLevel(sClamp, n, 0.0f).rgb;
+    float3 global = float3(0.0f, 0.0f, 0.0f);
+    if (withGlobal)
+    {
+        global = ambientColor.rgb * ambientColor.a * SC_PI;
+        if ((scFlags & SC_FLAG_IBL) != 0u)
+            global = tIBLIrradiance.SampleLevel(sClamp, n, 0.0f).rgb;
+    }
     if ((scFlags & SC_FLAG_PROBES) == 0u)
         return global;
     float3 probes = float3(0.0f, 0.0f, 0.0f);
@@ -288,6 +296,11 @@ float3 ScFarFieldIrradiance(float3 p, float3 n)
             break;
     }
     return probes + global * remaining;
+}
+
+float3 ScFarFieldIrradiance(float3 p, float3 n)
+{
+    return ScFarFieldIrradiance(p, n, true);
 }
 
 #endif // SC_WITH_ENVIRONMENT

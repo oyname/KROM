@@ -354,7 +354,7 @@ struct EditorState
     float    surfaceCacheOverlay = 1.0f;
     float    surfaceCacheDistance = 50.0f;
     int      surfaceCacheRayBudgetK = 128;   // thousands of cache rays per frame
-    float    surfaceCacheRayLength = 15.0f;
+    float    surfaceCacheRayLength = 0.0f;   // 0 = unbounded
     float    surfaceCacheCellSize = 0.5f;
     int      surfaceCacheHistory = 256;      // sample weight cap of a cell
     // Probe bake passes (1 or 2), saved in the environment block.

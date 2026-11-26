@@ -56,7 +56,7 @@ struct SurfaceCacheSettings
 
     // Radiance cache (package 3).
     uint32_t rayBudget      = 128000u;  // cache rays per frame
-    float    rayLength      = 15.0f;    // m; rest from probe/IBL; 0 = unbounded
+    float    rayLength      = 0.0f;     // m, 0 = unbounded; beyond it local probes, the sky only if nothing lies behind
     float    cellSize       = 0.5f;     // m, cell size near the camera
     float    levelDistance  = 8.0f;     // m from the camera with the smallest cells; doubles per level
     uint32_t maxSamples     = 256u;     // history length (sample weight cap)

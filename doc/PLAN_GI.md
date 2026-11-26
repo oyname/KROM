@@ -1055,3 +1055,53 @@ Offen / für Paket 5:
 - Projekteinstellung, Runtime (`KromWrapper`) und `krom.h`: noch nicht, GI bleibt
   Editor-Testschalter.
 - Messlauf neu ausführen wie Paket 3; der Lauf misst jetzt zweimal (mit und ohne GI).
+
+Fünfter Nachtrag (2026-11-26): Raum größer als die Strahllänge
+
+Befund des Nutzers: Der geschlossene, unbeleuchtete Raum „Garage“ in car wurde mit der
+IBL-Intensität heller (0,01 dunkel, 0,5 deutlich heller). Ursache: Der Raum ist innen
+25,4 × 19,9 × 18 m groß (Diagonale 37 m), die Cache-Strahlen endeten nach 15 m und nahmen dann
+das Fernfeld (IBL), als hätten sie die Szene verlassen. Der Test „Closed room without light
+stays black“ deckte das nicht ab (Box 4 m, Strahlen unbegrenzt).
+
+Messung (Kopie des Projekts, DX11, x64-Release, feste Belichtung, Kamera im Raum; mittlerer
+Pixelwert von 255):
+
+| IBL-Intensität | 15 m, vorher | unbegrenzt | 15 m, nachher | ohne GI |
+|---|---|---|---|---|
+| 0,01 | 0,03 | 0,00 | – | 0,18 |
+| 0,5 | 35,9 | 0,41 | 0,42 | 59,3 |
+| 2 | 87,5 | 1,72 | 1,71 (Vulkan 1,72) | 118,4 |
+
+- Abdeckung überall grün (Cache), das Licht steckte im Cache selbst. Resolve, Hochrechnen,
+  Spiegelungs-Dämpfung und andere Umgebungsterme tragen in diesem Raum nichts bei (mit
+  unbegrenzten Strahlen bei Blick auf eine Wand exakt 0, Maximum 0).
+- Der Rest (0–1,7, je nach Kamera) ist echtes Licht: „Wand Hinten Kopie“ steht 13 cm über dem
+  Boden (Unterkante −1,485, Bodenoberkante −1,615). Sichtbar als dünne Linie an der
+  Wandunterkante oder als flackernder Fleck (wenige Strahlen treffen den Spalt).
+
+Änderung:
+
+- Trace-Kernel: Ein Strahl ohne Treffer bis `scRayLength` fragt einen Verdeckungsstrahl
+  (`TraceAny` ab der Grenze bis unendlich). Frei: Fernfeld wie bisher. Verdeckt: nur die lokalen
+  Probes, nie die globale IBL/Ambient-Farbe (`ScFarFieldIrradiance(p, n, withGlobal)`).
+- Standard-Strahllänge 15 m → 0 (unbegrenzt), in `SurfaceCacheSettings` und im Editor. Ein
+  gespeicherter Wert in `editor.settings` (z. B. 15) bleibt erhalten und ist jetzt sicher.
+- Abweichung mit gesetzter Grenze: Flächen hinter der Grenze tragen kein Licht bei (große
+  beleuchtete Hallen werden zu dunkel geschätzt). Deshalb unbegrenzt als Standard.
+- Tests (WARP): „Closed room larger than the ray length stays black“ (Box 4 m, Strahlen 3 m,
+  Fernfeld 0,2·π: E = 0,0000 in 768 Zellen; ohne den Verdeckungsstrahl E = 0,39) und „Short
+  rays with nothing ahead still take the sky“ (Box von außen, Strahlen 3 m: E = 0,6283 = 0,2·π).
+  Suite „GI“ 24/24.
+
+Kosten des Trace-Passes (DX11, GTX 1660, x64-Release):
+
+| Szene | 15 m, vorher | 15 m mit Verdeckungsstrahl | unbegrenzt (neuer Standard) |
+|---|---|---|---|
+| car, außen | 0,43 ms | 0,37 ms | 0,41 ms |
+| car, im Raum | 0,15 ms | 0,16 ms | 0,19 ms |
+| car + 64 Drachen | 0,63 ms | 0,75 ms | 0,84 ms |
+
+Schwankung zwischen zwei Läufen einige Hundertstel. Im Raum gibt es mit unbegrenzten Strahlen
+mehr Zellen aus Treffern (252 → 795 aktive). Vulkan: Bilder im Raum geprüft
+(`KROM_VALIDATION=1` ohne Meldung), Zeiten nicht gemessen.

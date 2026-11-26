@@ -11,7 +11,8 @@
 //                       the view (pending list) to the active list (package 4)
 //   SC_KERNEL_TRACE     scRayBudget cosine rays from the active cells; shading
 //                       at the hit: emission + albedo / pi * (sun + lights +
-//                       cache of the hit cell); miss: far field. A hit without a
+//                       cache of the hit cell); miss: far field (the sky only if
+//                       nothing lies beyond scRayLength either). A hit without a
 //                       cell inserts it; a hit cell not active this frame goes
 //                       to the pending list, so the cache also knows surfaces
 //                       outside the view (walls behind the camera)
@@ -426,9 +427,16 @@ void main(uint3 dtid : SV_DispatchThreadID)
     }
     else
     {
-        // Left the scene or ended at scRayLength: radiance of the far field in
-        // the ray direction (irradiance of a surface facing it, / pi).
-        radiance = ScFarFieldIrradiance(o + dir * min(tMax, 1e4f), dir) * (1.0f / SC_PI);
+        // No hit up to tMax: radiance of the far field in the ray direction
+        // (irradiance of a surface facing it, / pi). Only a ray that is free
+        // all the way has left the scene and sees the sky. A ray that ended at
+        // scRayLength asks an occlusion ray for the rest of its way; with
+        // geometry ahead only the local probes count (an enclosed room larger
+        // than the ray length filled with sky light otherwise).
+        bool seesSky = true;
+        if (scRayLength > 0.0f)
+            seesSky = !TraceAny(o, dir, tMax, 1e30f, scTlasNodeCount, stats);
+        radiance = ScFarFieldIrradiance(o + dir * min(tMax, 1e4f), dir, seesSky) * (1.0f / SC_PI);
     }
     radiance = min(max(radiance, 0.0f), SC_MAX_RADIANCE);
     const uint3 fixedPoint = (uint3)(radiance * SC_ACCUM_SCALE + ScRandom(seed));   // dithered: unbiased
