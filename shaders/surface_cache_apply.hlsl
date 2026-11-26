@@ -27,6 +27,7 @@
 KROM_BUFFER_SRV(StructuredBuffer<uint>,  gApplyKeys,  12);
 KROM_BUFFER_SRV(StructuredBuffer<uint4>, gApplyCellA, 13);
 KROM_BUFFER_SRV(StructuredBuffer<uint4>, gApplyCellB, 14);
+KROM_BUFFER_SRV(StructuredBuffer<uint>,  gApplyAccum, 15);   // SC_ACCUM_WORDS per slot, the display value
 
 #ifdef SC_APPLY_MSAA
 Texture2DMS<float> tApplyDepth : register(t8);
@@ -42,11 +43,10 @@ static int2 gDepthSize;
 static const float SC_APPLY_MIN_AXIS_WEIGHT = 0.05f;
 // Trilinear weight that counts as fully covered by the cache.
 static const float SC_APPLY_FULL_WEIGHT = 0.25f;
-// Sample weight from which a cell counts in full. A younger cell fades in next
-// to its neighbours: its first frames are a mean of a few rays, and shown in
-// full every new cell was a patch that came and went (cells are born all the
+// A cell counts in full from SC_CONFIDENT_SAMPLES on. A younger cell fades in
+// next to its neighbours: its first frames are a mean of a few rays, and shown
+// in full every new cell was a patch that came and went (cells are born all the
 // time, also in a resting view: registration reaches small ones only now and then).
-static const float SC_APPLY_CONFIDENT_SAMPLES = 1024.0f;
 
 float ScApplyLoadDepth(int2 pixel)
 {
@@ -163,8 +163,10 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
             found += wc;
             // Young cells count little while older ones are around; alone they
             // still fill the pixel (the sum is normalised).
-            wc *= max(saturate((float)cell.w / SC_APPLY_CONFIDENT_SAMPLES), 0.02f);
-            sum += asfloat(cell.xyz) * wc;
+            wc *= max(saturate((float)cell.w / SC_CONFIDENT_SAMPLES), 0.02f);
+            // The display value: the cell averaged with its neighbours on the surface.
+            const uint d = slot * SC_ACCUM_WORDS + SC_ACCUM_DISPLAY;
+            sum += asfloat(uint3(gApplyAccum[d], gApplyAccum[d + 1u], gApplyAccum[d + 2u])) * wc;
             weight += wc;
         }
     }

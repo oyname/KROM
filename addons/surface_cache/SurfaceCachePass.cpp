@@ -331,6 +331,7 @@ constexpr std::string_view kShadowMapResource = "ShadowMap";
 constexpr uint32_t         kApplyKeysSlot     = 12u; // BufSRV slots of the resolve for shading
 constexpr uint32_t         kApplyCellASlot    = 13u;
 constexpr uint32_t         kApplyCellBSlot    = 14u;
+constexpr uint32_t         kApplyAccumSlot    = 15u; // the cells' display values (SC_ACCUM_WORDS)
 
 struct float4Value { float v[4]; };
 
@@ -533,12 +534,12 @@ bool CreateGridBuffer(IDevice& device, BufferHandle& buffer, uint64_t count, uin
 void ClearGrid(IDevice& device, SurfaceCacheGrid& g)
 {
     const uint64_t n = SurfaceCacheGrid::kCapacity;
-    const std::vector<uint8_t> zeros(n * 32u, 0u);
+    const std::vector<uint8_t> zeros(n * 48u, 0u);
     device.UploadBufferData(g.keys, zeros.data(), n * 4u);
     device.UploadBufferData(g.cellA, zeros.data(), n * 16u);
     device.UploadBufferData(g.cellB, zeros.data(), n * 16u);
     device.UploadBufferData(g.cellFrame, zeros.data(), n * 4u);
-    device.UploadBufferData(g.accum, zeros.data(), n * 32u);
+    device.UploadBufferData(g.accum, zeros.data(), n * 48u);
     device.UploadBufferData(g.activeList, zeros.data(), n * 4u);
     device.UploadBufferData(g.pending, zeros.data(), n * 4u);
     device.UploadBufferData(g.counters, zeros.data(), SurfaceCacheGrid::kCounterWords * 4u);
@@ -557,7 +558,7 @@ bool EnsureGrid(IDevice& device, SurfaceCacheGrid& g)
               CreateGridBuffer(device, g.cellA, n, 16u, "SurfaceCache_CellA") &&
               CreateGridBuffer(device, g.cellB, n, 16u, "SurfaceCache_CellB") &&
               CreateGridBuffer(device, g.cellFrame, n, 4u, "SurfaceCache_CellFrame") &&
-              CreateGridBuffer(device, g.accum, n * 8u, 4u, "SurfaceCache_Accum") &&
+              CreateGridBuffer(device, g.accum, n * 12u, 4u, "SurfaceCache_Accum") &&
               CreateGridBuffer(device, g.activeList, n, 4u, "SurfaceCache_ActiveList") &&
               CreateGridBuffer(device, g.pending, n, 4u, "SurfaceCache_Pending") &&
               CreateGridBuffer(device, g.counters, SurfaceCacheGrid::kCounterWords, 4u, "SurfaceCache_Counters");
@@ -1272,8 +1273,9 @@ void SurfaceCacheComputePass::BuildApplyPass(const PassBuildContext& ctx, const 
             cmd.SetShaderResource(kApplyKeysSlot, g.keys, ShaderStageMask::Fragment);
             cmd.SetShaderResource(kApplyCellASlot, g.cellA, ShaderStageMask::Fragment);
             cmd.SetShaderResource(kApplyCellBSlot, g.cellB, ShaderStageMask::Fragment);
+            cmd.SetShaderResource(kApplyAccumSlot, g.accum, ShaderStageMask::Fragment);
             cmd.Draw(3u, 1u, 0u, 0u);
-            for (uint32_t slot : { kApplyKeysSlot, kApplyCellASlot, kApplyCellBSlot })
+            for (uint32_t slot : { kApplyKeysSlot, kApplyCellASlot, kApplyCellBSlot, kApplyAccumSlot })
                 cmd.SetShaderResource(slot, BufferHandle::Invalid(), ShaderStageMask::Fragment);
             for (uint32_t slot : { TexSlots::PassSRV0, TexSlots::IBLIrradiance, TexSlots::FeatureTexture })
                 cmd.SetShaderResource(slot, TextureHandle::Invalid(), ShaderStageMask::Fragment);

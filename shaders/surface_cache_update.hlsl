@@ -24,7 +24,7 @@
 //                       the smallest mips of its textures
 //
 // UAVs of the cache kernels: u0 keys, u1 cellA, u2 cellB, u3 cellFrame,
-// u4 accum (8 uint per slot: rgb sums, sample count, change detector), u5 active list,
+// u4 accum (12 uint per slot: rgb sums, sample count, change detector, display value), u5 active list,
 // u6 counters (SC_COUNTER_*; 16..31 hold the previous frame's values),
 // u7 pending list (cells hit by cache rays, registered next frame).
 // =============================================================================
@@ -523,6 +523,56 @@ void main(uint3 dtid : SV_DispatchThreadID)
     const float alpha = min((float)samples / (float)max(weight, 1u), 1.0f);
     const float3 e = lerp(old, mean, alpha);
     gCellA[slot] = uint4(asuint(e), weight);
+
+    // Display value (read by the resolve for shading, not by the cache rays):
+    // this cell averaged with its four neighbours in the plane of the surface,
+    // each at half weight. The cells' noise is independent, so this about
+    // halves the patches of a resting image, at the price of indirect light
+    // that is half a cell softer. A neighbour counts only on the same surface
+    // (near this cell's tangent plane, facing alike) and with a free line to
+    // it: no light through a wall that stands between two floor cells.
+    {
+        const uint4 cellB = gCellB[slot];
+        const float3 p = asfloat(cellB.xyz);
+        const float3 n = ScOctDecode(cellB.w);
+        const uint level = ScLevel(p);
+        const float size = ScCellSizeOfLevel(level);
+        const uint bucket = ScNormalBucket(n);
+        const int3 q = (int3)floor(p / size);
+        const uint axis = bucket / 2u;
+        const float lift = 2e-3f + 2e-4f * length(p - cameraPositionWS.xyz);
+        const float3 po = p + n * lift;
+        const float self = min((float)weight, SC_CONFIDENT_SAMPLES);
+        float3 sum = e * self;
+        float total = self;
+        TraceStats stats = TraceStatsZero();
+        [loop] for (uint i = 0u; i < 4u; ++i)
+        {
+            const uint inPlane = (axis + 1u + (i >> 1u)) % 3u;
+            const int3 step = int3(inPlane == 0u ? 1 : 0, inPlane == 1u ? 1 : 0, inPlane == 2u ? 1 : 0) * ((i & 1u) != 0u ? 1 : -1);
+            const uint other = ScFind(ScMakeKeyAt(q + step, level, bucket));
+            if (other == SC_NONE)
+                continue;
+            const uint4 otherA = gCellA[other];
+            if (otherA.w == 0u)
+                continue;
+            const uint4 otherB = gCellB[other];
+            const float3 op = asfloat(otherB.xyz);
+            if (abs(dot(op - p, n)) > 0.25f * size || dot(ScOctDecode(otherB.w), n) < 0.9f)
+                continue;
+            const float3 toOther = op + n * lift - po;
+            const float dist = length(toOther);
+            if (dist > 1e-4f && TraceAny(po, toOther / dist, 0.0f, dist, scTlasNodeCount, stats))
+                continue;
+            const float w = 0.5f * min((float)otherA.w, SC_CONFIDENT_SAMPLES);
+            sum += asfloat(otherA.xyz) * w;
+            total += w;
+        }
+        const float3 display = sum / max(total, 1e-6f);
+        gAccum[a + SC_ACCUM_DISPLAY + 0u] = asuint(display.x);
+        gAccum[a + SC_ACCUM_DISPLAY + 1u] = asuint(display.y);
+        gAccum[a + SC_ACCUM_DISPLAY + 2u] = asuint(display.z);
+    }
 
     const float lumNew = dot(e, luma);
     const float change = abs(lumNew - lumOld) / max(max(lumOld, lumNew), 1e-3f);

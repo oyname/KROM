@@ -196,7 +196,7 @@ struct SurfaceCacheGrid
     BufferHandle cellA;       // uint4 per slot: irradiance, weight
     BufferHandle cellB;       // uint4 per slot: position, normal
     BufferHandle cellFrame;   // uint per slot
-    BufferHandle accum;       // 8 uint per slot: this frame's sums and count, the change detector
+    BufferHandle accum;       // 12 uint per slot: this frame's sums and count, the change detector, the display value
     BufferHandle activeList;  // uint per slot
     BufferHandle pending;     // uint per slot: cells hit by cache rays, active next frame
     BufferHandle counters;    // kCounterWords uint

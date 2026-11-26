@@ -120,7 +120,12 @@ static const uint  SC_START_WEIGHT = 0u;
 // SC_SHORT_HISTORY_FRAMES and settles within that time.
 static const uint  SC_LONG_HISTORY_FRAMES  = 256u;
 static const uint  SC_SHORT_HISTORY_FRAMES = 8u;
-static const uint  SC_ACCUM_WORDS = 8u;           // gAccum words per slot: 0-2 sums, 3 count, 4-6 short mean, 7 noise power
+static const uint  SC_ACCUM_WORDS = 12u;          // gAccum words per slot: 0-2 sums, 3 count, 4-6 short mean, 7 noise power,
+                                                  // 8-10 display value (irradiance averaged with the neighbours)
+static const uint  SC_ACCUM_DISPLAY = 8u;
+// Sample weight from which a cell counts in full, in the display average and in
+// the resolve for shading.
+static const float SC_CONFIDENT_SAMPLES = 1024.0f;
 
 uint ScPcg(uint v)
 {
