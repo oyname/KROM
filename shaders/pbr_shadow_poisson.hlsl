@@ -8,6 +8,8 @@
 // Mode 4 (ShadowFilter::PCSS) follows below.
 // =============================================================================
 
+#include "shadow_receiver.hlsl"
+
 // Pixel position (SV_Position.xy) of the fragment; main() sets it first.
 static float2 gKromShadowPixelPos = float2(0.0f, 0.0f);
 
@@ -119,7 +121,7 @@ float SampleShadowTent(float2 atlasUv, float depth, float2 dDepth_dUV, float bas
             float ox;
             KromShadowTentAxis(quality, x, st.x, wx, ox);
             const float2 tapUv = baseUv + float2(ox, oy) * texel;
-            const float depthRef = depth + dot(dDepth_dUV, tapUv - atlasUv) - baseBias;
+            const float depthRef = depth + KromShadowPlaneTerm(dDepth_dUV, tapUv - atlasUv) - baseBias;
             visibility += wx * wy * CompareShadowManualBilinear(tapUv, depthRef, atlasRect);
         }
     }
@@ -160,7 +162,7 @@ float SampleShadowPoisson(float2 atlasUv, float depth, float2 dDepth_dUV, float 
         const float2 disk = kShadowPoissonDisk[tap];
         const float2 offset = float2(disk.x * cosA - disk.y * sinA,
                                      disk.x * sinA + disk.y * cosA) * radius;
-        const float depthRef = depth + dot(dDepth_dUV, offset) - baseBias;
+        const float depthRef = depth + KromShadowPlaneTerm(dDepth_dUV, offset) - baseBias;
         visibility += CompareShadowManualBilinear(atlasUv + offset, depthRef, atlasRect);
     }
     return visibility * (1.0f / 12.0f);
@@ -247,7 +249,7 @@ float SampleShadowPcss(float2 atlasUv, float depth, float2 dDepth_dUV, float bas
         const float2 offset = float2(disk.x * cosA - disk.y * sinA,
                                      disk.x * sinA + disk.y * cosA) * searchRadius;
         const float occluderDepth = shadowMap.SampleLevel(sPoint, clamp(atlasUv + offset, minUv, maxUv), 0).r;
-        const float depthRef = depth + dot(dDepth_dUV, offset) - baseBias;
+        const float depthRef = depth + KromShadowPlaneTerm(dDepth_dUV, offset) - baseBias;
         if (occluderDepth < depthRef)
         {
             blockerSum += occluderDepth;
@@ -285,7 +287,7 @@ float SampleShadowPcss(float2 atlasUv, float depth, float2 dDepth_dUV, float bas
         const float2 disk = kShadowPoissonDisk[filterTap];
         const float2 offset = float2(disk.x * cosA - disk.y * sinA,
                                      disk.x * sinA + disk.y * cosA) * radius;
-        const float depthRef = depth + dot(dDepth_dUV, offset) - baseBias;
+        const float depthRef = depth + KromShadowPlaneTerm(dDepth_dUV, offset) - baseBias;
         visibility += CompareShadowManualBilinear(atlasUv + offset, depthRef, atlasRect);
     }
     return visibility * (1.0f / 12.0f);
