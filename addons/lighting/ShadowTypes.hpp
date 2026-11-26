@@ -4,6 +4,7 @@
 // Gemeinsame Shadow-Konfiguration pro Licht.
 // Gilt engine-weit, unabhängig von Render-Backend und konkreter Technik.
 // =============================================================================
+#include <cstddef>
 #include <cstdint>
 
 namespace engine {
