@@ -24,7 +24,7 @@
 //                       the smallest mips of its textures
 //
 // UAVs of the cache kernels: u0 keys, u1 cellA, u2 cellB, u3 cellFrame,
-// u4 accum (4 uint per slot: rgb sums, sample count), u5 active list,
+// u4 accum (8 uint per slot: rgb sums, sample count, change detector), u5 active list,
 // u6 counters (SC_COUNTER_*; 16..31 hold the previous frame's values),
 // u7 pending list (cells hit by cache rays, registered next frame).
 // =============================================================================
@@ -441,10 +441,10 @@ void main(uint3 dtid : SV_DispatchThreadID)
     radiance = min(max(radiance, 0.0f), SC_MAX_RADIANCE);
     const uint3 fixedPoint = (uint3)(radiance * SC_ACCUM_SCALE + ScRandom(seed));   // dithered: unbiased
     uint previous;
-    InterlockedAdd(gAccum[slot * 4u + 0u], fixedPoint.x, previous);
-    InterlockedAdd(gAccum[slot * 4u + 1u], fixedPoint.y, previous);
-    InterlockedAdd(gAccum[slot * 4u + 2u], fixedPoint.z, previous);
-    InterlockedAdd(gAccum[slot * 4u + 3u], 1u, previous);
+    InterlockedAdd(gAccum[slot * SC_ACCUM_WORDS + 0u], fixedPoint.x, previous);
+    InterlockedAdd(gAccum[slot * SC_ACCUM_WORDS + 1u], fixedPoint.y, previous);
+    InterlockedAdd(gAccum[slot * SC_ACCUM_WORDS + 2u], fixedPoint.z, previous);
+    InterlockedAdd(gAccum[slot * SC_ACCUM_WORDS + 3u], 1u, previous);
     InterlockedAdd(gCounters[SC_COUNTER_RAYS], 1u, previous);
 }
 
@@ -456,30 +456,65 @@ void main(uint3 dtid : SV_DispatchThreadID)
     if (dtid.x >= gCounters[SC_COUNTER_ACTIVE])
         return;
     const uint slot = gActiveList[dtid.x];
-    const uint samples = gAccum[slot * 4u + 3u];
+    const uint a = slot * SC_ACCUM_WORDS;
+    const uint samples = gAccum[a + 3u];
     if (samples == 0u)
         return;
     // Cosine-weighted rays: E = pi * mean radiance.
-    const float3 mean = float3(gAccum[slot * 4u + 0u], gAccum[slot * 4u + 1u], gAccum[slot * 4u + 2u]) *
+    const float3 mean = float3(gAccum[a + 0u], gAccum[a + 1u], gAccum[a + 2u]) *
                         (SC_PI / (SC_ACCUM_SCALE * (float)samples));
-    gAccum[slot * 4u + 0u] = 0u;
-    gAccum[slot * 4u + 1u] = 0u;
-    gAccum[slot * 4u + 2u] = 0u;
-    gAccum[slot * 4u + 3u] = 0u;
+    gAccum[a + 0u] = 0u;
+    gAccum[a + 1u] = 0u;
+    gAccum[a + 2u] = 0u;
+    gAccum[a + 3u] = 0u;
     const uint4 cell = gCellA[slot];
     const float3 old = asfloat(cell.xyz);
-    // History: scMaxSamples, but at least SC_MIN_HISTORY_FRAMES frames of this
-    // cell's rays. The flicker of a resting image is set by the history in
-    // frames, not by the ray count: the cell's ray origin moves within the cell
-    // every frame (registration jitter), which more rays do not average out
-    // (measured: 32, 64 and 128 rays per cell gave the same noise floor).
-    const uint weight = min(cell.w + samples, max(max(scMaxSamples, 1u), samples * SC_MIN_HISTORY_FRAMES));
-    const float alpha = min((float)samples / (float)weight, 1.0f);
+    const float3 luma = float3(0.2126f, 0.7152f, 0.0722f);
+    const float lumOld = dot(old, luma);
+    const float lumMean = dot(mean, luma);
+
+    // History: a running mean up to SC_LONG_HISTORY_FRAMES frames of this
+    // cell's rays (scMaxSamples if that is more). What is left of the flicker
+    // of a resting image is plain sampling noise, so it is set by the number
+    // of rays in the history.
+    const uint longCap = max(max(scMaxSamples, 1u), samples * SC_LONG_HISTORY_FRAMES);
+    const uint shortCap = samples * SC_SHORT_HISTORY_FRAMES;
+    uint weight = min(cell.w + samples, longCap);
+
+    // Change detector: a short mean of the frame values next to the long one
+    // and the noise power of the frame values around the long mean. Where the
+    // short mean leaves the long one by more than its own noise allows (2.5 to
+    // 5 standard deviations, at least 3 %), the light of the cell has changed
+    // (a light moved or switched, a door opened further away): the history
+    // falls back to the short one and the cell follows within a few frames.
+    float3 fast = mean;
+    float power = 0.0f;
+    if (cell.w > 0u)
+    {
+        const float running = min((float)samples / (float)weight, 1.0f);
+        const float alphaFast = max(1.0f / (float)SC_SHORT_HISTORY_FRAMES, running);
+        const float alphaPower = max(1.0f / (2.0f * (float)SC_SHORT_HISTORY_FRAMES), running);
+        fast = lerp(asfloat(uint3(gAccum[a + 4u], gAccum[a + 5u], gAccum[a + 6u])), mean, alphaFast);
+        power = lerp(asfloat(gAccum[a + 7u]), (lumMean - lumOld) * (lumMean - lumOld), alphaPower);
+        if (cell.w >= 2u * shortCap)
+        {
+            // Standard deviation of the short mean of independent frame values.
+            const float sigma = max(sqrt(power * alphaFast / (2.0f - alphaFast)), 0.03f * lumOld + 1e-5f);
+            const float deviation = abs(dot(fast, luma) - lumOld);
+            const float changed = saturate((deviation - 2.5f * sigma) / (2.5f * sigma));
+            weight = (uint)lerp((float)weight, (float)min(weight, shortCap), changed);
+        }
+    }
+    gAccum[a + 4u] = asuint(fast.x);
+    gAccum[a + 5u] = asuint(fast.y);
+    gAccum[a + 6u] = asuint(fast.z);
+    gAccum[a + 7u] = asuint(power);
+
+    const float alpha = min((float)samples / (float)max(weight, 1u), 1.0f);
     const float3 e = lerp(old, mean, alpha);
     gCellA[slot] = uint4(asuint(e), weight);
 
-    const float lumOld = dot(old, float3(0.2126f, 0.7152f, 0.0722f));
-    const float lumNew = dot(e, float3(0.2126f, 0.7152f, 0.0722f));
+    const float lumNew = dot(e, luma);
     const float change = abs(lumNew - lumOld) / max(max(lumOld, lumNew), 1e-3f);
     uint previous;
     InterlockedAdd(gCounters[SC_COUNTER_CHANGE], (uint)(min(change, 1.0f) * 1000.0f + 0.5f), previous);
@@ -520,8 +555,11 @@ void main(uint3 dtid : SV_DispatchThreadID)
         if (all(p >= lo) && all(p <= hi))
         {
             const uint4 cell = gCellA[slot];
-            if (cell.w > SC_DIRTY_WEIGHT)
-                gCellA[slot] = uint4(cell.xyz, SC_DIRTY_WEIGHT);
+            // The short history, not none: while something keeps moving the
+            // cells around it would otherwise show the raw noise of one frame.
+            const uint dirtyWeight = max(scMaxRaysPerCell, 1u) * SC_SHORT_HISTORY_FRAMES / 2u;
+            if (cell.w > dirtyWeight)
+                gCellA[slot] = uint4(cell.xyz, dirtyWeight);
             break;
         }
     }

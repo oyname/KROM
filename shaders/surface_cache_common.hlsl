@@ -112,8 +112,15 @@ static const float SC_MAX_RADIANCE = 256.0f;      // per sample (fireflies)
 // (4 of 100 samples = 4 % sky after 100 rays), and in an enclosed room every
 // cell that came into view brought some of the sky in.
 static const uint  SC_START_WEIGHT = 0u;
-static const uint  SC_DIRTY_WEIGHT = 2u;          // weight left in a changed region
-static const uint  SC_MIN_HISTORY_FRAMES = 16u;   // history in frames of a cell's rays (at least); sets the noise floor
+// History of a cell in frames of its rays. A resting cell averages over
+// SC_LONG_HISTORY_FRAMES (the flicker of a resting image falls with the square
+// root of it: measured in Room 2, 16 -> 64 frames halves it). A cell whose
+// light changed (resolve kernel: its short mean leaves the long one by more
+// than the noise) or whose surroundings moved (dirty boxes) falls back to
+// SC_SHORT_HISTORY_FRAMES and settles within that time.
+static const uint  SC_LONG_HISTORY_FRAMES  = 256u;
+static const uint  SC_SHORT_HISTORY_FRAMES = 8u;
+static const uint  SC_ACCUM_WORDS = 8u;           // gAccum words per slot: 0-2 sums, 3 count, 4-6 short mean, 7 noise power
 
 uint ScPcg(uint v)
 {

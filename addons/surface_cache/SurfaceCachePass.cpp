@@ -533,12 +533,12 @@ bool CreateGridBuffer(IDevice& device, BufferHandle& buffer, uint64_t count, uin
 void ClearGrid(IDevice& device, SurfaceCacheGrid& g)
 {
     const uint64_t n = SurfaceCacheGrid::kCapacity;
-    const std::vector<uint8_t> zeros(n * 16u, 0u);
+    const std::vector<uint8_t> zeros(n * 32u, 0u);
     device.UploadBufferData(g.keys, zeros.data(), n * 4u);
     device.UploadBufferData(g.cellA, zeros.data(), n * 16u);
     device.UploadBufferData(g.cellB, zeros.data(), n * 16u);
     device.UploadBufferData(g.cellFrame, zeros.data(), n * 4u);
-    device.UploadBufferData(g.accum, zeros.data(), n * 16u);
+    device.UploadBufferData(g.accum, zeros.data(), n * 32u);
     device.UploadBufferData(g.activeList, zeros.data(), n * 4u);
     device.UploadBufferData(g.pending, zeros.data(), n * 4u);
     device.UploadBufferData(g.counters, zeros.data(), SurfaceCacheGrid::kCounterWords * 4u);
@@ -557,7 +557,7 @@ bool EnsureGrid(IDevice& device, SurfaceCacheGrid& g)
               CreateGridBuffer(device, g.cellA, n, 16u, "SurfaceCache_CellA") &&
               CreateGridBuffer(device, g.cellB, n, 16u, "SurfaceCache_CellB") &&
               CreateGridBuffer(device, g.cellFrame, n, 4u, "SurfaceCache_CellFrame") &&
-              CreateGridBuffer(device, g.accum, n * 4u, 4u, "SurfaceCache_Accum") &&
+              CreateGridBuffer(device, g.accum, n * 8u, 4u, "SurfaceCache_Accum") &&
               CreateGridBuffer(device, g.activeList, n, 4u, "SurfaceCache_ActiveList") &&
               CreateGridBuffer(device, g.pending, n, 4u, "SurfaceCache_Pending") &&
               CreateGridBuffer(device, g.counters, SurfaceCacheGrid::kCounterWords, 4u, "SurfaceCache_Counters");

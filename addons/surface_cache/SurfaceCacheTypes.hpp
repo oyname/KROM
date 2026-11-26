@@ -59,7 +59,7 @@ struct SurfaceCacheSettings
     float    rayLength      = 0.0f;     // m, 0 = unbounded; beyond it local probes, the sky only if nothing lies behind
     float    cellSize       = 0.5f;     // m, cell size near the camera
     float    levelDistance  = 8.0f;     // m from the camera with the smallest cells; doubles per level
-    uint32_t maxSamples     = 256u;     // history length (sample weight cap)
+    uint32_t maxSamples     = 256u;     // history length (sample weight cap, at least SC_LONG_HISTORY_FRAMES frames)
     uint32_t maxRaysPerCell = 32u;      // per visible cell and frame (cells outside the view: a quarter)
     bool     useCascades    = true;     // sun visibility from the CSM where it covers the hit (else rays)
     uint32_t registerStep   = 4u;       // one registration ray per 4 x 4 pixels
@@ -195,7 +195,7 @@ struct SurfaceCacheGrid
     BufferHandle cellA;       // uint4 per slot: irradiance, weight
     BufferHandle cellB;       // uint4 per slot: position, normal
     BufferHandle cellFrame;   // uint per slot
-    BufferHandle accum;       // 4 uint per slot
+    BufferHandle accum;       // 8 uint per slot: this frame's sums and count, the change detector
     BufferHandle activeList;  // uint per slot
     BufferHandle pending;     // uint per slot: cells hit by cache rays, active next frame
     BufferHandle counters;    // kCounterWords uint
