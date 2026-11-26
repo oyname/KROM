@@ -2,6 +2,7 @@ add_library(engine_mesh_renderer STATIC
     ${CMAKE_CURRENT_SOURCE_DIR}/MeshRendererFeature.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/MeshRendererExtraction.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/MeshRendererSerialization.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/MeshSceneBvh.cpp
 )
 target_include_directories(engine_mesh_renderer
     PUBLIC

@@ -344,6 +344,12 @@ struct EditorState
     float    ssrThickness = 0.3f;
     // Reflection probes: debug view (viewport setting, not saved).
     uint32_t probeDebugView = 0u;
+    // Surface cache GI test (doc/PLAN_GI.md, package 2): trace kernel with debug
+    // view and measuring mode. Viewport setting, not saved, off by default.
+    bool     surfaceCacheEnabled = false;
+    uint32_t surfaceCacheDebugView = 1u;   // SurfaceCacheDebugView
+    float    surfaceCacheOverlay = 1.0f;
+    float    surfaceCacheDistance = 50.0f;
     // Probe bake passes (1 or 2), saved in the environment block.
     uint32_t probeBakePasses = 2u;
     // Window "Profiler" (EditorProfilerWindow.cpp).
@@ -534,6 +540,14 @@ struct EditorFrameContext
     GpuPassTimingReport gpuPassTimings{};   // filled by the app each frame
     bool gtaoAvailable = true;                // false when the host did not register the GTAO add-on
     bool contactShadowAvailable = true;       // false when the host did not register the contact shadow add-on
+    // Surface cache GI test: available, buttons and the last results (set by the app).
+    bool surfaceCacheAvailable = false;
+    bool surfaceCacheBenchRunning = false;
+    std::function<void()> startSurfaceCacheBench;
+    std::function<void()> checkSurfaceCache;
+    std::string surfaceCacheStatus;
+    std::string surfaceCacheCheckResult;
+    std::vector<std::string> surfaceCacheBenchResults;
     // Automatic exposure as last measured (Inspector display); null without renderer.
     const renderer::addons::forward::AutoExposureStatus* autoExposureStatus = nullptr;
     renderer::RenderFrameDataView frameData{};

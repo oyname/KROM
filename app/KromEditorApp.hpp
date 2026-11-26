@@ -9,6 +9,7 @@
 #include "addons/probes/ProbeBake.hpp"
 #include "addons/ssr/SsrPass.hpp"
 #include "addons/contact_shadow/ContactShadowPass.hpp"
+#include "addons/surface_cache/SurfaceCacheTypes.hpp"
 #include "addons/shadow/ShadowExtraction.hpp"
 #include "addons/lighting/LightingComponents.hpp"
 #include "addons/mesh_renderer/MeshBounds.hpp"
@@ -63,6 +64,8 @@ struct KromEditorAppConfig
     bool                 enableForwardPlus = false;
     bool                 enableGtao        = false;
     bool                 enableContactShadows = false;
+    // Surface cache GI test (doc/PLAN_GI.md, package 2); registered but off until switched on.
+    bool                 enableSurfaceCache = false;
     uint32_t             maxShadowLights   = 16u;
     uint32_t             maxShadowViews    = 64u;
 
@@ -145,6 +148,8 @@ private:
                                        bool deferSync = false);
     enum class SceneSyncStep { All, Hierarchy, Meshes, Materials, Prefabs, Finalize };
     void SyncEditorSceneState(SceneSyncStep step = SceneSyncStep::All);
+    // Surface cache GI test: editor settings to the add-on, measuring and check (once per frame).
+    void UpdateSurfaceCache();
     // Erstellt fehlende Kamera-Gizmo-Entities (camera.glb) für alle CameraComponent-Entities.
     // Wird am Ende von SyncEditorSceneState() aufgerufen — nach jedem Scene-Load.
     void EnsureCameraGizmos();
@@ -342,6 +347,7 @@ private:
     std::shared_ptr<renderer::addons::gtao::GtaoGpuResources>    m_gtaoResources;
     std::shared_ptr<renderer::addons::ssr::SsrGpuResources>      m_ssrResources;
     std::shared_ptr<renderer::addons::contact_shadow::ContactShadowGpuResources> m_contactShadowResources;
+    std::shared_ptr<renderer::addons::surface_cache::SurfaceCacheGpuResources> m_surfaceCacheResources;
     // Shadow resolution and filter of the quality level; read by the shadow add-on every frame.
     std::shared_ptr<addons::shadow::ShadowQualitySettings> m_shadowQuality =
         std::make_shared<addons::shadow::ShadowQualitySettings>();

@@ -52,6 +52,7 @@
 #include "addons/gtao/GtaoFeature.hpp"
 #include "addons/ssr/SsrFeature.hpp"
 #include "addons/contact_shadow/ContactShadowFeature.hpp"
+#include "addons/surface_cache/SurfaceCacheFeature.hpp"
 #include "addons/probes/ProbeComponents.hpp"
 #include "addons/probes/ProbeData.hpp"
 #include "addons/probes/ProbeFeature.hpp"
@@ -1923,6 +1924,13 @@ bool KromEditorApp::Initialize(const KromEditorAppConfig& config)
             Debug::LogError("KromEditorApp: failed to register contact shadow feature");
             return false;
         }
+        if (config.enableSurfaceCache &&
+            !renderSystem.RegisterFeature(
+                renderer::addons::surface_cache::CreateSurfaceCacheFeature(&m_surfaceCacheResources)))
+        {
+            Debug::LogError("KromEditorApp.cpp: failed to register surface cache feature");
+            return false;
+        }
         // SSR after GTAO: it adds to the scene composite GTAO creates.
         if (!renderSystem.RegisterFeature(renderer::addons::ssr::CreateSsrFeature(&m_ssrResources)))
         {
@@ -3763,7 +3771,10 @@ int KromEditorApp::Run(IAppScene& scene)
         {
             measureAppCpu(5);
             m_editorFrameCtx->renderStats = &m_renderLoop.GetRenderSystem().GetStats();
-            m_renderLoop.GetRenderSystem().SetGpuPassTimingEnabled(m_editorState.profilerGpuTiming);
+            UpdateSurfaceCache();
+            m_renderLoop.GetRenderSystem().SetGpuPassTimingEnabled(
+                m_editorState.profilerGpuTiming ||
+                (m_surfaceCacheResources && renderer::addons::surface_cache::SurfaceCacheWantsGpuTimings(*m_surfaceCacheResources)));
             // Post-process volumes over the scene cards and project values. The
             // stored values (m_editorState, project settings) stay unchanged.
             engine::addons::postprocess::PostProcessValues ppBase;
@@ -4495,6 +4506,49 @@ bool KromEditorApp::CreateEditorProject(const std::string& projectName,
         if (m_config.visible) RememberProject(projectRoot / "krom-project.json");
     }
     return saved;
+}
+
+void KromEditorApp::UpdateSurfaceCache()
+{
+#ifdef KROM_EDITOR_HAS_IMGUI
+    namespace sc = renderer::addons::surface_cache;
+    renderer::addons::editor::EditorFrameContext* ctx = m_editorFrameCtx.get();
+    if (!ctx)
+        return;
+    ctx->surfaceCacheAvailable = m_surfaceCacheResources != nullptr;
+    if (!m_surfaceCacheResources)
+        return;
+    sc::SurfaceCacheGpuResources& res = *m_surfaceCacheResources;
+    res.settings.enabled = m_editorState.surfaceCacheEnabled;
+    res.settings.debugView = static_cast<sc::SurfaceCacheDebugView>(std::min(m_editorState.surfaceCacheDebugView, 4u));
+    res.settings.overlay = m_editorState.surfaceCacheOverlay;
+    res.settings.distanceRange = m_editorState.surfaceCacheDistance;
+    sc::TickSurfaceCache(res, m_renderLoop.GetRenderSystem().GetGpuPassTimings());
+
+    if (!ctx->startSurfaceCacheBench)
+    {
+        ctx->startSurfaceCacheBench = [this] {
+            if (m_surfaceCacheResources)
+                sc::StartSurfaceCacheBench(*m_surfaceCacheResources, BackendDisplayName(m_config.backend), m_currentSceneName);
+        };
+        ctx->checkSurfaceCache = [this] {
+            if (m_surfaceCacheResources)
+                sc::RequestSurfaceCacheValidation(*m_surfaceCacheResources);
+        };
+    }
+    ctx->surfaceCacheBenchRunning = sc::SurfaceCacheBenchRunning(res);
+    ctx->surfaceCacheStatus.clear();
+    if (res.settings.enabled)
+    {
+        char status[256];
+        std::snprintf(status, sizeof(status), Translate("surface_cache.status"), res.lastInstances,
+                      static_cast<unsigned long long>(res.lastTriangles), res.lastPendingBlas,
+                      static_cast<unsigned long long>(res.lastVersion), res.lastUploads);
+        ctx->surfaceCacheStatus = status;
+    }
+    ctx->surfaceCacheCheckResult = res.validation.result;
+    ctx->surfaceCacheBenchResults = res.bench.results;
+#endif
 }
 
 void KromEditorApp::SyncEditorSceneState(SceneSyncStep step)
