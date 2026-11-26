@@ -2412,6 +2412,9 @@ struct EditorLoadingSmokeTest final : IAppScene
     // intensity; the mean image luminance per frame shows how fast the cache follows.
     static constexpr int kFlickerStepAt = 20;
     std::vector<float> flickerTimeline;
+    // Case "cache_reset": after kFlickerStepAt frames the cache is cleared; the mean
+    // difference per pixel to the image before shows how fast it comes back.
+    std::vector<float> flickerReference;
 
     void FinishFlickerCase(const FlickerCase& fc, uint32_t uploadsNow)
     {
@@ -2480,6 +2483,21 @@ struct EditorLoadingSmokeTest final : IAppScene
                     reached90 = n;
             }
             std::printf("; stays above 90%% from frame %d\n", reached90);
+        }
+        if (std::string_view(fc.name) == "cache_reset" && flickerTimeline.size() > static_cast<size_t>(kFlickerStepAt) + 40u)
+        {
+            double end = 0.0;
+            for (size_t i = flickerTimeline.size() - 20u; i < flickerTimeline.size(); ++i)
+                end += flickerTimeline[i];
+            std::printf("GIFLICKER cache_reset mean |luma - image before| per pixel: at the end %.2f; n frames after the reset:",
+                        end / 20.0);
+            for (size_t i = static_cast<size_t>(kFlickerStepAt); i < flickerTimeline.size(); ++i)
+            {
+                const int n = static_cast<int>(i) - kFlickerStepAt;
+                if (n == 1 || n == 2 || n == 4 || n == 8 || n == 16 || n == 32 || n == 64 || n == 128 || n == 256 || n == 512)
+                    std::printf(" %d:%.2f", n, flickerTimeline[i]);
+            }
+            std::printf("\n");
         }
         std::fflush(stdout);
     }
@@ -2822,6 +2840,7 @@ struct EditorLoadingSmokeTest final : IAppScene
                 { "view_cache_irradiance", false, true, true, true, true, 0u, 6u, 1.f },
                 { "view_samples",    false, true,  true,  true,  true,  0u, 7u, 1.f },
                 { "light_step",      false, true,  true,  true,  true,  0u, 1u, 0.f },
+                { "cache_reset",     false, true,  true,  true,  true,  0u, 1u, 0.f },
                 { "light_step_gi",   false, true,  true,  true,  true,  0u, 8u, 0.f },
             };
             const auto wanted = [](const char* name) {
@@ -2897,11 +2916,21 @@ struct EditorLoadingSmokeTest final : IAppScene
                 flickerActiveMin = counters.active;
                 flickerUploads = res.lastUploads;
                 flickerTimeline.clear();
+                flickerReference.clear();
             }
             if (std::string_view(fc.name).substr(0, 10) == "light_step" && flickerCaptured == kFlickerStepAt)
                 app.m_world->View<LightComponent>([](EntityID, LightComponent& light) {
                     light.intensity *= 3.f;
                 });
+            const bool resetCase = std::string_view(fc.name) == "cache_reset";
+            if (resetCase && flickerCaptured == kFlickerStepAt)
+            {
+                flickerReference.resize(pixels);
+                for (size_t i = 0; i < pixels; ++i)
+                    flickerReference[i] = flickerSum[i] / static_cast<float>(kFlickerStepAt);
+                sc::RequestSurfaceCacheReset(res);
+            }
+            const bool compare = resetCase && flickerReference.size() == pixels && flickerCaptured >= kFlickerStepAt;
             double frameLuma = 0.0;
             for (size_t i = 0; i < pixels; ++i)
             {
@@ -2914,7 +2943,7 @@ struct EditorLoadingSmokeTest final : IAppScene
                 flickerRgb[i * 3u] += r;
                 flickerRgb[i * 3u + 1u] += g;
                 flickerRgb[i * 3u + 2u] += b;
-                frameLuma += luma;
+                frameLuma += compare ? std::fabs(luma - flickerReference[i]) : luma;
             }
             flickerTimeline.push_back(static_cast<float>(frameLuma / static_cast<double>(pixels)));
             flickerCreated = std::max(flickerCreated, counters.created);

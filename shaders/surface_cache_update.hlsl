@@ -494,8 +494,18 @@ void main(uint3 dtid : SV_DispatchThreadID)
         const float running = min((float)samples / (float)weight, 1.0f);
         const float alphaFast = max(1.0f / (float)SC_SHORT_HISTORY_FRAMES, running);
         const float alphaPower = max(1.0f / (2.0f * (float)SC_SHORT_HISTORY_FRAMES), running);
-        fast = lerp(asfloat(uint3(gAccum[a + 4u], gAccum[a + 5u], gAccum[a + 6u])), mean, alphaFast);
-        power = lerp(asfloat(gAccum[a + 7u]), (lumMean - lumOld) * (lumMean - lumOld), alphaPower);
+        // The frame value enters the short mean limited to three standard
+        // deviations of the frame values around the long mean: one outlier
+        // frame (a few rays that hit a very bright spot) then cannot trip the
+        // detector, only a deviation that lasts. Without the limit resting
+        // cells kept falling back to the short history and showed the outlier
+        // as a patch that came and went.
+        const float oldPower = asfloat(gAccum[a + 7u]);
+        const float limit = 3.0f * sqrt(oldPower) + 0.03f * lumOld + 1e-5f;
+        const float offset = abs(lumMean - lumOld);
+        const float3 limited = offset > limit ? old + (mean - old) * (limit / offset) : mean;
+        fast = lerp(asfloat(uint3(gAccum[a + 4u], gAccum[a + 5u], gAccum[a + 6u])), limited, alphaFast);
+        power = lerp(oldPower, (lumMean - lumOld) * (lumMean - lumOld), alphaPower);
         if (cell.w >= 2u * shortCap)
         {
             // Standard deviation of the short mean of independent frame values.
