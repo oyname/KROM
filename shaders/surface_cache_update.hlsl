@@ -318,7 +318,10 @@ float3 ScDirectIrradiance(float3 p, float3 n, inout uint seed, inout TraceStats 
         }
         if (NoL <= 0.0f || atten <= 0.0f)
             break;
-        if (!TraceAny(p, L, 0.0f, dist - 1e-3f, scTlasNodeCount, stats))
+        gBvhIgnoreFrontFaces = true;
+        const bool occluded = TraceAny(p, L, 0.0f, dist - 1e-3f, scTlasNodeCount, stats);
+        gBvhIgnoreFrontFaces = false;
+        if (!occluded)
             e += lights[j].colorIntensity.rgb * lights[j].colorIntensity.w * atten * NoL * (float)localCount;
         break;
     }

@@ -700,22 +700,40 @@ void DispatchCache(const rendergraph::RGExecContext& ec, SurfaceCacheGpuResource
 
 // ─── Radiance cache: material table ─────────────────────────────────────────
 
-float4Value ReadVec4(const MaterialParameterLayout& layout, const MaterialInstance& inst, std::string_view name,
-                     float4Value fallback)
+// The values of a material live in its parameter list (parameterOverrides). The
+// parameter blob holds no constants: MaterialSystem::GetCBData fills the
+// constant buffer of a draw from the list. Reading the blob gave zero for every
+// material, so no surface reflected any light in the cache: only the sky lit a
+// scene, and an enclosed room stayed black whatever lamp was in it.
+const MaterialParam* FindParameter(const MaterialInstance& inst, std::string_view name)
 {
-    const MaterialParameterSlot* slot = layout.FindByName(name);
-    const std::vector<uint8_t>& data = inst.parameters.ConstantData();
-    if (!slot || slot->byteSize < 12u || slot->byteOffset + 12u > data.size())
+    for (const MaterialParam& param : inst.parameterOverrides)
+        if (param.name == name)
+            return &param;
+    return nullptr;
+}
+
+float4Value ReadVec4(const MaterialInstance& inst, std::string_view name, float4Value fallback)
+{
+    const MaterialParam* param = FindParameter(inst, name);
+    if (!param)
         return fallback;
     float4Value v = fallback;
-    std::memcpy(v.v, data.data() + slot->byteOffset, std::min<size_t>(slot->byteSize, 16u));
+    std::memcpy(v.v, param->value.f, sizeof(float) * 4u);
     return v;
 }
 
+// The texture of a slot: from the parameter list (the blob gets it only with
+// the material's first draw), else what the blob holds.
 TextureHandle MaterialTexture(const MaterialParameterLayout& layout, const MaterialInstance& inst, uint32_t binding)
 {
     const int32_t index = layout.FindSlotIndexByBinding(binding, MaterialParameterType::Texture2D);
-    return index >= 0 ? inst.parameters.GetTexture(static_cast<uint32_t>(index)) : TextureHandle::Invalid();
+    if (index < 0)
+        return TextureHandle::Invalid();
+    if (const MaterialParam* param = FindParameter(inst, layout.slots[static_cast<uint32_t>(index)].Name());
+        param && param->texture.IsValid())
+        return param->texture;
+    return inst.parameters.GetTexture(static_cast<uint32_t>(index));
 }
 
 // Mean albedo and emission of new or changed materials (at most
@@ -763,8 +781,8 @@ void UpdateMaterialTable(const rendergraph::RGExecContext& ec, SurfaceCacheGpuRe
         const MaterialParameterLayout* layout = materials && handle.IsValid() ? materials->GetParameterLayout(handle) : nullptr;
         if (inst && layout)
         {
-            albedo = ReadVec4(*layout, *inst, "baseColorFactor", float4Value{ { 1.0f, 1.0f, 1.0f, 1.0f } });
-            emission = ReadVec4(*layout, *inst, "emissiveFactor", float4Value{ { 0.0f, 0.0f, 0.0f, 0.0f } });
+            albedo = ReadVec4(*inst, "baseColorFactor", float4Value{ { 1.0f, 1.0f, 1.0f, 1.0f } });
+            emission = ReadVec4(*inst, "emissiveFactor", float4Value{ { 0.0f, 0.0f, 0.0f, 0.0f } });
             albedoTex = MaterialTexture(*layout, *inst, TexSlots::Albedo);
             emissionTex = MaterialTexture(*layout, *inst, TexSlots::Emissive);
         }
