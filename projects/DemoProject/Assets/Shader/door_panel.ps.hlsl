@@ -96,7 +96,7 @@ float4 main(PSInput IN) : SV_TARGET
     float3 irradiance = ambientColor.rgb * ambientColor.a * PI;
     float3 giIrradiance;
     float giCoverage;
-    if (KromSampleGI(IN.positionCS.xy, IN.positionWS, giIrradiance, giCoverage))
+    if (KromSampleGI(IN.positionCS.xy, IN.positionWS, N, giIrradiance, giCoverage))
         irradiance = lerp(irradiance, giIrradiance, giStrength);
     const float3 indirect = irradiance;
     if (lightCount > 0 && lights[0].params.w < 0.5)

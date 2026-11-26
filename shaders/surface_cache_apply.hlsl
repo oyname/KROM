@@ -6,9 +6,10 @@
 // the indirect diffuse irradiance for the PBR shaders (TexSlots::GlobalIllumination,
 // read by shaders/pbr_gi.hlsl).
 //
-// Output (RGBA16F): rgb = irradiance E (W/m^2, like the IBL irradiance cube),
-// a = linear view depth of the sample, negative where the cache had too few
-// cells and the far field (probes, IBL) filled in, 0 for the sky.
+// Output (RGBA32F): rgb = irradiance E (W/m^2, like the IBL irradiance cube),
+// a = view depth and surface normal of the sample in one number (gi_texel.hlsl),
+// negative where the cache had too few cells and the far field (probes, IBL)
+// filled in, 0 for the sky.
 //
 // Per pixel: the nearest of the 2 x 2 full-resolution depths, the world
 // position and a normal reconstructed from the depth (like GTAO). Trilinear
@@ -23,6 +24,7 @@
 
 #define SC_WITH_ENVIRONMENT 1
 #include "surface_cache_common.hlsl"
+#include "gi_texel.hlsl"
 
 KROM_BUFFER_SRV(StructuredBuffer<uint>,  gApplyKeys,  12);
 KROM_BUFFER_SRV(StructuredBuffer<uint4>, gApplyCellA, 13);
@@ -185,5 +187,6 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
     // sky light into the corners and edges of enclosed rooms.
     const float coverage = saturate(found / SC_APPLY_FULL_WEIGHT);
     const float3 irradiance = weight > 1e-7f ? sum / weight : ScFarFieldIrradiance(P, n);
-    return float4(max(irradiance, 0.0f), coverage >= 0.5f ? viewDepth : -viewDepth);
+    const float texel = GiTexelEncode(viewDepth, n);
+    return float4(max(irradiance, 0.0f), coverage >= 0.5f ? texel : -texel);
 }

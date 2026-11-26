@@ -1229,7 +1229,7 @@ void SurfaceCacheComputePass::BuildApplyPass(const PassBuildContext& ctx, const 
     const uint32_t halfH = half ? (h + 1u) / 2u : h;
     const bool msaa = ctx.frame.msaaSamples > 1u;
     ctx.recipe.resources.push_back(FrameRecipeResourceDesc{ std::string(kSurfaceCacheGiResource), false, halfW, halfH,
-                                                            Format::RGBA16_FLOAT, RGResourceKind::ColorTexture });
+                                                            Format::RGBA32_FLOAT, RGResourceKind::ColorTexture });
     FrameRecipePassDesc pass{};
     pass.name = "SurfaceCacheApply";
     pass.executorName = std::string(kExecPrefix) + "apply";

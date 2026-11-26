@@ -731,7 +731,7 @@ LocalProbeIBL localProbes;
     // probes and bounced light). giStrength blends between both for comparing.
     float3 giIrradiance = float3(0.0f, 0.0f, 0.0f);
     float giCoverage = 0.0f;
-    const bool giApplied = KromSampleGI(IN.positionCS.xy, IN.positionWS, giIrradiance, giCoverage);
+    const bool giApplied = KromSampleGI(IN.positionCS.xy, IN.positionWS, geomN, giIrradiance, giCoverage);
     float giSpecularScale = 1.0f;
     if (giApplied)
     {
