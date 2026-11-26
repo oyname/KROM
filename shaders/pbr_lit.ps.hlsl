@@ -60,7 +60,7 @@ cbuffer PerFrame : register(b0)
     uint         shadowLightCount;
     uint         shadowViewCount;
     float2       _shadowArrayPad;
-    float4       featureParams[8]; // add-on parameter blocks (FrameConstants::featureParams)
+    float4       featureParams[9]; // add-on parameter blocks (FrameConstants::featureParams)
 };
 
 // GTAO add-on block (krom-gtao, featureParams slot 0, see kGtaoFrameParameterBlock):
@@ -349,56 +349,8 @@ float CalcSpotAttenuation(float3 L, float3 spotDir, float cosInner, float cosOut
     return saturate((cosAngle - cosOuter) / max(cosInner - cosOuter, 1e-4f));
 }
 
-// Width of the band at the far end of each cascade, as a fraction of the cascade's
-// depth range, in which the next cascade is mixed in (both filtered). Must match
-// kCascadeBlendBand in addons/shadow/ShadowExtraction.cpp, which extends every
-// cascade by this band towards the camera so the next cascade covers it.
-static const float kKromCascadeBlendBand = 0.2f;
-
-// blendToNext: 0 outside the band, rising to 1 at the far split of the cascade.
-// Fraction of the shadow distance over which directional shadows fade out.
-static const float kKromShadowFadeBand = 0.1f;
-
-// 0 inside the shadow distance, rising to 1 at its end (camera view depth).
-float KromShadowDistanceFade(float3 positionWS, float maxShadowDistance)
-{
-    const float viewDepth = -mul(viewMatrix, float4(positionWS, 1.0f)).z;
-    const float shadowEnd = max(min(farPlane, maxShadowDistance), 1e-3f);
-    return saturate((viewDepth - shadowEnd * (1.0f - kKromShadowFadeBand)) / (shadowEnd * kKromShadowFadeBand));
-}
-
-uint ChooseCascadeIndexFromViewDepth(float3 positionWS, uint viewCount, float maxShadowDistance,
-                                     float cascadeLambdaValue, out float blendToNext)
-{
-    blendToNext = 0.0f;
-    const uint cascadeCount = min(viewCount, 4u);
-    if (cascadeCount <= 1u)
-        return 0u;
-
-    const float viewDepth = max(-mul(viewMatrix, float4(positionWS, 1.0f)).z, nearPlane);
-    const float camNear = max(nearPlane, 1e-4f);
-    const float camFar = min(farPlane, max(maxShadowDistance, camNear + 1.0f));
-    const float lambda = saturate(cascadeLambdaValue);
-    const float countF = (float)cascadeCount;
-
-    float prevSplit = camNear;
-    [loop]
-    for (uint splitIndex = 1u; splitIndex < cascadeCount; ++splitIndex)
-    {
-        const float fi = (float)splitIndex / countF;
-        const float splitLog = camNear * pow(camFar / camNear, fi);
-        const float splitUniform = camNear + (camFar - camNear) * fi;
-        const float splitDepth = lerp(splitUniform, splitLog, lambda);
-        if (viewDepth <= splitDepth)
-        {
-            const float toSplit = (splitDepth - viewDepth) / max(splitDepth - prevSplit, 1e-4f);
-            blendToNext = saturate(1.0f - toSplit / kKromCascadeBlendBand);
-            return splitIndex - 1u;
-        }
-        prevSplit = splitDepth;
-    }
-    return cascadeCount - 1u;
-}
+// Cascade choice and distance fade (shared with compute passes).
+#include "shadow_csm_lookup.hlsl"
 
 #if !defined(KROM_SHADOWS_NONE)
 
@@ -616,6 +568,7 @@ float3 SamplePrefilteredIBL(float3 R, float roughness)
 #include "pbr_box_projection.hlsl"
 
 #include "pbr_local_probe.hlsl"
+#include "pbr_gi.hlsl"
 
 #include "pbr_ssr_output.hlsl"
 
@@ -745,6 +698,8 @@ float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
     float3 iblDiffuse  = float3(0.0f, 0.0f, 0.0f);
     float3 iblSpecular = float3(0.0f, 0.0f, 0.0f);
     float3 iblSpecularWeight = float3(0.0f, 0.0f, 0.0f);
+    // Diffuse irradiance of the probe/IBL path (pbr_gi.hlsl compares the GI with it).
+    float3 giBaseIrradiance = ambientColor.rgb * ambientColor.a * PI;
 LocalProbeIBL localProbes;
     localProbes.irradiance = float3(0.0f, 0.0f, 0.0f);
     localProbes.specular = float3(0.0f, 0.0f, 0.0f);
@@ -768,6 +723,7 @@ LocalProbeIBL localProbes;
         }
         // Lambert: irradiance E times albedo / pi, as for the direct light.
         iblDiffuse = kD_a * albedoValue * irradiance / PI;
+        giBaseIrradiance = irradiance;
         if (!(debugFlags & DBG_DISABLE_IBL_SPEC))
         {
             float3 R        = reflect(-V, N);
@@ -782,6 +738,28 @@ LocalProbeIBL localProbes;
 #else
     iblDiffuse = ambientColor.rgb * ambientColor.a * albedoValue;
 #endif
+    // Surface cache GI (pbr_gi.hlsl): its irradiance replaces the probe/IBL
+    // irradiance of the diffuse term (never added on top: the cache holds sky,
+    // probes and bounced light). giStrength blends between both for comparing.
+    float3 giIrradiance = float3(0.0f, 0.0f, 0.0f);
+    float giCoverage = 0.0f;
+    const bool giApplied = KromSampleGI(IN.positionCS.xy, IN.positionWS, giIrradiance, giCoverage);
+    float giSpecularScale = 1.0f;
+    if (giApplied)
+    {
+        // Same weight as the path it replaces: Lambert with kD under IBL, the
+        // plain ambient term (albedo * E / pi, E = pi * ambient) without it.
+#ifdef KROM_IBL
+        const float3 giDiffuseWeight = kD_a * albedoValue;
+#else
+        const float3 giDiffuseWeight = albedoValue;
+#endif
+        iblDiffuse = max(lerp(iblDiffuse, giDiffuseWeight * giIrradiance / PI, giStrength), 0.0f);
+        // Where the cache sees less light than the probe/IBL path (an enclosed
+        // room, under an overhang) the environment reflection is occluded alike.
+        giSpecularScale = KromGiSpecularScale(giIrradiance, giBaseIrradiance, giStrength);
+        iblSpecular *= giSpecularScale;
+    }
     // Clear coat: its own reflection on top, the base IBL attenuated by 1 - Fc.
     float3 coatIBL = float3(0.0f, 0.0f, 0.0f);
 #ifdef KROM_IBL
@@ -845,7 +823,7 @@ LocalProbeIBL localProbes;
     // --- Direct Lighting ---
     // The coat reflection takes the same specular occlusion as the base; SSR
     // replaces only the base reflection (KromStoreSsrInputs below).
-    ambientIBL += coatIBL * specularOcclusion;
+    ambientIBL += coatIBL * (specularOcclusion * giSpecularScale);
 
     float3 totalDirectDiffuse  = float3(0.0f, 0.0f, 0.0f);
     float3 totalDirectSpecular = float3(0.0f, 0.0f, 0.0f);
@@ -1112,6 +1090,10 @@ LocalProbeIBL localProbes;
     if (probeDebugView == 1u) return float4(LocalProbeDebugColor(localProbes.firstProbe), 1.0f);
     if (probeDebugView == 2u) return float4((1.0f - localProbes.remaining).xxx, 1.0f);
     if (probeDebugView == 3u) return float4(specularOcclusion.xxx, 1.0f);
+    if (giDebugView == 1u) return float4(giIrradiance / PI, 1.0f);
+    if (giDebugView == 2u) return float4(iblDiffuse * ao * gtaoDiffuse, 1.0f);
+    if (giDebugView == 3u) return float4(KromGiCoverageColor(giApplied, giCoverage), 1.0f);
+    if (giDebugView == 4u) return float4(giSpecularScale.xxx, 1.0f);
 
 #ifdef KROM_SSR_OUTPUT
     // Specular environment light as added above (incl. specular occlusion).

@@ -344,12 +344,19 @@ struct EditorState
     float    ssrThickness = 0.3f;
     // Reflection probes: debug view (viewport setting, not saved).
     uint32_t probeDebugView = 0u;
-    // Surface cache GI test (doc/PLAN_GI.md, package 2): trace kernel with debug
-    // view and measuring mode. Viewport setting, not saved, off by default.
+    // Surface cache GI test (doc/PLAN_GI.md, packages 2-4): trace kernel, radiance
+    // cache, shading, debug views and measuring mode. Viewport setting, not
+    // saved, off by default.
     bool     surfaceCacheEnabled = false;
-    uint32_t surfaceCacheDebugView = 1u;   // SurfaceCacheDebugView
+    uint32_t surfaceCacheDebugView = 0u;   // SurfaceCacheDebugView
+    bool     surfaceCacheApply = true;     // the PBR shaders take the cache as indirect diffuse light
+    float    surfaceCacheStrength = 1.0f;  // 0 = probe/IBL, 1 = GI, > 1 exaggerates the difference
     float    surfaceCacheOverlay = 1.0f;
     float    surfaceCacheDistance = 50.0f;
+    int      surfaceCacheRayBudgetK = 128;   // thousands of cache rays per frame
+    float    surfaceCacheRayLength = 0.0f;   // 0 = unbounded
+    float    surfaceCacheCellSize = 0.5f;
+    int      surfaceCacheHistory = 256;      // sample weight cap of a cell
     // Probe bake passes (1 or 2), saved in the environment block.
     uint32_t probeBakePasses = 2u;
     // Window "Profiler" (EditorProfilerWindow.cpp).
@@ -545,6 +552,7 @@ struct EditorFrameContext
     bool surfaceCacheBenchRunning = false;
     std::function<void()> startSurfaceCacheBench;
     std::function<void()> checkSurfaceCache;
+    std::function<void()> resetSurfaceCache;
     std::string surfaceCacheStatus;
     std::string surfaceCacheCheckResult;
     std::vector<std::string> surfaceCacheBenchResults;

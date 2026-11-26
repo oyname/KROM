@@ -93,7 +93,13 @@ struct TexSlots
     // in Forward+, so this is the first free register.
     static constexpr uint32_t ContactShadow    = 20u;
 
-    static constexpr uint32_t COUNT           = 21u;
+    // Indirect diffuse irradiance of the surface cache GI (surface cache add-on,
+    // opaque pass only; doc/PLAN_GI.md, package 4). RGBA16F in half resolution:
+    // rgb = irradiance E, a = linear view depth (negative where the cache had no
+    // cell and the far field filled in). Vulkan binding 16 + 21 = 37.
+    static constexpr uint32_t GlobalIllumination = 21u;
+
+    static constexpr uint32_t COUNT           = 22u;
 };
 
 // ---------------------------------------------------------------------------
@@ -160,7 +166,7 @@ struct BindingRegisterRanges
 
     static constexpr uint32_t ConstantBufferBase = 0u;
     static constexpr uint32_t ShaderResourceBase = 16u;
-    static constexpr uint32_t SamplerBase        = 40u; // Behind the 21 + 3 reserved texture bindings.
+    static constexpr uint32_t SamplerBase        = 40u; // Behind the 22 + 2 reserved texture bindings.
     static constexpr uint32_t UnorderedAccessBase= 48u;
     static constexpr uint32_t BufferSRVBase      = 64u;
 
@@ -806,8 +812,9 @@ struct DescriptorRuntimeLayoutDesc
     desc.ranges[5] = BindingRangeDesc{ DescriptorType::UnorderedAccess, 0u, BindingRegisterRanges::UAV(0u),    UAVSlots::COUNT,    BindingRegisterRanges::RegisterSpace, ShaderStageMask::Compute, false };
     // BufSRV (StructuredBuffer / ByteAddressBuffer): StorageBuffer read-only, bindings 64..79
     desc.ranges[6] = BindingRangeDesc{ DescriptorType::StorageBuffer,   0u, BindingRegisterRanges::BufSRV(0u), BufSRVSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Vertex | ShaderStageMask::Fragment | ShaderStageMask::Compute, false };
-    // Sampler moved to index 7 so that resource-heap ranges 0..6 are contiguous for table[0]
-    desc.ranges[7] = BindingRangeDesc{ DescriptorType::Sampler, 0u, BindingRegisterRanges::SMP(0u), SamplerSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment, false };
+    // Sampler moved to index 7 so that resource-heap ranges 0..6 are contiguous for table[0].
+    // Visible to compute too: the surface cache GI reads the IBL cube maps (doc/PLAN_GI.md, finding 11).
+    desc.ranges[7] = BindingRangeDesc{ DescriptorType::Sampler, 0u, BindingRegisterRanges::SMP(0u), SamplerSlots::COUNT, BindingRegisterRanges::RegisterSpace, ShaderStageMask::Fragment | ShaderStageMask::Compute, false };
     desc.tableCount = 2u;
     desc.tables[0] = BindingTableDesc{ BindingHeapKind::Resource, 0u, 7u };  // ranges 0..6
     desc.tables[1] = BindingTableDesc{ BindingHeapKind::Sampler,  7u, 1u };  // range  7

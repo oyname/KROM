@@ -5,6 +5,7 @@
 #include "core/Debug.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/RenderExtractionContext.hpp"
+#include "renderer/RenderFrameConstants.hpp"
 #include "renderer/RenderFrameTypes.hpp"
 #include <algorithm>
 #include <array>
@@ -21,6 +22,7 @@ constexpr const char* kFrameDataName = "surface_cache.frame";
 
 void DestroyWorldGpu(IDevice& device, SurfaceCacheWorldState& state)
 {
+    ReleaseSurfaceCacheGrid(device, state.grid);
     for (BufferHandle* b : { &state.gpu.tlasNodes, &state.gpu.blasNodes, &state.gpu.blasTriangles, &state.gpu.instances })
         if (b->IsValid())
         {
@@ -32,12 +34,15 @@ void DestroyWorldGpu(IDevice& device, SurfaceCacheWorldState& state)
 
 bool AnythingAllocated(const SurfaceCacheGpuResources& res) noexcept
 {
-    return res.programsReady || res.programsFailed || !res.worlds.empty() || res.primary.IsValid();
+    return res.programsReady || res.programsFailed || !res.worlds.empty() || res.primary.IsValid() ||
+           res.materials.buffer.IsValid();
 }
 
 // Uploads the scene BVH when its versions changed (BLAS pool: new or removed
-// meshes; TLAS and instances: anything moved, came or went).
-void UploadScene(IDevice& device, SurfaceCacheWorldState& state)
+// meshes; TLAS and instances: anything moved, came or went). The uploaded
+// instances carry the index into the material table instead of the handle.
+void UploadScene(IDevice& device, SurfaceCacheWorldState& state, SurfaceCacheMaterialTable& materials,
+                 std::vector<collision::GpuBvhInstance>& scratch)
 {
     const collision::SceneBvh& scene = state.bvh.Scene();
     SurfaceCacheSceneGpu& g = state.gpu;
@@ -70,7 +75,12 @@ void UploadScene(IDevice& device, SurfaceCacheWorldState& state)
             if (!nodes.empty())
                 device.UploadBufferData(g.tlasNodes, nodes.data(), nodes.size() * sizeof(collision::BvhNode));
             if (!instances.empty())
-                device.UploadBufferData(g.instances, instances.data(), instances.size() * sizeof(collision::GpuBvhInstance));
+            {
+                scratch.assign(instances.begin(), instances.end());
+                for (collision::GpuBvhInstance& instance : scratch)
+                    instance.materialId = materials.IndexOf(instance.materialId);
+                device.UploadBufferData(g.instances, scratch.data(), scratch.size() * sizeof(collision::GpuBvhInstance));
+            }
             g.uploadedVersion = scene.Version();
             g.tlasNodeCount = static_cast<uint32_t>(nodes.size());
             g.instanceCount = scene.InstanceCount();
@@ -81,6 +91,46 @@ void UploadScene(IDevice& device, SurfaceCacheWorldState& state)
         {
             g.tlasNodeCount = 0u;   // trace nothing rather than stale data
         }
+    }
+}
+
+// Regions the radiance cache should settle again in: old and new bounds of
+// every instance that moved, came or went (SceneBvh change list), grown a
+// little. More boxes than the GPU takes are merged into one.
+void CollectDirtyBoxes(SurfaceCacheWorldState& state)
+{
+    const auto& changes = state.bvh.Scene().Changes();
+    if (changes.empty())
+        return;
+    std::vector<float>& boxes = state.grid.pendingBoxes;
+    const auto push = [&](const collision::AABB& box)
+    {
+        if (box.min.x > box.max.x || box.min.y > box.max.y || box.min.z > box.max.z)
+            return;
+        const float sx = box.max.x - box.min.x;
+        const float sy = box.max.y - box.min.y;
+        const float sz = box.max.z - box.min.z;
+        const float margin = 0.5f + 0.1f * std::max(sx, std::max(sy, sz));
+        const float b[8] = { box.min.x - margin, box.min.y - margin, box.min.z - margin, 0.0f,
+                             box.max.x + margin, box.max.y + margin, box.max.z + margin, 0.0f };
+        boxes.insert(boxes.end(), b, b + 8);
+    };
+    for (const collision::SceneBvhChange& c : changes)
+    {
+        push(c.oldBounds);
+        push(c.newBounds);
+    }
+    const size_t count = boxes.size() / 8u;
+    if (count > SurfaceCacheGrid::kMaxDirtyBoxes)
+    {
+        float merged[8] = { boxes[0], boxes[1], boxes[2], 0.0f, boxes[4], boxes[5], boxes[6], 0.0f };
+        for (size_t i = 1u; i < count; ++i)
+            for (size_t k = 0u; k < 3u; ++k)
+            {
+                merged[k] = std::min(merged[k], boxes[i * 8u + k]);
+                merged[4u + k] = std::max(merged[4u + k], boxes[i * 8u + 4u + k]);
+            }
+        boxes.assign(merged, merged + 8);
     }
 }
 
@@ -124,7 +174,8 @@ public:
         slot->idleExtractions = 0u;
         slot->bvh.SetJobSystem(ctx.jobSystem);
         slot->bvh.Update(ctx.world, *ctx.assetRegistry);
-        UploadScene(device, *slot);
+        CollectDirtyBoxes(*slot);
+        UploadScene(device, *slot, res->materials, m_scratch);
         frame.world = slot;
 
         res->lastInstances = slot->gpu.instanceCount;
@@ -132,6 +183,43 @@ public:
         res->lastPendingBlas = slot->bvh.PendingBlasBuilds();
         res->lastVersion = slot->bvh.Scene().Version();
         res->lastUploads = slot->gpu.uploads;
+    }
+
+private:
+    std::shared_ptr<SurfaceCacheGpuResources> m_resources;
+    mutable std::vector<collision::GpuBvhInstance> m_scratch;
+};
+
+// featureParams[8] (pbr_gi.hlsl): the PBR shaders take the GI texture only
+// when this view's cache exists and the resolve for shading runs.
+class SurfaceCacheFrameConstantsContributor final : public IFrameConstantsContributor
+{
+public:
+    explicit SurfaceCacheFrameConstantsContributor(std::shared_ptr<SurfaceCacheGpuResources> resources)
+        : m_resources(std::move(resources)) {}
+
+    std::string_view GetName() const noexcept override { return "krom-surface-cache-constants"; }
+
+    void Contribute(const FrameConstantsContributionContext& ctx, FrameConstants& fc) const override
+    {
+        SurfaceCacheFrameParams params{};
+        const SurfaceCacheGpuResources* res = m_resources.get();
+        if (res && res->settings.enabled && res->supported && ctx.view.enableDepthPrepass)
+        {
+            const SurfaceCacheSettings& s = res->settings;
+            // The shaded debug views also show where GI is not applied (switched off: blue).
+            if (IsShadedDebugView(s.debugView))
+                params.debugView = static_cast<uint32_t>(s.debugView) -
+                                   static_cast<uint32_t>(SurfaceCacheDebugView::ShadedIrradiance) + 1u;
+            const auto* frame = ctx.GetFrameData<SurfaceCacheFrameData>();
+            if (s.apply && res->programsReady && frame && frame->world && frame->world->grid.ready)
+            {
+                params.flags = kSurfaceCacheShadeFlagEnabled;
+                params.strength = std::clamp(s.strength, 0.0f, 4.0f);
+                params.depthTolerance = std::clamp(s.depthTolerance, 0.001f, 1.0f);
+            }
+        }
+        WriteFrameParameterBlock(fc, kSurfaceCacheFrameParameterBlock, params);
     }
 
 private:
@@ -146,6 +234,7 @@ public:
         , m_extraction(std::make_shared<SurfaceCacheExtractionStep>(m_resources))
         , m_compute(std::make_shared<SurfaceCacheComputePass>(m_resources))
         , m_overlay(std::make_shared<SurfaceCacheOverlayPass>(m_resources))
+        , m_constants(std::make_shared<SurfaceCacheFrameConstantsContributor>(m_resources))
     {}
 
     std::string_view GetName() const noexcept override { return "krom-surface-cache"; }
@@ -156,6 +245,10 @@ public:
         context.RegisterSceneExtractionStep(m_extraction);
         context.RegisterPassContributor(m_compute);
         context.RegisterPassContributor(m_overlay);
+        if (context.RegisterFrameParameterBlock(kSurfaceCacheFrameParameterBlock))
+            context.RegisterFrameConstantsContributor(m_constants);
+        else
+            Debug::LogError("SurfaceCacheFeature.cpp: featureParams[8] taken, GI cannot reach the PBR shaders");
     }
 
     bool Initialize(const FeatureInitializationContext& context) override
@@ -183,6 +276,7 @@ private:
     std::shared_ptr<SurfaceCacheExtractionStep> m_extraction;
     std::shared_ptr<SurfaceCacheComputePass>    m_compute;
     std::shared_ptr<SurfaceCacheOverlayPass>    m_overlay;
+    std::shared_ptr<SurfaceCacheFrameConstantsContributor> m_constants;
 };
 
 const char* KindName(SurfaceCacheRayKind kind) noexcept
@@ -194,6 +288,66 @@ const char* KindName(SurfaceCacheRayKind kind) noexcept
     case SurfaceCacheRayKind::Occlusion: return "occlusion";
     default:                             return "validate";
     }
+}
+
+// Timings of the radiance cache passes and how fast it settled after the reset
+// at the start of the run.
+void FinishCacheBench(SurfaceCacheGpuResources& res)
+{
+    SurfaceCacheBench& bench = res.bench;
+    double ms[SurfaceCacheBench::kCachePassCount] = {};
+    double totalMs = 0.0;
+    for (size_t i = 0u; i < SurfaceCacheBench::kCachePassCount; ++i)
+    {
+        ms[i] = bench.cacheSamples[i] > 0u ? bench.cacheSumMs[i] / bench.cacheSamples[i] : 0.0;
+        totalMs += ms[i];
+    }
+    const SurfaceCacheCounters counters = SurfaceCacheLastCounters(res);
+    bench.resultApplyMs = ms[3];
+    bench.resultOpaqueMs = bench.opaqueSamples > 0u ? bench.opaqueSumMs / bench.opaqueSamples : 0.0;
+    // Noise floor: median change over the second half of the run (the cells keep
+    // changing a little with every frame's new rays). Settled: first readback
+    // frame from which the change stays below 1.5 x that floor.
+    std::vector<float> late;
+    for (size_t i = bench.cacheTimeline.size() / 2u; i < bench.cacheTimeline.size(); ++i)
+        late.push_back(bench.cacheTimeline[i].change);
+    float floor = 0.0f;
+    if (!late.empty())
+    {
+        std::nth_element(late.begin(), late.begin() + late.size() / 2u, late.end());
+        floor = late[late.size() / 2u];
+    }
+    int settled = -1;
+    for (const SurfaceCacheBench::CacheSample& sample : bench.cacheTimeline)
+    {
+        if (sample.change < 1.5f * floor)
+        {
+            if (settled < 0)
+                settled = static_cast<int>(sample.frame);
+        }
+        else
+            settled = -1;
+    }
+    const SurfaceCacheSettings& s = res.settings;
+    char line[900];
+    std::snprintf(line, sizeof(line),
+        "SurfaceCacheFeature.cpp: GI cache bench backend=%s scene=%s budget=%u rayLength=%.0fm register=%.3fms "
+        "trace=%.3fms resolve=%.3fms apply=%.3fms total=%.3fms opaque=%.3fms shade=%s history=%u active=%u fromHits=%u occupied=%u rays=%u sunCsm=%u sunRays=%u full=%u change=%.2f%% meanL=%.4f "
+        "noiseFloor=%.2f%% settled=%d (cache frame from which the change stays below 1.5 x the noise floor)",
+        bench.backend.c_str(), bench.label.c_str(), s.rayBudget, s.rayLength, ms[0], ms[1], ms[2], ms[3], totalMs,
+        bench.resultOpaqueMs, s.apply ? "gi" : "probe/ibl", s.maxSamples,
+        counters.active, counters.fromHits, counters.occupied, counters.rays, counters.sunFromCascades, counters.sunRays, counters.full,
+        100.0f * counters.change, counters.meanRadiance, 100.0f * floor, settled);
+    bench.results.emplace_back(line);
+    Debug::Log("%s", line);
+    std::string timeline = "SurfaceCacheFeature.cpp: GI cache timeline (frame:change%) ";
+    for (const SurfaceCacheBench::CacheSample& sample : bench.cacheTimeline)
+    {
+        char entry[48];
+        std::snprintf(entry, sizeof(entry), "%u:%.2f ", sample.frame, 100.0f * sample.change);
+        timeline += entry;
+    }
+    Debug::Log("%s", timeline.c_str());
 }
 
 // stats: the counters of SurfaceCacheGpuResources::stats. Secondary rays start
@@ -234,6 +388,7 @@ void FinishBench(SurfaceCacheGpuResources& res, const uint32_t* stats)
         bench.results.emplace_back(line);
         Debug::Log("%s", line);
     }
+    FinishCacheBench(res);
     bench.state = SurfaceCacheBench::State::Idle;
 }
 
@@ -317,6 +472,8 @@ void StartSurfaceCacheBench(SurfaceCacheGpuResources& res, std::string backend, 
     bench.samples.assign(bench.passes.size(), 0u);
     bench.backend = std::move(backend);
     bench.label = std::move(label);
+    // The cache starts empty, so the run also shows how fast it settles.
+    res.resetRequested = true;
     res.statsReadbackPending = false;
     res.statsCopied = false;
     if (res.device && res.stats.IsValid())
@@ -326,6 +483,20 @@ void StartSurfaceCacheBench(SurfaceCacheGpuResources& res, std::string backend, 
     }
     Debug::Log("SurfaceCacheFeature.cpp: GI bench started (%u passes, %u warm-up + %u frames)",
                static_cast<uint32_t>(bench.passes.size()), SurfaceCacheBench::kWarmupFrames, SurfaceCacheBench::kFrames);
+}
+
+void RequestSurfaceCacheReset(SurfaceCacheGpuResources& res)
+{
+    res.resetRequested = true;
+}
+
+SurfaceCacheCounters SurfaceCacheLastCounters(const SurfaceCacheGpuResources& res) noexcept
+{
+    SurfaceCacheCounters best{};
+    for (const auto& [world, state] : res.worlds)
+        if (state && state->grid.ready && state->grid.lastCounters.occupied >= best.occupied)
+            best = state->grid.lastCounters;
+    return best;
 }
 
 void RequestSurfaceCacheValidation(SurfaceCacheGpuResources& res)
@@ -364,6 +535,45 @@ void TickSurfaceCache(SurfaceCacheGpuResources& res, const GpuPassTimingReport& 
                 ++it;
         }
 
+    // Counters of the radiance caches (copied every few frames by the resolve step).
+    if (res.device)
+        for (auto& [world, state] : res.worlds)
+        {
+            if (!state || !state->grid.readbackPending)
+                continue;
+            SurfaceCacheGrid& g = state->grid;
+            if (g.readbackWait > 0u)
+                --g.readbackWait;
+            if (g.readbackWait > 0u)
+                continue;
+            if (const void* mapped = res.device->MapBuffer(g.readback))
+            {
+                uint32_t words[SurfaceCacheGrid::kCounterWords] = {};
+                std::memcpy(words, mapped, sizeof(words));
+                res.device->UnmapBuffer(g.readback);
+                SurfaceCacheCounters& c = g.lastCounters;
+                c.active = words[0];
+                c.created = words[1];
+                c.full = words[2];
+                c.rays = words[3];
+                c.occupied = words[4];
+                c.evicted = words[5];
+                c.resolved = words[7];
+                c.change = words[7] > 0u ? static_cast<float>(words[6]) / (1000.0f * static_cast<float>(words[7])) : 0.0f;
+                c.sunFromCascades = words[9];
+                c.sunRays = words[10];
+                c.sunLit = words[9] + words[10] > 0u
+                    ? static_cast<float>(words[11]) / (1000.0f * static_cast<float>(words[9] + words[10])) : 0.0f;
+                c.meanRadiance = words[7] > 0u ? static_cast<float>(words[8]) / (1000.0f * static_cast<float>(words[7])) : 0.0f;
+                c.fromHits = words[13];
+                g.lastCountersFrame = g.readbackFrameOfCopy;
+                if ((res.bench.state == SurfaceCacheBench::State::Warmup ||
+                     res.bench.state == SurfaceCacheBench::State::Measuring) && res.bench.cacheTimeline.size() < 256u)
+                    res.bench.cacheTimeline.push_back({ g.lastCountersFrame, c.change, c.active, c.occupied });
+            }
+            g.readbackPending = false;
+        }
+
     SurfaceCacheBench& bench = res.bench;
     if (!res.settings.enabled && bench.state != SurfaceCacheBench::State::Idle)
     {
@@ -388,6 +598,21 @@ void TickSurfaceCache(SurfaceCacheGpuResources& res, const GpuPassTimingReport& 
                     ++bench.samples[i];
                     break;
                 }
+        for (size_t i = 0u; i < SurfaceCacheBench::kCachePassCount; ++i)
+            for (const GpuPassTiming& timing : report.passes)
+                if (timing.name == SurfaceCacheBench::kCachePassNames[i] && timing.ms > 0.0f)
+                {
+                    bench.cacheSumMs[i] += timing.ms;
+                    ++bench.cacheSamples[i];
+                    break;
+                }
+        for (const GpuPassTiming& timing : report.passes)
+            if (timing.name == "MainOpaquePass" && timing.ms > 0.0f)
+            {
+                bench.opaqueSumMs += timing.ms;
+                ++bench.opaqueSamples;
+                break;
+            }
         bench.instances = res.lastInstances;
         bench.triangles = res.lastTriangles;
         if (++bench.frame >= SurfaceCacheBench::kFrames)

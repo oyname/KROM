@@ -1,5 +1,5 @@
 {
-  "lastScene":"car",
+  "lastScene":"Room 2",
   "hierarchy":
 {
   "Room 0": {
@@ -25,7 +25,7 @@
     "fovDeg":60,
     "nearPlane":0.0500000007,
     "farPlane":3000,
-    "moveSpeed":14
+    "moveSpeed":2
   },
   "layers":["Default","EditorGizmo","Transparent","UI","User0","User1","User2","User3","","","","","","","","","","","","","","","","","","","","","","","",""],
   "codeEditor":{
@@ -43,7 +43,7 @@
   },
   "gizmo":{
     "mode":0,
-    "space":0
+    "space":1
   },
   "viewport":{
     "playAllParticles":false,
@@ -53,5 +53,14 @@
     "showProfiler":false,
     "profilerSections":31,
     "showSelectionOutline":true
+  },
+  "surfaceCacheGI":{
+    "enabled":true,
+    "apply":true,
+    "strength":1,
+    "rayBudgetK":128,
+    "rayLength":15,
+    "cellSize":0.5,
+    "history":256
   }
 }

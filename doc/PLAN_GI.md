@@ -1,6 +1,6 @@
 # Plan: Surface Cache GI (dynamische diffuse GI ohne Bake)
 
-Stand: 2026-11-25, Paket 0 (Vorprüfung) auf `feature/gi-vorpruefung`, abgezweigt von
+Stand: 2026-11-26, Paket 4 (Resolve und Anbindung) gebaut auf `feature/gi-resolve`, Abnahme im Editor offen; Paket 3 (Radiance-Cache) abgenommen auf `feature/gi-cache`; Paket 0 (Vorprüfung) auf `feature/gi-vorpruefung`, abgezweigt von
 `feature/multi-select-editing` (`ebcd932`). Jede Sitzung der GI-Reihe liest diese Datei zuerst
 und trägt am Ende ein, was erledigt ist, was offen bleibt und was vom Plan abweicht.
 
@@ -411,8 +411,8 @@ Neues Addon `addons/surface_cache`:
 | 0 Vorprüfung | erledigt (2026-11-25), Test siehe unten |
 | 1 BVH auf der CPU | erledigt (2026-11-25), siehe unten |
 | 2 Trace-Kern | erledigt und im Editor abgenommen (2026-11-25, DX11 und Vulkan); Empfehlung: Paket 3 bauen |
-| 3 Radiance-Cache | offen |
-| 4 Resolve und Anbindung | offen |
+| 3 Radiance-Cache | erledigt und im Editor abgenommen (2026-11-26, DX11 und Vulkan); Empfehlung: Paket 4 bauen |
+| 4 Resolve und Anbindung | gebaut und gemessen (2026-11-26, DX11 und Vulkan), Abnahme im Editor offen |
 | 5 Abstimmung | offen |
 
 ### Paket 0 (2026-11-25)
@@ -660,3 +660,448 @@ Offen / Auffälligkeiten:
 - Messlauf neu ausführen:
   `krom_editor_loading_tests_dx11.exe --gi-bench <abs. Pfad>\krom-project.json [Bildordner]`,
   `KROM_PERF_SCENE=<Szene>`, `KROM_GI_BENCH_DRAGONS=64`, `KROM_GI_BENCH_SPACING=26`.
+
+### Paket 3 (2026-11-25, `feature/gi-cache`, abgezweigt von `feature/gi-trace`)
+
+Neu:
+
+- `shaders/surface_cache_common.hlsl`: PerFrame-Block (gleiches Layout wie `pbr_lit.ps.hlsl`),
+  Dispatch-Konstanten `SurfaceCacheParams` (b3), Hash-Grid (Schlüssel, Suche, Stufe nach
+  Kameradistanz) und das Fernfeld `ScFarFieldIrradiance` (lokale Probes per SH aus t19, sonst
+  IBL-Irradiance aus t5, ohne IBL die Umgebungsfarbe × π).
+- `shaders/surface_cache_update.hlsl`: die Kernel des Caches, je einer pro `SC_KERNEL_*`
+  (Begin, Register, Trace, Resolve, Age, Material), eingebettet über
+  `kCacheKernelHlsl` (`SurfaceCachePass.cpp`).
+- `shaders/shadow_csm_lookup.hlsl`: Kaskadenwahl und Ausblendung (`ChooseCascadeIndexFromViewDepth`,
+  `KromShadowDistanceFade`), aus `pbr_lit.ps.hlsl` und `pbr_forward_plus.ps.hlsl` herausgezogen
+  (beide Fassungen waren zeichengleich, beide binden jetzt die Datei ein). Mit
+  `KROM_SHADOW_CSM_LOAD` zusätzlich `KromCsmVisibilityLoad`: Sonnenschatten ohne Ableitungen
+  und ohne Sampler (Shadow Map per `Load`, ein bilinearer Vergleich, fester Zusatz-Bias von
+  1,5 Texel Normalen-Versatz und doppeltem Tiefen-Bias).
+- `ShaderBindingModel.hpp`: Sampler-Range auch für Compute sichtbar (Befund 11, eine Zeile).
+- `addons/surface_cache`: Hash-Grid pro Welt (`SurfaceCacheGrid`), Materialtabelle
+  (`SurfaceCacheMaterialTable`), drei neue Passes, Zähler-Readback, Messlauf für den Cache,
+  `RequestSurfaceCacheReset`, `SurfaceCacheLastCounters`.
+- Editor (Einstellungen → Viewport, unter „Surface Cache GI (Test)“): Debug-Ansichten
+  „Cache: Zellen“, „Cache: Irradiance“, „Cache: Samples“; Regler Strahlen pro Frame
+  (Tausend, Start 128), Strahllänge (15 m), Zellgröße (0,5 m), Verlauf (256 Samples); Knopf
+  „Cache leeren“; zweite Statuszeile mit belegten/sichtbaren Zellen, Strahlen, Änderung pro
+  Frame, Anmeldungen ohne Platz. Nicht gespeichert.
+- Tests: `krom_tests --gi` zwei Furnace-Tests auf WARP (siehe Prüfung), Kernel-Übersetzung für
+  FXC und DXC; `--gi-bench` misst zusätzlich den Cache, vergleicht Kaskaden mit
+  Verdeckungsstrahlen und prüft, dass Ausschalten alles freigibt.
+
+Ablauf pro Frame (Phase `AfterDepthPrepass`, drei RenderGraph-Passes, danach wie bisher
+Debug-Trace, Messpasses, Prüfung):
+
+1. `SurfaceCacheRegister`: neue oder geänderte Materialien mitteln (höchstens 64 pro Frame),
+   Zähler sichern und leeren, dann je 4 × 4 Pixel ein Kamerastrahl auf ein pro Frame
+   wechselndes Pixel. Der Treffer meldet seine Zelle an (`InterlockedCompareExchange` auf den
+   Schlüssel, `InterlockedExchange` auf den Frame); wer die Zelle als Erster in diesem Frame
+   sieht, hängt sie an die Liste der sichtbaren Zellen und schreibt Position und Normale. Neue
+   Zellen starten mit dem Fernfeld (Probe/IBL, Befund 13) und dem Gewicht 4.
+2. `SurfaceCacheRayTrace`: `min(Budget, sichtbare Zellen × 32)` Kosinus-Strahlen aus den
+   Zellen, gekürzt auf 15 m. Gibt es mehr Zellen als Strahlen, kommt jedes Frame ein anderer
+   Teil der Zellen dran. Am Treffer: `Emission + Albedo / π × (Direkt + Cache der Trefferzelle)`;
+   Direkt = jede gerichtete Lichtquelle (Kaskaden, außerhalb ein Verdeckungsstrahl) plus eine
+   zufällig gewählte lokale Lichtquelle mit Verdeckungsstrahl (gewichtet mit der Anzahl);
+   fehlt die Trefferzelle, das Fernfeld. Fehlschuss oder Ende bei 15 m: Fernfeld in
+   Strahlrichtung / π. Summen als Festkomma-Atomics pro Zelle.
+3. `SurfaceCacheResolve`: pro sichtbarer Zelle Mittelwert der Strahlen dieses Frames ×π,
+   gleitend eingemischt mit Gewicht `n / min(Gewicht + n, Verlauf)`. Danach „Age“ über alle
+   Plätze: Zellen ohne Anmeldung seit 300 Frames werden frei; Zellen in geänderten Bereichen
+   (Änderungsliste aus Paket 1, alte und neue Box, vergrößert) fallen auf Gewicht 2 zurück und
+   schwingen schnell neu ein. Alle 16 Frames (im Messlauf alle 4) werden die Zähler kopiert.
+
+Entscheidungen und Abweichungen:
+
+- **Phase `AfterDepthPrepass` statt `BeforeOpaque`.** Die Passes von `BeforeOpaque` stehen im
+  Rezept vor dem Shadow-Pass (`StandardFramePipeline.hpp`, `BuildRecipe`); ein Lesen der Shadow
+  Map dort ergab einen Zyklus im RenderGraph. In `AfterDepthPrepass` ist sie geschrieben (wie in
+  Befund 5 empfohlen). Ein Depth-Prepass wird dadurch nicht erzwungen (keine Opaque-Eingabe).
+- **Der Cache speichert nur indirekte Irradiance.** Das direkte Licht einer Zelle rechnet in
+  Paket 4 weiterhin der PBR-Shader. Deshalb ist die Irradiance-Ansicht in offenen Szenen fast
+  gleichförmig (überwiegend schwacher Himmel; car: IBL-Intensität 0,05) und an Wänden neben
+  besonntem Boden heller. Mehrfachreflexion entsteht über die Cache-Abfrage am Treffpunkt
+  (Wert des Vorframes).
+- **Anmelden über eigene Primärstrahlen** in 1/16 der Auflösung statt über die Tiefe (wie
+  vorgeschlagen): exakte Normale, kein Prepass nötig.
+- **Lichter aus `PerFrame.lights[7]`**, nicht aus dem LightBuffer (der existiert nur mit
+  Forward+). Mehr als 7 Lichter fehlen im Cache.
+- **Schlüssel:** Startplatz aus einem Hash, gespeichert wird ein zweiter 32-Bit-Hash (nie 0);
+  Kollisionen zweier Zellen mit gleichem Startplatz und gleichem Zweithash werden in Kauf
+  genommen. Normale auf 6 Achsenrichtungen quantisiert. 2^18 Plätze, 16 Sondierschritte,
+  15 MB pro Welt (Schlüssel, zwei uint4, Frame, Akkumulator, Liste). Freigegebene Plätze
+  unterbrechen Sondierketten; dahinter liegende Zellen werden neu angemeldet (Startwert) oder
+  altern aus. Bisher in keinem Lauf eine Anmeldung ohne Platz.
+- **Zellgröße:** 0,5 m bis 8 m Kameraabstand, danach Verdopplung je Verdopplung des
+  Abstands (Stufe im Schlüssel). Die Demo-Szenen haben damit nur 570–890 sichtbare Zellen;
+  ein Budget von 128 k wird nie erreicht (höchstens 32 Strahlen pro Zelle und Frame).
+- **Materialtabelle:** Die hochgeladene Instanztabelle trägt statt des Material-Handles den
+  Index in die Tabelle (`GpuBvhInstance::materialId`, nur in der GPU-Kopie);
+  `albedo`/`emission` in `GpuBvhInstance` bleiben ungenutzt. Die Werte kommen aus dem
+  `MaterialSystem` des Frames (Runtime-Handles wie in der Extraktion, Erinnerung
+  „Material-Handle-Räume“): `baseColorFactor` × Mittel der Albedo-Textur, `emissiveFactor` ×
+  Mittel der Emissions-Textur (Mip mit höchstens 8 × 8 Texeln per `Load`). Abweichung von
+  Befund 7: nicht über `MaterialAsset::WithGraphTextures()` (Asset-Seite, anderer
+  Handle-Raum); Graph-Materialien bekommen damit nur Faktor und ggf. Albedo-Slot.
+  Neuberechnung bei neuer Revision.
+- **Verlauf über ein Sample-Gewicht** (Standard 256, Regler), nicht über Frames: gleich
+  starkes Rauschen unabhängig vom Budget. 256 gibt ein Rauschniveau von 1,2–2,9 %
+  Änderung pro Frame bei Einschwingen in etwa 8 Frames; 1024 senkt es auf 0,7 % bei etwa
+  30 Frames (Tabelle unten).
+- Nicht umgesetzt: eine BLAS pro Mesh (das Budget passt, Paket 2) und Upload über einen
+  Staging-Ring. Änderungsboxen gehen über einen `FrameRingBuffer`.
+- Messlauf: `--gi-bench` speichert jetzt die Szenen und `editor.settings` des Projekts vor dem
+  Lauf und schreibt sie danach zurück. Vorher hat der Editor beim Szenenwechsel und beim
+  Schließen die Testbearbeitungen (Drachen, verschobene und gelöschte Meshes) in `car.json`
+  bzw. die geöffnete Szene gespeichert.
+
+Prüfung:
+
+- Furnace auf WARP (`krom_tests --gi`): geschlossene Box, Albedo 0,5, Emission 1, erwartet
+  E = 2π = 6,2832 in jeder Zelle. 16 Strahlen pro Zelle: 768 Zellen, Mittel 6,271, Spanne
+  6,149–6,279, 60 Frames vorher 6,261 (noch leicht steigend, die Kamera dreht durch sechs
+  Richtungen). 256 Strahlen für alle 768 Zellen (Verlauf 8): Mittel 6,280, Spanne
+  6,188–6,280.
+- Kaskaden gegen Verdeckungsstrahlen (Messlauf, Sonnenschatten am Treffpunkt): mittlere
+  Irradiance gleich bis auf 0,0–0,9 %; besonnter Anteil der beleuchteten Treffer car
+  0,73/0,72, Room 0 0,76/0,74, 64 Drachen aus 140 m Abstand 0,82/0,75 (grobe ferne Kaskaden
+  verlieren feine Selbstverschattung, wie im PBR-Shader).
+- Ausschalten gibt alles frei (Messlauf: keine Welt, keine Programme, kein Puffer).
+- Bildvergleich DX11/Vulkan (Zellen, Irradiance, Samples): gleich.
+- `krom_tests` x64-Debug: „ALL TESTS PASSED“, Suite „GI“ 18/18. Gesamter x64-Debug-Build ohne
+  Fehler (nur bekannte Warnungen in nicht berührten Zeilen). `krom_editor_loading_tests_dx11`
+  und `krom_editor_loading_tests` (Vulkan, `KROM_VALIDATION=1`): „editor loop completed without
+  crash“; `--gi-bench` unter Vulkan-Validierung ohne Meldung. Nach allen Messläufen keine
+  Änderung unter `projects/`.
+- Im Editor vom Nutzer abgenommen (2026-11-26, Release-Editor). In der Samples-Ansicht zeigen sich beim Bewegen kurz frische Zellen (Wechsel der Zellstufe, neu sichtbare Flächen); sie sind nach etwa 8 Frames voll.
+
+Messwerte (GTX 1660, x64-Release, Editor 1920×1080, GPU-Zeit der RenderGraph-Passes, Mittel
+über 200 Frames nach 30 Frames Anlauf; Budget 128 k, Strahllänge 15 m, Verlauf 256):
+
+| Szene, Backend | Register | Trace | Resolve + Age | Summe | sichtbare / belegte Zellen | Strahlen | Rauschen | eingeschwungen |
+|---|---|---|---|---|---|---|---|---|
+| car, DX11 | 0,33 | 0,40 | 0,02 | **0,76 ms** | 571 / 702 | 18 272 | 1,16 % | Frame 8 |
+| car, Vulkan | 0,40 | 0,25 | 0,02 | **0,67 ms** | 571 / 702 | 18 272 | 1,18 % | Frame 8 |
+| 64 Drachen, DX11 | 0,23 | 0,61 | 0,03 | **0,87 ms** | 834 / 1 422 | 26 688 | 1,46 % | Frame 12 |
+| 64 Drachen, Vulkan | 0,29 | 0,34 | 0,02 | **0,65 ms** | 834 / 1 422 | 26 688 | 1,46 % | Frame 12 |
+| Room 0, DX11 | 0,19 | 0,51 | 0,02 | **0,73 ms** | 892 / 1 017 | 28 544 | 2,89 % | Frame 8 |
+| Room 0, Vulkan | 0,28 | 0,26 | 0,02 | **0,56 ms** | 893 / 1 017 | 28 576 | 2,88 % | Frame 8 |
+| Room 0, DX11, Verlauf 1024 | 0,19 | 0,50 | 0,02 | 0,71 ms | 892 / 1 017 | 28 544 | 0,74 % | Frame 32 |
+| Room 0, Vulkan, Verlauf 1024 | 0,28 | 0,26 | 0,02 | 0,56 ms | 893 / 1 017 | 28 576 | 0,74 % | Frame 28 |
+
+Rauschen = Median der mittleren relativen Änderung pro Frame in der zweiten Hälfte des Laufs;
+eingeschwungen = erster Frame nach dem Leeren, ab dem die Änderung unter dem 1,5-Fachen davon
+bleibt (Zähler alle 4 Frames gelesen). Register enthält ca. 125 000 Primärstrahlen
+(1920 × 1040 / 16) und die Materialmittelung (nur am Anfang).
+
+Einordnung: Mit 0,6–0,9 ms liegt der Cache gut unter den 2 ms aus Paket 2. Der Trace-Pass ist
+für 18–28 k Strahlen teuer (DX11 0,4–0,6 ms): er startet immer `Budget / 64` Gruppen, von denen
+die meisten sofort enden, und jeder Treffer kostet Sonnen- und Cache-Abfrage. Die
+Anmeldung ist bei 1/16 der Pixel ein fester Sockel von 0,2–0,4 ms.
+
+Offen / für Paket 4 und 5:
+
+- Zellen außerhalb des Bildes werden nicht aufgefrischt; Strahlen, die dort treffen, nehmen
+  den letzten Wert oder das Fernfeld. Abhilfe in Paket 5: Zellen auch an Treffpunkten anmelden
+  (wie SHaRC), mit eigener Liste für den nächsten Frame.
+- Dispatch-Größe des Trace-Passes an die gelesene Zellzahl anpassen (spart die leeren
+  Gruppen), Anmeldung bei Bedarf in 1/64 der Pixel.
+- Zellgröße/Stufen-Abstand für die Demo-Szenen abstimmen (wenige, große Zellen in der Ferne).
+- Neue Zelle beim Wechsel der Zellstufe mit dem Wert der alten Stufe starten statt mit Probe/IBL (falls frische Zellen nach Paket 4 sichtbar flackern).
+- Mehr als 7 Lichter, Punktlicht-Schatten über die Shadow Map (heute nur Verdeckungsstrahl).
+- Graph-Materialien mit prozeduraler Basisfarbe: nur der Faktor (Befund 7).
+- Kollisionen des 32-Bit-Zweithashs sind möglich, aber nicht gezählt.
+- Runtime (`KromWrapper`) registriert das Addon weiterhin nicht.
+- Messlauf neu ausführen wie Paket 2; zusätzlich `KROM_GI_BUDGET_K=<Tausend>` und
+  `KROM_GI_HISTORY=<Samples>`.
+
+### Paket 4 (2026-11-26, `feature/gi-resolve`, abgezweigt von `feature/gi-cache`)
+
+Zuschnitt vorher mit dem Nutzer abgestimmt (Resolve als Textur in halber Auflösung, GI ersetzt
+die diffuse Probe-/IBL-Irradiance, Testschalter im Editor ohne Speichern, Normal-Maps wirken
+auf das GI nicht).
+
+Neu:
+
+- `TexSlots::GlobalIllumination = 21`, `COUNT = 22` (Vulkan-Binding 37, Befund 3).
+- `kFrameParameterSlotCount` 8 → 9, `FrameConstants` 2448 → 2464 Byte. Alle acht Plätze von
+  `featureParams` waren belegt (GTAO, Probes, Shading, Kontaktschatten 3–4, Schattenfilter 5–6,
+  SSR 7). Block `krom-surface-cache` auf Platz 8: Flags, Stärke, Debug-Ansicht,
+  Tiefentoleranz. Alle Shader-Kopien des PerFrame-Blocks deklarieren jetzt `featureParams[9]`.
+- `shaders/surface_cache_apply.hlsl`: Resolve als Fullscreen-Pixel-Pass `SurfaceCacheApply` in
+  halber Auflösung (Phase `AfterDepthPrepass`, nach den Cache-Passes), Ziel
+  `SurfaceCacheGI` RGBA16F, rgb = Irradiance E, a = lineare Sichttiefe (negativ: Fernfeld
+  überwiegt, 0: Himmel). Opaque-Eingabe auf Slot 21, damit läuft der Depth-Prepass automatisch.
+  Zweite Variante für MSAA-Tiefe (Sample 0).
+  - Pro Texel: nächstes der 2 × 2 Tiefen-Pixel, Weltposition, Normale aus der Tiefe (pro Achse
+    der Nachbar mit kleinerem Tiefensprung, am Bildrand der Nachbar im Bild).
+  - Trilinear über die 8 Zellen der Stufe des Pixels (`ScMakeKeyAt`, aus `ScMakeKey`
+    herausgezogen), für bis zu drei Normalenachsen mit Gewicht n² (Achsen unter 0,05 fallen weg).
+    Zellen, deren gespeicherter Flächenpunkt (`cellB`) neben der Tangentialebene des Pixels
+    liegt, zählen anteilig weniger (gegen Durchscheinen durch Wände und Böden).
+  - Fehlende Zellen fallen heraus, der Rest wird normiert; unter einem Viertel Gewicht wird
+    das Fernfeld (`ScFarFieldIrradiance`) eingemischt, ohne Zellen ist es ganz das Fernfeld.
+- `shaders/pbr_gi.hlsl`, eingebunden in `pbr_lit.ps.hlsl` und `pbr_forward_plus.ps.hlsl`:
+  `KromSampleGI` rechnet aus halber Auflösung hoch (vier Taps, bilinear × Tiefengewicht,
+  Toleranz 10 % der Sichttiefe; trifft kein Tap, dann der nächste, siehe Nachtrag).
+  Prüft die Texturgröße gegen die halbe Viewport-Größe: im Transparent-Pass (Weiß-Ersatz) und
+  ohne Opaque-Eingabe greift GI nicht.
+- Anbindung: `iblDiffuse = lerp(alt, kD · albedo · E / π, Stärke)`; ohne `KROM_IBL` ohne kD wie
+  der bisherige Umgebungsterm. GI **ersetzt** Probe/IBL im diffusen Anteil (der Cache enthält
+  Himmel, Probes und Mehrfachreflexion). Material-AO und GTAO-Multibounce wirken unverändert
+  darauf, Clearcoat dämpft wie bisher, Specular (IBL, Probes, SSR) unverändert.
+- Editor (Einstellungen → Viewport → „Surface Cache GI (Test)“): „GI: Auf Szene anwenden“
+  (Standard an), „GI: Stärke“ 0–2; Debug-Ansichten „Bild: GI-Irradiance“, „Bild: indirekt
+  diffus“, „Bild: GI-Abdeckung“ (grün Cache, rot Fernfeld, blau ohne GI) zeichnet der PBR-Shader
+  selbst. Debug-Ansicht startet jetzt auf „Aus“. Nicht gespeichert.
+- Messlauf: Zeit von `SurfaceCacheApply` und `MainOpaquePass`, zweiter Messlauf ohne GI für den
+  Vergleich des Opaque-Passes, Bilder mit/ohne GI und der drei neuen Ansichten.
+- Test `krom_tests --gi`, „GI resolve and upsampling“ (WARP): Boden schräg gesehen, Cache auf
+  der CPU gefüllt mit E linear in x/z auf vier Zellstufen.
+  - Resolve: 3120 Texel, größter Fehler 0,1 % (trilinear gibt eine lineare Funktion exakt
+    wieder); Loch ohne Zellen → genau das Fernfeld (ambient · π) mit negativer Tiefe; Himmel 0.
+  - Hochrechnen: 98 % der Bodenpixel nehmen GI; jedes Pixel liegt im Wertebereich seiner Taps;
+    unter 3 % weichen mehr als 2 % ab (Boden in über 20 m unter flachem Winkel, wo zwei Zeilen
+    halber Auflösung 1,5 m auseinanderliegen), höchstens 5,5 %.
+  - Weiß-Ersatz (Transparent-Pass) und Flag aus: kein Pixel nimmt GI.
+
+Behoben unterwegs: Normalen-Rekonstruktion am Bildrand (geklemmter Nachbar = Pixel selbst →
+Nullvektor → falsche Achse → Fernfeld am linken/oberen Rand). Der WARP-Test hat es gefunden.
+
+Prüfung:
+
+- `krom_tests` x64-Debug: „ALL TESTS PASSED“, Suite „GI“ 19/19. Gesamter x64-Debug-Build ohne
+  Fehler.
+- `krom_editor_loading_tests_dx11` und `krom_editor_loading_tests` (Vulkan, `KROM_VALIDATION=1`):
+  „editor loop completed without crash“. `--gi-bench` (car) unter Vulkan-Validierung im Debug
+  ohne Meldung.
+- `--gi-bench` x64-Release, car und Room 0, DX11 und Vulkan: alle Prüfungen grün
+  (GPU = CPU, keine Uploads bei ruhender Szene, Kaskaden = Strahlen, Ausschalten gibt alles
+  frei). Danach keine Änderung unter `projects/`.
+- Bilder: car (offen) mit und ohne GI fast gleich, Abdeckung überall grün. Room 0 (Innenraum):
+  mit GI dunkler unter Kapitellen und an den Säulen (Verdeckung im Cache statt
+  gleichmäßigem IBL), Abdeckung auf allen PBR-Flächen grün; nicht grün sind nur die
+  Studio-Umgebung (Himmel) und der leuchtende Würfel.
+- **Offen: Abnahme im Editor durch den Nutzer** (DX11 und Vulkan, Release-Editor neu gebaut).
+
+Messwerte (GTX 1660, x64-Release, Editor-Fenster wie Paket 3, 200 Frames nach 30 Frames
+Anlauf; Budget 128 k, 15 m, Verlauf 256):
+
+| Szene, Backend | Cache (Register + Trace + Resolve) | Apply (Resolve für Shading) | Opaque mit GI | Opaque ohne GI | Mehrkosten gesamt |
+|---|---|---|---|---|---|
+| car, DX11 | 0,79 ms | 0,090 ms | 1,149 ms | 1,064 ms | ≈ 0,18 ms + Cache |
+| car, Vulkan | 0,68 ms | 0,088 ms | 0,950 ms | 0,904 ms | ≈ 0,13 ms + Cache |
+| Room 0, DX11 | 0,75 ms | 0,145 ms | 2,573 ms | 2,394 ms | ≈ 0,32 ms + Cache |
+| Room 0, Vulkan | 0,56 ms | 0,134 ms | 2,119 ms | 2,007 ms | ≈ 0,25 ms + Cache |
+
+Einordnung: GI kostet einschließlich Cache 0,8–1,1 ms pro Frame (1180 × 720 Viewport, bei
+1080p wächst nur Apply und der Opaque-Anteil mit der Pixelzahl). Der Opaque-Anteil (0,05–0,18 ms)
+schwankt zwischen zwei Läufen um einige Hundertstel.
+
+Nachtrag nach dem ersten Test im Editor (2026-11-26): Zellen an Strahltreffern
+
+Befund des Nutzers: ein geschlossener Raum (Wände aus einem Graph-Material) blieb hell; mit
+Skybox-Intensität 0 wurde er schwarz. Ursache: Der Cache kannte nur Flächen im Bild. Strahlen,
+die Wände hinter der Kamera trafen, fanden keine Zelle und nahmen das Fernfeld (Skybox). Der
+Punkt „Zellen außerhalb des Bildes“ aus Paket 3 wurde deshalb vorgezogen (wie SHaRC):
+
+- Trace-Kernel: Strahlen von Zellen **im Bild** legen am Treffpunkt eine Zelle an, wenn keine
+  existiert (Startwert Fernfeld, Position und Normale des Treffers), stempeln die getroffene
+  Zelle mit dem Frame (bleibt am Leben, solange Strahlen aus dem Bild sie treffen) und setzen
+  sie einmal pro Frame auf die neue Liste `pending` (UAV u7, `SurfaceCacheGrid::pending`).
+- Neuer Kernel `SC_KERNEL_PENDING` (nach Register): hängt die Liste des Vorframes an die aktive
+  Liste an, außer die Kamera hat die Zelle schon angemeldet. Zähler `SC_COUNTER_PENDING`,
+  `SC_COUNTER_FROM_HITS` (Messlauf: `fromHits`).
+- Nur ein Schritt aus dem Bild: Strahlen von Zellen aus der Liste schauen nur nach. Erster
+  Versuch ohne diese Grenze: Ketten solcher Zellen breiteten sich über die Szene aus und
+  hielten sich im Inneren geschlossener Meshes selbst am Leben (car: 2 200 Zellen außerhalb,
+  Sonnenanteil 0,04 statt 0,55).
+- Strahlbudget: zuerst die Zellen im Bild (`maxRaysPerCell`), Zellen aus der Liste ein Viertel
+  davon vom Rest. Ohne das stieg der Trace in Room 0 (DX11) auf 1,9 ms.
+- `KromCsmVisibilityLoad`: Punkte außerhalb des Kamera-Frustums gelten als „nicht in den
+  Kaskaden“ (Verdeckungsstrahl). Die Kaskadenwahl klemmt die Sichttiefe auf `nearPlane`;
+  Punkte hinter der Kamera landeten in Kaskade 0, deren Schattenkarte ihre Schattenwerfer nicht
+  enthalten muss (Messlauf: 24 % Unterschied Kaskaden/Strahlen, danach 0,4 %).
+- Test „Radiance cache knows the wall behind the camera“ (WARP): Kamera fest auf +x, die Wand
+  x = −2 ist nie im Bild; 144 eingeschwungene Zellen, E = 6,24 (2π = 6,28). Ohne die Änderung
+  hätte sie keine Zelle. Suite „GI“ 20/20.
+- Messlauf: Die Prüfung Kaskaden gegen Strahlen hat eine absolute Untergrenze (0,002) für
+  dunkle Szenen; `KROM_GI_BENCH_CAMERA="px,py,pz,tx,ty,tz"` und
+  `KROM_GI_BENCH_CAPTURE_ONLY=1` (nur Bilder, keine Änderungen, keine Messung).
+
+Ergebnis im Raum des Nutzers (Kopie des Projekts, Kamera neben dem Drachen): „indirekt diffus“
+mit GI praktisch schwarz (vorher deutlich Himmelslicht), mittlere Cache-Irradiance 0,0001.
+Restliche Helligkeit im Bild: Skybox-Spiegelungen und Auto-Exposure (Paket 5).
+
+Messwerte danach (GTX 1660, x64-Release; Room 0 ist jetzt die Szene des Nutzers mit dem
+geschlossenen Raum, Kamera darin):
+
+| Szene, Backend | Cache gesamt | davon Trace | Apply | aktiv / davon aus Treffern | belegt |
+|---|---|---|---|---|---|
+| car, DX11 | 0,78 ms | 0,43 ms | 0,082 ms | 630 / 88 | 1 069 |
+| car, Vulkan | 0,74 ms | 0,28 ms | 0,087 ms | 634 / 92 | 985 |
+| Room 0 (Raum), DX11 | 0,53 ms | 0,32 ms | 0,155 ms | 233 / 113 | 625 |
+| Room 0 (Raum), Vulkan | 0,50 ms | 0,22 ms | 0,137 ms | 233 / 113 | 368 |
+
+Prüfung danach: `krom_tests` x64-Debug „ALL TESTS PASSED“, Ladetests DX11/Vulkan
+(`KROM_VALIDATION=1`), `--gi-bench` unter Vulkan-Validierung ohne Meldung, `--gi-bench`
+x64-Release car und Room 0 auf DX11 und Vulkan grün. Messläufe auf einer Kopie des Projekts
+(Scratchpad), weil der Nutzer parallel im Editor arbeitete; `projects/` unverändert.
+
+Zweiter Nachtrag (2026-11-26): Spiegelungen mit GI dämpfen
+
+- Der Raum des Nutzers blieb im Bild hell. Ursachen: Skybox-Spiegelungen (Paket 4 ersetzte nur
+  den diffusen Anteil) und die Auto-Exposure, die einen dunklen Raum hochregelt.
+- `KromGiSpecularScale` (`shaders/pbr_gi.hlsl`): Faktor = Luminanz der GI-Irradiance /
+  Luminanz der Probe/IBL-Irradiance (`giBaseIrradiance`, genau die Irradiance, die der alte
+  Pfad nahm), höchstens 1, mit `giStrength` überblendet; ohne Umgebungslicht (Luminanz < 1e-5)
+  1. Wirkt auf `iblSpecular` (IBL und Probes) und die Clearcoat-Spiegelung; SSR nicht (ersetzt
+  die Basisspiegelung, wo es trifft). Im Freien stimmen beide überein (das Fernfeld des Caches
+  ist dieselbe Probe/IBL), in geschlossenen Räumen geht die Spiegelung mit dem Cache gegen 0.
+- Debug-Ansicht „Bild: Spiegelungs-Dämpfung“ (`giDebugView` 4). Test „GI dims the environment
+  reflection“ (WARP, acht Fälle). Suite „GI“ 21/21.
+- Bilder im Raum des Nutzers mit **fester** Belichtung (in der Projektkopie umgestellt): mittlerer
+  Pixelwert 0,1/255 mit GI, 0,5/255 ohne. Mit Auto-Exposure (bis +4 EV) erscheint derselbe Raum
+  hell; zum Beurteilen dunkler Räume die Belichtung auf „Fest“ stellen.
+- Achtung beim Beurteilen der „Bild:“-Ansichten: Sie laufen durch Auto-Exposure und Tonemapping
+  (ein Bild aus lauter kleinen Werten wird hochgeregelt).
+
+Dritter Nachtrag (2026-11-26): geschlossener Raum ohne Licht muss schwarz sein
+
+Der Nutzer schloss in car einen Raum ohne Lichtquelle; mit fester Belichtung blieb ein schwacher
+Rest. Test „Closed room without light stays black under a bright sky“ (WARP): geschlossene Box,
+Emission 0, Fernfeld 0,2·π, feste Kamera. Vorher E ≈ 0,004–0,006 in allen Zellen. Vier Ursachen,
+alle behoben:
+
+1. **Festkomma-Rundung**: Summen mit Faktor 1024 und +0,5 gerundet; eine Zelle mit
+   E = π/1024 ≈ 0,003 erhielt sich bei Albedo 0,5 selbst (Strahldichte 0,5/1024 → aufgerundet
+   1/1024). Jetzt `SC_ACCUM_SCALE` = 2^16 mit zufälliger Rundung (unverzerrt); Strahlen pro Zelle
+   und Frame auf 255 begrenzt (Überlaufreserve). Nebenbei trifft der Furnace-Test 2π jetzt auf
+   0,005 % (6,2830 statt 6,2798).
+2. **Startwert mit Gewicht**: neue Zellen starteten mit dem Fernfeld und Gewicht 4, das im
+   gleitenden Mittel lange blieb (nach 100 Strahlen noch 4 % Himmel). Jetzt `SC_START_WEIGHT` 0:
+   die ersten eigenen Strahlen ersetzen den Startwert ganz.
+3. **Startwert gelesen**: Strahlen anderer Zellen lasen den Startwert (Himmel) einer neu
+   angemeldeten Zelle noch im selben Frame. Jetzt liefert eine Zelle ohne eigene Strahlen
+   (Gewicht 0) keine weitere Reflexion.
+4. **Treffer ohne Zelle**: nahm das Fernfeld. Jetzt nur Emission und Direktlicht der Fläche
+   (keine weitere Reflexion); das Fernfeld bleibt Strahlen vorbehalten, die nichts treffen
+   (oder einer vollen Sondierkette).
+
+Danach: E = 0,0000 in allen 768 Zellen, auch hinter der Kamera. Suite „GI“ 22/22. Die
+Startwerte bleiben für die Anzeige, bis eine Zelle eigene Strahlen hatte (keine Lücken beim
+Kameraschwenk). Abweichung: Flächen, die der Cache (noch) nicht kennt, werden eher zu dunkel
+als zu hell geschätzt.
+
+Ebenso in der Anzeige (danach noch ein Rest im Raum des Nutzers):
+
+- Resolve (`surface_cache_apply.hlsl`): fehlende Nachbarzellen werden nur noch herausgerechnet
+  (normiert), nicht mehr mit dem Fernfeld aufgefüllt; das Fernfeld nur, wenn gar keine Zelle
+  gefunden wird. Zellen ohne eigene Strahlen (Gewicht 0) zählen nicht. Vorher kam an Kanten und
+  Ecken (Teilabdeckung) Himmelslicht in die Anzeige.
+- Hochrechnen (`pbr_gi.hlsl`): ohne Tap in passender Tiefe der nächstgelegene Tap statt des
+  Probe/IBL-Pfads (sonst hellte der Himmel jede Silhouette auf); nur reine Himmels-Taps fallen
+  zurück. WARP-Test: alle 12 710 Bodenpixel nehmen GI (vorher 98 %).
+- Das Sonnenlicht, das durch die Raumkanten dringt (Schattensystem), untersucht eine eigene
+  Sitzung.
+
+Vierter Nachtrag (2026-11-26): Schimmern bei ruhender Kamera, Einstellungen speichern
+
+- Das Sonnenleck an den Raumkanten hat eine eigene Sitzung behoben (6da0da9, „Shadows: limit the
+  receiver-plane depth term of the filter taps“, wegen des geteilten Ordners auf diesem Branch).
+- Schimmern der weißen Wände bei ruhender Kamera = Restrauschen des Caches. Messung (Release,
+  car und Room 0, DX11/Vulkan): 32, 64 und 128 Strahlen pro Zelle ergeben dasselbe Rauschen; es
+  hängt an der Verlaufslänge in Frames, weil der Startpunkt der Strahlen einer Zelle jedes Frame
+  innerhalb der Zelle springt (Anmelde-Jitter). Jetzt: Verlauf mindestens
+  `SC_MIN_HISTORY_FRAMES` = 16 Frames der Strahlen der Zelle (`scMaxSamples` bleibt Untergrenze),
+  `maxRaysPerCell` bleibt 32.
+
+| Szene, Backend | Rauschen vorher | 128 Strahlen, 12 Frames | 32 Strahlen, 16 Frames | Cache gesamt (32/16) | eingeschwungen |
+|---|---|---|---|---|---|
+| car, DX11 | 1,2 % | 0,82 % (Trace 1,8 ms) | 0,72 % | 0,87 ms | Frame 36 |
+| car, Vulkan | 1,2 % | 0,81 % | 0,71 % | 0,60 ms | Frame 40 |
+| Room 0, DX11 | 2,9 % | 1,94 % (Trace 2,5 ms) | 1,38 % | 1,03 ms | Frame 60 |
+| Room 0, Vulkan | 2,9 % | 1,91 % | 1,38 % | 0,66 ms | Frame 48 |
+
+  Preis: neue Zellen und Änderungen brauchen etwa 0,5–1 s statt 8 Frames. Ruhiger geht es mit dem
+  Regler „GI: Verlauf“.
+- Die GI-Einstellungen des Viewports (an/aus, auf Szene anwenden, Stärke, Strahlen, Strahllänge,
+  Zellgröße, Verlauf) werden jetzt in `editor/editor.settings` gespeichert (Block
+  `surfaceCacheGI`); die Debug-Ansicht startet weiter auf „Aus“.
+
+Offen / für Paket 5:
+
+- Abstimmung GTAO gegen die Verdeckung im Cache (doppelte Abdunklung).
+- Schnelleres Einschwingen bei langem Verlauf (z. B. kürzerer Verlauf für frische Zellen,
+  zeitliche Glättung im Bildraum mit Reprojektion).
+- Zellen aus der Pending-Liste schwingen mit einem Viertel der Strahlen langsamer ein
+  (feste Kamera im Furnace: 6,26 statt 6,28 nach 480 Frames).
+- Debug-Ansichten ohne Belichtung ausgeben.
+- Auto-Exposure hellt dunkle Innenräume auf (gewollt, aber beim Beurteilen beachten).
+- Graph-Materialien: der Cache sieht nur `baseColorFactor` (Block.mat = weiß, Albedo 1);
+  Graph-Farbknoten und Texturen auswerten.
+- Zweiter Schritt aus dem Bild (Ecken, die nur über zwei Reflexionen erreichbar sind) nimmt
+  weiter das Fernfeld.
+- Zeitliche Glättung mit Reprojektion (braucht View-Projection des Vorframes), weiches
+  Überblenden an den Grenzen der Zellstufen (heute harte Kante bei 8, 16, 32 m möglich).
+- Transparente Flächen bekommen kein GI (alter Pfad).
+- Normal-Maps wirken nicht auf das GI (Normale aus der Tiefe).
+- Unterabtastung bei flachem Blickwinkel in der Ferne (siehe Test); Abhilfe wäre ein
+  Tiefen-Ebenen-Test statt reiner Tiefendifferenz.
+- Lichtlecks der Sonne an dünnen Wandecken (Normal-Bias der Schattenkarte) – kein GI-Thema,
+  aber im Raum des Nutzers sichtbar; Kontaktschatten oder überlappende Wände helfen.
+- Projekteinstellung, Runtime (`KromWrapper`) und `krom.h`: noch nicht, GI bleibt
+  Editor-Testschalter.
+- Messlauf neu ausführen wie Paket 3; der Lauf misst jetzt zweimal (mit und ohne GI).
+
+Fünfter Nachtrag (2026-11-26): Raum größer als die Strahllänge
+
+Befund des Nutzers: Der geschlossene, unbeleuchtete Raum „Garage“ in car wurde mit der
+IBL-Intensität heller (0,01 dunkel, 0,5 deutlich heller). Ursache: Der Raum ist innen
+25,4 × 19,9 × 18 m groß (Diagonale 37 m), die Cache-Strahlen endeten nach 15 m und nahmen dann
+das Fernfeld (IBL), als hätten sie die Szene verlassen. Der Test „Closed room without light
+stays black“ deckte das nicht ab (Box 4 m, Strahlen unbegrenzt).
+
+Messung (Kopie des Projekts, DX11, x64-Release, feste Belichtung, Kamera im Raum; mittlerer
+Pixelwert von 255):
+
+| IBL-Intensität | 15 m, vorher | unbegrenzt | 15 m, nachher | ohne GI |
+|---|---|---|---|---|
+| 0,01 | 0,03 | 0,00 | – | 0,18 |
+| 0,5 | 35,9 | 0,41 | 0,42 | 59,3 |
+| 2 | 87,5 | 1,72 | 1,71 (Vulkan 1,72) | 118,4 |
+
+- Abdeckung überall grün (Cache), das Licht steckte im Cache selbst. Resolve, Hochrechnen,
+  Spiegelungs-Dämpfung und andere Umgebungsterme tragen in diesem Raum nichts bei (mit
+  unbegrenzten Strahlen bei Blick auf eine Wand exakt 0, Maximum 0).
+- Der Rest (0–1,7, je nach Kamera) ist echtes Licht: „Wand Hinten Kopie“ steht 13 cm über dem
+  Boden (Unterkante −1,485, Bodenoberkante −1,615). Sichtbar als dünne Linie an der
+  Wandunterkante oder als flackernder Fleck (wenige Strahlen treffen den Spalt).
+
+Änderung:
+
+- Trace-Kernel: Ein Strahl ohne Treffer bis `scRayLength` fragt einen Verdeckungsstrahl
+  (`TraceAny` ab der Grenze bis unendlich). Frei: Fernfeld wie bisher. Verdeckt: nur die lokalen
+  Probes, nie die globale IBL/Ambient-Farbe (`ScFarFieldIrradiance(p, n, withGlobal)`).
+- Standard-Strahllänge 15 m → 0 (unbegrenzt), in `SurfaceCacheSettings` und im Editor. Ein
+  gespeicherter Wert in `editor.settings` (z. B. 15) bleibt erhalten und ist jetzt sicher.
+- Abweichung mit gesetzter Grenze: Flächen hinter der Grenze tragen kein Licht bei (große
+  beleuchtete Hallen werden zu dunkel geschätzt). Deshalb unbegrenzt als Standard.
+- Tests (WARP): „Closed room larger than the ray length stays black“ (Box 4 m, Strahlen 3 m,
+  Fernfeld 0,2·π: E = 0,0000 in 768 Zellen; ohne den Verdeckungsstrahl E = 0,39) und „Short
+  rays with nothing ahead still take the sky“ (Box von außen, Strahlen 3 m: E = 0,6283 = 0,2·π).
+  Suite „GI“ 24/24.
+
+Kosten des Trace-Passes (DX11, GTX 1660, x64-Release):
+
+| Szene | 15 m, vorher | 15 m mit Verdeckungsstrahl | unbegrenzt (neuer Standard) |
+|---|---|---|---|
+| car, außen | 0,43 ms | 0,37 ms | 0,41 ms |
+| car, im Raum | 0,15 ms | 0,16 ms | 0,19 ms |
+| car + 64 Drachen | 0,63 ms | 0,75 ms | 0,84 ms |
+
+Schwankung zwischen zwei Läufen einige Hundertstel. Im Raum gibt es mit unbegrenzten Strahlen
+mehr Zellen aus Treffern (252 → 795 aktive). Vulkan: Bilder im Raum geprüft
+(`KROM_VALIDATION=1` ohne Meldung), Zeiten nicht gemessen.
