@@ -5,7 +5,9 @@
 // Surface cache GI (doc/PLAN_GI.md): the scene BVH on the GPU, a compute trace
 // kernel (shaders/surface_cache_trace.hlsl), a debug view and a measuring mode
 // (package 2); the radiance cache in world space (package 3,
-// shaders/surface_cache_update.hlsl). Not yet used for shading (package 4).
+// shaders/surface_cache_update.hlsl); its resolve into a half-resolution
+// texture the PBR shaders take as indirect diffuse light (package 4,
+// shaders/surface_cache_apply.hlsl, shaders/pbr_gi.hlsl).
 //
 // Off by default. While off nothing is built, uploaded or added to the frame
 // graph; switching it off releases every GPU object again.
@@ -13,6 +15,7 @@
 #include "addons/mesh_renderer/MeshSceneBvh.hpp"
 #include "renderer/FrameRingBuffer.hpp"
 #include "renderer/IDevice.hpp"
+#include "renderer/RenderFrameConstants.hpp"
 #include "renderer/RenderPipelineTypes.hpp"
 #include <array>
 #include <cstdint>
@@ -36,6 +39,11 @@ enum class SurfaceCacheDebugView : uint32_t
     CacheCells,    // one colour per cache cell
     CacheIrradiance, // irradiance stored in the cell (/ pi, tonemapped)
     CacheSamples,  // sample weight of the cell (blue: new, red: full history)
+    // Package 4: drawn by the PBR shaders (pbr_gi.hlsl), not by the overlay.
+    ShadedIrradiance, // GI irradiance at the pixel (/ pi)
+    ShadedIndirect,   // indirect diffuse light as shaded (with AO and GTAO)
+    ShadedCoverage,   // green: cache, red: far field, blue: GI not applied
+    ShadedSpecularScale, // factor on the environment reflection (white 1, black 0)
     Count,
 };
 
@@ -52,11 +60,35 @@ struct SurfaceCacheSettings
     float    cellSize       = 0.5f;     // m, cell size near the camera
     float    levelDistance  = 8.0f;     // m from the camera with the smallest cells; doubles per level
     uint32_t maxSamples     = 256u;     // history length (sample weight cap)
-    uint32_t maxRaysPerCell = 32u;      // per frame
+    uint32_t maxRaysPerCell = 32u;      // per visible cell and frame (cells outside the view: a quarter)
     bool     useCascades    = true;     // sun visibility from the CSM where it covers the hit (else rays)
     uint32_t registerStep   = 4u;       // one registration ray per 4 x 4 pixels
     uint32_t maxAge         = 300u;     // frames without registration until a cell is freed
+
+    // Shading (package 4).
+    bool     apply          = true;     // the PBR shaders take the cache as indirect diffuse light
+    float    strength       = 1.0f;     // 0 = probe/IBL only, 1 = GI, > 1 exaggerates the difference
+    float    depthTolerance = 0.1f;     // upsampling: relative view-depth difference still taken
 };
+
+// The debug views the PBR shaders draw themselves (giDebugView, pbr_gi.hlsl).
+[[nodiscard]] constexpr bool IsShadedDebugView(SurfaceCacheDebugView view) noexcept
+{
+    return static_cast<uint32_t>(view) >= static_cast<uint32_t>(SurfaceCacheDebugView::ShadedIrradiance) &&
+           view != SurfaceCacheDebugView::Count;
+}
+
+// FrameConstants::featureParams[8] (shaders/pbr_gi.hlsl).
+struct SurfaceCacheFrameParams
+{
+    uint32_t flags = 0u;           // kSurfaceCacheShadeFlag*
+    float    strength = 1.0f;
+    uint32_t debugView = 0u;       // 0 none, 1 irradiance, 2 indirect diffuse, 3 coverage, 4 specular scale
+    float    depthTolerance = 0.1f;
+};
+static_assert(sizeof(SurfaceCacheFrameParams) == 16u, "SurfaceCacheFrameParams layout");
+inline constexpr uint32_t kSurfaceCacheShadeFlagEnabled = 1u << 0u;
+inline constexpr FrameParameterBlockDesc kSurfaceCacheFrameParameterBlock{ "krom-surface-cache", 8u, 1u };
 
 // GPU layout of the dispatch constants of the cache kernels and the overlay
 // (cbuffer SurfaceCacheParams, shaders/surface_cache_common.hlsl).
@@ -106,6 +138,7 @@ struct SurfaceCacheCounters
     uint32_t sunFromCascades = 0u;  // sun visibility lookups served by the CSM
     uint32_t sunRays = 0u;          // sun visibility from occlusion rays
     float    sunLit = 0.0f;         // mean sun visibility of those lookups (0..1)
+    uint32_t fromHits = 0u;         // cells activated because cache rays hit them (outside the view)
 };
 
 // Ray kinds of the measuring mode.
@@ -164,6 +197,7 @@ struct SurfaceCacheGrid
     BufferHandle cellFrame;   // uint per slot
     BufferHandle accum;       // 4 uint per slot
     BufferHandle activeList;  // uint per slot
+    BufferHandle pending;     // uint per slot: cells hit by cache rays, active next frame
     BufferHandle counters;    // kCounterWords uint
     BufferHandle readback;    // CPU copy of the counters
     FrameRingBuffer dirtyBoxes;   // 2 float4 per box
@@ -244,11 +278,17 @@ struct SurfaceCacheBench
     std::vector<std::string> results;   // finished log lines of the last run
 
     // Radiance cache passes (package 3), averaged like the bench passes.
-    static constexpr size_t kCachePassCount = 3u;
+    // Plus the resolve for shading (package 4).
+    static constexpr size_t kCachePassCount = 4u;
     static constexpr const char* kCachePassNames[kCachePassCount] = {
-        "SurfaceCacheRegister", "SurfaceCacheRayTrace", "SurfaceCacheResolve" };
+        "SurfaceCacheRegister", "SurfaceCacheRayTrace", "SurfaceCacheResolve", "SurfaceCacheApply" };
     std::array<double, kCachePassCount>   cacheSumMs{};
     std::array<uint32_t, kCachePassCount> cacheSamples{};
+    // Opaque pass (MainOpaquePass) with or without GI in the PBR shaders.
+    double   opaqueSumMs = 0.0;
+    uint32_t opaqueSamples = 0u;
+    double   resultApplyMs = 0.0;    // of the last finished run
+    double   resultOpaqueMs = 0.0;
     struct CacheSample { uint32_t frame; float change; uint32_t active; uint32_t occupied; };
     std::vector<CacheSample> cacheTimeline;   // counter readbacks during the run
 };
@@ -282,8 +322,11 @@ struct SurfaceCacheGpuResources
     ShaderHandle   vsFullscreen;
     ShaderHandle   psOverlay;
     PipelineHandle traceCompute;
+    // Resolve for shading (shaders/surface_cache_apply.hlsl): [0] depth, [1] MSAA depth.
+    std::array<ShaderHandle, 2>   psApply{};
+    std::array<PipelineHandle, 2> applyPipelines{};
     // Radiance cache kernels (shaders/surface_cache_update.hlsl).
-    enum CacheKernel : uint32_t { kBegin = 0, kRegister, kTrace, kResolve, kAge, kMaterial, kCacheKernelCount };
+    enum CacheKernel : uint32_t { kBegin = 0, kRegister, kTrace, kResolve, kAge, kMaterial, kPending, kCacheKernelCount };
     std::array<ShaderHandle, kCacheKernelCount>   cacheShaders{};
     std::array<PipelineHandle, kCacheKernelCount> cachePipelines{};
     SurfaceCacheMaterialTable materials;

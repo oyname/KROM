@@ -1118,6 +1118,9 @@ void TestSurfaceCacheShadersCompile(test::TestContext& ctx)
         { sc::kCacheKernelNames[3], sc::kCacheKernelHlsl[3], assets::ShaderStage::Compute },
         { sc::kCacheKernelNames[4], sc::kCacheKernelHlsl[4], assets::ShaderStage::Compute },
         { sc::kCacheKernelNames[5], sc::kCacheKernelHlsl[5], assets::ShaderStage::Compute },
+        { sc::kCacheKernelNames[6], sc::kCacheKernelHlsl[6], assets::ShaderStage::Compute },
+        { "surface_cache_apply.ps", sc::kApplyPsHlsl[0], assets::ShaderStage::Fragment },
+        { "surface_cache_apply_ms.ps", sc::kApplyPsHlsl[1], assets::ShaderStage::Fragment },
     };
     for (const auto& entry : shaders)
     {
@@ -1364,7 +1367,13 @@ void main(uint3 id : SV_DispatchThreadID)
 // through the six axis directions so all walls are registered.
 // rayBudget below the cell count: every frame only a rotating share of the
 // cells gets a ray (one each); a short history keeps the run short.
-void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t maxSamples, const char* label)
+// fixedCamera: the camera always looks along +x; the wall behind it (x = -2)
+// is never on screen and gets its cells from the cache rays that hit it
+// (pending list, package 4).
+// emission 0 with a bright far field (ambient): a dark closed room under a
+// bright sky; every cell must go to 0, the sky must not leak in.
+void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t maxSamples, const char* label,
+                            bool fixedCamera = false, float emission = 1.f, float ambient = 0.f)
 {
 #if defined(_WIN32) && defined(KROM_DX11_BACKEND)
     namespace sc = engine::renderer::addons::surface_cache;
@@ -1385,10 +1394,12 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
         return;
 
     // The kernels of the add-on, compiled with FXC.
-    enum { kBegin = 0, kRegister, kTrace, kResolve, kAge, kKernels };
+    enum { kBegin = 0, kRegister, kTrace, kResolve, kAge, kMaterial, kPending, kKernels };
     ComPtr<ID3D11ComputeShader> kernels[kKernels];
     for (int k = 0; k < kKernels; ++k)
     {
+        if (k == kMaterial)
+            continue;
         assets::ShaderAsset cs{};
         cs.debugName = sc::kCacheKernelNames[k];
         cs.stage = assets::ShaderStage::Compute;
@@ -1439,7 +1450,7 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
     };
 
     constexpr uint32_t kCapacity = 1u << 14u;
-    const float materials[8] = { 0.5f, 0.5f, 0.5f, 1.f, 1.f, 1.f, 1.f, 0.f };   // albedo, emission
+    const float materials[8] = { 0.5f, 0.5f, 0.5f, 1.f, emission, emission, emission, 0.f };   // albedo, emission
     const float dirtyBox[8] = {};
     // As the add-on uploads them: material id = index into the material table.
     std::vector<collision::GpuBvhInstance> instances = scene.Instances();
@@ -1453,13 +1464,13 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
               makeBuffer(instances.data(), static_cast<uint32_t>(instances.size()), sizeof(collision::GpuBvhInstance), false, sceneBuffers[3], &sceneViews[3], nullptr) &&
               makeBuffer(materials, 2u, 16u, false, sceneBuffers[4], &sceneViews[4], nullptr) &&
               makeBuffer(dirtyBox, 2u, 16u, false, sceneBuffers[5], &sceneViews[5], nullptr);
-    // u0 keys, u1 cellA, u2 cellB, u3 cellFrame, u4 accum, u5 active list, u6 counters
-    const uint32_t gridCounts[7] = { kCapacity, kCapacity, kCapacity, kCapacity, kCapacity * 4u, kCapacity,
-                                     sc::SurfaceCacheGrid::kCounterWords };
-    const uint32_t gridStrides[7] = { 4u, 16u, 16u, 4u, 4u, 4u, 4u };
-    ComPtr<ID3D11Buffer> grid[7];
-    ComPtr<ID3D11UnorderedAccessView> gridViews[7];
-    for (int i = 0; i < 7 && ok; ++i)
+    // u0 keys, u1 cellA, u2 cellB, u3 cellFrame, u4 accum, u5 active list, u6 counters, u7 pending
+    const uint32_t gridCounts[8] = { kCapacity, kCapacity, kCapacity, kCapacity, kCapacity * 4u, kCapacity,
+                                     sc::SurfaceCacheGrid::kCounterWords, kCapacity };
+    const uint32_t gridStrides[8] = { 4u, 16u, 16u, 4u, 4u, 4u, 4u, 4u };
+    ComPtr<ID3D11Buffer> grid[8];
+    ComPtr<ID3D11UnorderedAccessView> gridViews[8];
+    for (int i = 0; i < 8 && ok; ++i)
         ok = makeBuffer(nullptr, gridCounts[i], gridStrides[i], true, grid[i], nullptr, &gridViews[i]);
     CHECK(ctx, ok);
     if (!ok)
@@ -1492,18 +1503,18 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
     c.viewportHeight = kSize;
     c.registerStep = 4u;
     c.maxAge = 1000u;
-    c.flags = 0u;              // no IBL, no probes, no shadow map: the far field is the (black) ambient colour
+    c.flags = 0u;              // no IBL, no probes, no shadow map: the far field is the ambient colour * pi
     c.maxSamples = maxSamples;
     c.materialCount = 1u;
 
     ID3D11ShaderResourceView* srvs[12] = { sceneViews[0].Get(), sceneViews[1].Get(), sceneViews[2].Get(), sceneViews[3].Get() };
     srvs[10] = sceneViews[4].Get();
     srvs[11] = sceneViews[5].Get();
-    ID3D11UnorderedAccessView* uavs[7] = {};
-    for (int i = 0; i < 7; ++i)
+    ID3D11UnorderedAccessView* uavs[8] = {};
+    for (int i = 0; i < 8; ++i)
         uavs[i] = gridViews[i].Get();
     command->CSSetShaderResources(0u, 12u, srvs);
-    command->CSSetUnorderedAccessViews(0u, 7u, uavs, nullptr);
+    command->CSSetUnorderedAccessViews(0u, 8u, uavs, nullptr);
     ID3D11Buffer* cb0 = perFrame.Get();
     ID3D11Buffer* cb3 = params.Get();
     command->CSSetConstantBuffers(0u, 1u, &cb0);
@@ -1512,23 +1523,31 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
     const Vec3 directions[6] = { { 1.f, 0.f, 0.f }, { -1.f, 0.f, 0.f }, { 0.f, 0.f, 1.f },
                                  { 0.f, 0.f, -1.f }, { 0.f, 1.f, 0.f }, { 0.f, -1.f, 0.f } };
     const Mat4 proj = Mat4::PerspectiveFovRH(1.6f, 1.f, 0.05f, 100.f);
+    uint32_t backCells = 0u;   // settled cells on the wall x = -2 (behind a fixed camera)
+    double backSum = 0.0;
     const auto readCells = [&](double& mean, double& minE, double& maxE, uint32_t& cells, uint32_t& counter2)
     {
         D3D11_BUFFER_DESC desc{};
         desc.ByteWidth = kCapacity * 16u;
         desc.Usage = D3D11_USAGE_STAGING;
         desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-        ComPtr<ID3D11Buffer> stagingA, stagingKeys, stagingCounters;
+        ComPtr<ID3D11Buffer> stagingA, stagingB, stagingKeys, stagingCounters;
         device->CreateBuffer(&desc, nullptr, &stagingA);
+        device->CreateBuffer(&desc, nullptr, &stagingB);
         desc.ByteWidth = kCapacity * 4u;
         device->CreateBuffer(&desc, nullptr, &stagingKeys);
         desc.ByteWidth = sc::SurfaceCacheGrid::kCounterWords * 4u;
         device->CreateBuffer(&desc, nullptr, &stagingCounters);
         command->CopyResource(stagingA.Get(), grid[1].Get());
+        command->CopyResource(stagingB.Get(), grid[2].Get());
         command->CopyResource(stagingKeys.Get(), grid[0].Get());
         command->CopyResource(stagingCounters.Get(), grid[6].Get());
-        D3D11_MAPPED_SUBRESOURCE ma{}, mk{}, mc{};
+        D3D11_MAPPED_SUBRESOURCE ma{}, mb{}, mk{}, mc{};
         command->Map(stagingA.Get(), 0u, D3D11_MAP_READ, 0u, &ma);
+        command->Map(stagingB.Get(), 0u, D3D11_MAP_READ, 0u, &mb);
+        const uint32_t* cb = static_cast<const uint32_t*>(mb.pData);
+        backCells = 0u;
+        backSum = 0.0;
         command->Map(stagingKeys.Get(), 0u, D3D11_MAP_READ, 0u, &mk);
         command->Map(stagingCounters.Get(), 0u, D3D11_MAP_READ, 0u, &mc);
         const uint32_t* a = static_cast<const uint32_t*>(ma.pData);
@@ -1542,6 +1561,8 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
         {
             if (k[i] == 0u || a[i * 4u + 3u] < std::min(32u, maxSamples))
                 continue;
+            float px = 0.f;
+            std::memcpy(&px, &cb[i * 4u], sizeof(px));
             for (uint32_t ch = 0u; ch < 3u; ++ch)
             {
                 float e = 0.f;
@@ -1549,10 +1570,15 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
                 sum += e;
                 minE = std::min(minE, static_cast<double>(e));
                 maxE = std::max(maxE, static_cast<double>(e));
+                if (px < -1.9f)
+                    backSum += e / 3.0;
             }
+            if (px < -1.9f)
+                ++backCells;
             ++cells;
         }
         command->Unmap(stagingA.Get(), 0u);
+        command->Unmap(stagingB.Get(), 0u);
         command->Unmap(stagingKeys.Get(), 0u);
         command->Unmap(stagingCounters.Get(), 0u);
         mean = cells > 0u ? sum / (3.0 * cells) : 0.0;
@@ -1563,7 +1589,7 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
     uint32_t cellsBefore = 0u, fullBefore = 0u;
     for (uint32_t frame = 1u; frame <= kFrames; ++frame)
     {
-        const Vec3 dir = directions[frame % 6u];
+        const Vec3 dir = fixedCamera ? directions[0] : directions[frame % 6u];
         const Vec3 up = std::fabs(dir.y) > 0.5f ? Vec3{ 0.f, 0.f, 1.f } : Vec3{ 0.f, 1.f, 0.f };
         const Mat4 view = Mat4::LookAtRH(Vec3{ 0.1f, 0.2f, -0.15f }, Vec3{ 0.1f, 0.2f, -0.15f } + dir, up);
         const Mat4 viewProj = proj * view;
@@ -1578,6 +1604,8 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
         fc.cameraPosition[3] = 1.f;
         fc.nearPlane = 0.05f;
         fc.farPlane = 100.f;
+        fc.ambientColor[0] = fc.ambientColor[1] = fc.ambientColor[2] = ambient;
+        fc.ambientColor[3] = 1.f;
         command->UpdateSubresource(perFrame.Get(), 0u, nullptr, &fc, 0u, 0u);
         c.frame = frame;
         command->UpdateSubresource(params.Get(), 0u, nullptr, &c, 0u, 0u);
@@ -1586,6 +1614,8 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
         command->Dispatch(1u, 1u, 1u);
         command->CSSetShader(kernels[kRegister].Get(), nullptr, 0u);
         command->Dispatch((kSize / 4u + 7u) / 8u, (kSize / 4u + 7u) / 8u, 1u);
+        command->CSSetShader(kernels[kPending].Get(), nullptr, 0u);
+        command->Dispatch(kCapacity / 64u, 1u, 1u);
         command->CSSetShader(kernels[kTrace].Get(), nullptr, 0u);
         command->Dispatch((c.rayBudget + 63u) / 64u, 1u, 1u);
         command->CSSetShader(kernels[kResolve].Get(), nullptr, 0u);
@@ -1598,21 +1628,44 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
     double mean = 0.0, minE = 0.0, maxE = 0.0;
     uint32_t cells = 0u, full = 0u;
     readCells(mean, minE, maxE, cells, full);
-    const double expected = 2.0 * 3.14159265358979;
+    // L = e / (1 - a) with a = 0.5: E = pi * L = 2 pi e.
+    const double expected = 2.0 * 3.14159265358979 * emission;
     std::fprintf(stdout, "  # test_gi.cpp: WARP furnace (%s): %u cells, mean E %.4f (expected %.4f), min %.4f, max %.4f; "
                          "60 frames earlier %u cells, mean %.4f\n",
                  label, cells, mean, expected, minE, maxE, cellsBefore, meanBefore);
+    const double backMean = backCells > 0u ? backSum / backCells : 0.0;
+    if (fixedCamera)
+    {
+        std::fprintf(stdout, "  # test_gi.cpp: WARP furnace (%s): wall behind the camera: %u settled cells, mean E %.4f\n",
+                     label, backCells, backMean);
+        CHECK(ctx, backCells > 40u);
+    }
     CHECK(ctx, cells > 100u);
-    CHECK(ctx, std::fabs(mean - expected) < 0.03 * expected);
-    CHECK(ctx, minE > 0.9 * expected);
-    CHECK(ctx, maxE < 1.1 * expected);
-    CHECK(ctx, std::fabs(mean - meanBefore) < 0.01 * expected);   // settled, not drifting
+    if (expected > 0.0)
+    {
+        if (fixedCamera)
+            CHECK(ctx, std::fabs(backMean - expected) < 0.05 * expected);
+        CHECK(ctx, std::fabs(mean - expected) < 0.03 * expected);
+        CHECK(ctx, minE > 0.9 * expected);
+        CHECK(ctx, maxE < 1.1 * expected);
+        CHECK(ctx, std::fabs(mean - meanBefore) < 0.01 * expected);   // settled, not drifting
+    }
+    else
+    {
+        // Dark room: the start values (the far field) must have died out and
+        // nothing from outside may keep a cell lit (far field here: 0.2 pi = 0.63).
+        CHECK(ctx, maxE < 1e-3);
+        CHECK(ctx, mean < 1e-4);
+        if (fixedCamera)
+            CHECK(ctx, backMean < 1e-4);
+    }
     CHECK_EQ(ctx, full, 0u);
 #else
     (void)ctx;
     (void)rayBudget;
     (void)maxSamples;
     (void)label;
+    (void)fixedCamera;
     std::fprintf(stdout, "  # test_gi.cpp: no DX11 backend, WARP furnace skipped\n");
 #endif
 }
@@ -1625,6 +1678,706 @@ void TestSurfaceCacheFurnaceOnWarp(test::TestContext& ctx)
 void TestSurfaceCacheFurnaceSmallBudgetOnWarp(test::TestContext& ctx)
 {
     RunSurfaceCacheFurnace(ctx, 256u, 8u, "256 rays for all cells");
+}
+
+void TestSurfaceCacheFurnaceFixedCameraOnWarp(test::TestContext& ctx)
+{
+    RunSurfaceCacheFurnace(ctx, 16384u, 128u, "fixed camera", true);
+}
+
+void TestSurfaceCacheDarkRoomOnWarp(test::TestContext& ctx)
+{
+    RunSurfaceCacheFurnace(ctx, 16384u, 128u, "dark closed room, bright sky outside", true, 0.f, 0.2f);
+}
+
+// =============================================================================
+// Package 4: resolve for shading and upsampling in the PBR shaders
+// =============================================================================
+
+// CPU copy of the cache key (ScPcg, ScMakeKeyAt in surface_cache_common.hlsl).
+uint32_t ScPcgCpu(uint32_t v)
+{
+    const uint32_t state = v * 747796405u + 2891336453u;
+    const uint32_t word = ((state >> ((state >> 28u) + 4u)) ^ state) * 277803737u;
+    return (word >> 22u) ^ word;
+}
+
+struct ScKeyCpu { uint32_t start; uint32_t key; };
+
+ScKeyCpu ScMakeKeyAtCpu(int32_t qx, int32_t qy, int32_t qz, uint32_t level, uint32_t bucket)
+{
+    const uint32_t tag = level * 8u + bucket;
+    const uint32_t ux = static_cast<uint32_t>(qx), uy = static_cast<uint32_t>(qy), uz = static_cast<uint32_t>(qz);
+    ScKeyCpu k{};
+    k.start = ScPcgCpu(ux + ScPcgCpu(uy + ScPcgCpu(uz + ScPcgCpu(tag))));
+    uint32_t h = ScPcgCpu(tag ^ 0x68E31DA4u);
+    h = ScPcgCpu(h ^ uz * 0x1B873593u);
+    h = ScPcgCpu(h ^ uy * 0xCC9E2D51u);
+    h = ScPcgCpu(h ^ ux * 0x85EBCA6Bu);
+    k.key = std::max(h, 1u);
+    return k;
+}
+
+uint32_t ScLevelCpu(const Vec3& p, const Vec3& camera, float levelDistance)
+{
+    const float d = (p - camera).Length() / levelDistance;
+    return d <= 1.f ? 0u : std::min(static_cast<uint32_t>(std::floor(std::log2(d))) + 1u, 15u);
+}
+
+// The resolve (shaders/surface_cache_apply.hlsl) and the upsampling of
+// shaders/pbr_gi.hlsl on WARP. A floor y = 0 seen at an angle (sky at the top),
+// a cache filled on the CPU with E linear in x and z at every cell centre:
+// trilinear interpolation must reproduce the linear function exactly, a hole
+// without cells must give the far field (ambient * pi, flagged by a negative
+// depth), the sky must stay 0. The upsampling must follow the same function at
+// full resolution, and not apply with the white fallback texture bound
+// (transparent pass) or with the flag off.
+void TestSurfaceCacheApplyOnWarp(test::TestContext& ctx)
+{
+#if defined(_WIN32) && defined(KROM_DX11_BACKEND)
+    namespace sc = engine::renderer::addons::surface_cache;
+    using Microsoft::WRL::ComPtr;
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> command;
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+                                   D3D11_SDK_VERSION, &device, nullptr, &command);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+
+    static const char* const kUpsamplePs = R"(#include "surface_cache_common.hlsl"
+#include "pbr_gi.hlsl"
+Texture2D<float> tDepth : register(t8);
+float4 main(float4 pos : SV_POSITION) : SV_Target
+{
+    uint w, h;
+    tDepth.GetDimensions(w, h);
+    const int2 p = int2(pos.xy);
+    const float d = tDepth.Load(int3(p, 0));
+    if (d >= 1.0f)
+        return float4(0.0f, 0.0f, 0.0f, -1.0f);
+    const float2 uv = (float2(p) + 0.5f) / float2(w, h);
+    const float4 hp = mul(invViewProjMatrix, float4(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, d, 1.0f));
+    float3 e;
+    float coverage;
+    const bool applied = KromSampleGI(pos.xy, hp.xyz / hp.w, e, coverage);
+    return float4(e, applied ? coverage : -0.5f);
+}
+)";
+    const auto compile = [&](const char* source, assets::ShaderStage stage, const char* name, std::vector<uint8_t>& out)
+    {
+        assets::ShaderAsset shader{};
+        shader.debugName = name;
+        shader.stage = stage;
+        shader.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+        shader.entryPoint = "main";
+        shader.sourceCode = source;
+        assets::CompiledShaderArtifact compiled{};
+        std::string error;
+        const bool ok = ShaderCompiler::CompileForTarget(shader, assets::ShaderTargetProfile::DirectX11_SM5, compiled, &error);
+        if (!ok)
+            std::fprintf(stderr, "test_gi.cpp: %s: %s\n", name, error.c_str());
+        out = compiled.bytecode;
+        return ok && !out.empty();
+    };
+    std::vector<uint8_t> vsCode, applyCode, upsampleCode;
+    bool ok = compile(sc::kFullscreenVsHlsl, assets::ShaderStage::Vertex, "gi_fullscreen.vs", vsCode) &&
+              compile(sc::kApplyPsHlsl[0], assets::ShaderStage::Fragment, "surface_cache_apply.ps", applyCode) &&
+              compile(kUpsamplePs, assets::ShaderStage::Fragment, "gi_upsample_test.ps", upsampleCode);
+    CHECK(ctx, ok);
+    if (!ok)
+        return;
+    ComPtr<ID3D11VertexShader> vs;
+    ComPtr<ID3D11PixelShader> applyPs, upsamplePs;
+    ok = SUCCEEDED(device->CreateVertexShader(vsCode.data(), vsCode.size(), nullptr, &vs)) &&
+         SUCCEEDED(device->CreatePixelShader(applyCode.data(), applyCode.size(), nullptr, &applyPs)) &&
+         SUCCEEDED(device->CreatePixelShader(upsampleCode.data(), upsampleCode.size(), nullptr, &upsamplePs));
+    CHECK(ctx, ok);
+    if (!ok)
+        return;
+
+    // Camera 2 m above the floor, looking down at 25 degrees: the floor reaches
+    // beyond 32 m (cell levels 0 to 3), the top rows show the sky.
+    constexpr uint32_t kW = 160u, kH = 96u;
+    constexpr uint32_t kHalfW = (kW + 1u) / 2u, kHalfH = (kH + 1u) / 2u;
+    const Vec3 camera{ 0.3f, 2.f, 0.2f };
+    const Vec3 forward = Vec3{ 0.f, -0.42f, -0.9f }.Normalized();
+    const Mat4 view = Mat4::LookAtRH(camera, camera + forward, Vec3{ 0.f, 1.f, 0.f });
+    const Mat4 proj = Mat4::PerspectiveFovRH(1.2f, static_cast<float>(kW) / kH, 0.1f, 200.f);
+    const Mat4 viewProj = proj * view;
+    const Mat4 invViewProj = viewProj.Inverse();
+    const auto pixelRay = [&](float px, float py)
+    {
+        const float ndcX = (px + 0.5f) / kW * 2.f - 1.f;
+        const float ndcY = 1.f - (py + 0.5f) / kH * 2.f;
+        const math::Vec4 a = invViewProj * math::Vec4{ ndcX, ndcY, 0.2f, 1.f };
+        const Vec3 p{ a.x / a.w, a.y / a.w, a.z / a.w };
+        return (p - camera).Normalized();
+    };
+    // Floor hit and clip depth per pixel (1 = sky).
+    std::vector<float> depth(kW * kH, 1.f);
+    std::vector<Vec3> hitPos(kW * kH, Vec3{ 0.f, 0.f, 0.f });
+    for (uint32_t y = 0u; y < kH; ++y)
+        for (uint32_t x = 0u; x < kW; ++x)
+        {
+            const Vec3 d = pixelRay(static_cast<float>(x), static_cast<float>(y));
+            if (d.y >= -1e-3f)
+                continue;
+            const float t = -camera.y / d.y;
+            const Vec3 p = camera + d * t;
+            if (t > 150.f)
+                continue;
+            const math::Vec4 clip = viewProj * math::Vec4{ p, 1.f };
+            depth[y * kW + x] = clip.z / clip.w;
+            hitPos[y * kW + x] = p;
+        }
+
+    // E at a point: linear in x and z (W/m^2).
+    const auto linearE = [](const Vec3& p) { return Vec3{ 3.f + 0.05f * p.x, 2.f + 0.04f * p.z, 1.f + 0.02f * p.x - 0.01f * p.z }; };
+    const float ambient = 0.2f;
+    const float farField = ambient * 3.14159265f;
+    const float cellSize = 0.5f, levelDistance = 8.f;
+    constexpr uint32_t kCapacity = sc::SurfaceCacheGrid::kCapacity;
+
+    // Cells of the floor (+Y bucket, q.y = 0) on four levels; hole: no cells with
+    // a centre |x| < 1.5 (second run).
+    const auto fillGrid = [&](bool hole, std::vector<uint32_t>& keys, std::vector<uint32_t>& cellA, std::vector<uint32_t>& cellB)
+    {
+        keys.assign(kCapacity, 0u);
+        cellA.assign(kCapacity * 4u, 0u);
+        cellB.assign(kCapacity * 4u, 0u);
+        uint32_t full = 0u;
+        for (uint32_t level = 0u; level < 4u; ++level)
+        {
+            const float size = cellSize * std::exp2(static_cast<float>(level));
+            const int32_t range = static_cast<int32_t>(std::ceil(80.f / size));
+            for (int32_t qz = -range; qz <= range / 4; ++qz)
+                for (int32_t qx = -range; qx <= range; ++qx)
+                {
+                    const Vec3 centre{ (static_cast<float>(qx) + 0.5f) * size, 0.f, (static_cast<float>(qz) + 0.5f) * size };
+                    if (hole && std::fabs(centre.x) < 1.5f)
+                        continue;
+                    const ScKeyCpu k = ScMakeKeyAtCpu(qx, 0, qz, level, 2u);
+                    uint32_t slot = UINT32_MAX;
+                    for (uint32_t i = 0u; i < 16u; ++i)
+                    {
+                        const uint32_t s = (k.start + i) & (kCapacity - 1u);
+                        if (keys[s] == 0u) { slot = s; break; }
+                    }
+                    if (slot == UINT32_MAX) { ++full; continue; }
+                    keys[slot] = k.key;
+                    const Vec3 e = linearE(centre);
+                    std::memcpy(&cellA[slot * 4u + 0u], &e.x, 4u);
+                    std::memcpy(&cellA[slot * 4u + 1u], &e.y, 4u);
+                    std::memcpy(&cellA[slot * 4u + 2u], &e.z, 4u);
+                    cellA[slot * 4u + 3u] = 64u;
+                    // Registered surface point: on the floor somewhere in the cell.
+                    const Vec3 surface{ centre.x + 0.2f * size, 0.f, centre.z - 0.1f * size };
+                    std::memcpy(&cellB[slot * 4u + 0u], &surface.x, 4u);
+                    std::memcpy(&cellB[slot * 4u + 1u], &surface.y, 4u);
+                    std::memcpy(&cellB[slot * 4u + 2u], &surface.z, 4u);
+                }
+        }
+        return full;
+    };
+
+    const auto makeSrvBuffer = [&](const std::vector<uint32_t>& data, uint32_t stride, ComPtr<ID3D11Buffer>& buffer,
+                                   ComPtr<ID3D11ShaderResourceView>& srv)
+    {
+        D3D11_BUFFER_DESC desc{};
+        desc.ByteWidth = static_cast<UINT>(data.size() * 4u);
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+        desc.StructureByteStride = stride;
+        D3D11_SUBRESOURCE_DATA init{ data.data(), 0u, 0u };
+        bool r = SUCCEEDED(device->CreateBuffer(&desc, &init, &buffer));
+        D3D11_SHADER_RESOURCE_VIEW_DESC d{};
+        d.Format = DXGI_FORMAT_UNKNOWN;
+        d.ViewDimension = D3D11_SRV_DIMENSION_BUFFER;
+        d.Buffer.NumElements = desc.ByteWidth / stride;
+        return r && SUCCEEDED(device->CreateShaderResourceView(buffer.Get(), &d, &srv));
+    };
+    const auto makeTexture = [&](uint32_t w, uint32_t h, DXGI_FORMAT format, const void* data, uint32_t pitch, bool rt,
+                                 ComPtr<ID3D11Texture2D>& tex, ComPtr<ID3D11ShaderResourceView>* srv,
+                                 ComPtr<ID3D11RenderTargetView>* rtv)
+    {
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = w;
+        desc.Height = h;
+        desc.MipLevels = 1u;
+        desc.ArraySize = 1u;
+        desc.Format = format;
+        desc.SampleDesc.Count = 1u;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | (rt ? D3D11_BIND_RENDER_TARGET : 0u);
+        D3D11_SUBRESOURCE_DATA init{ data, pitch, 0u };
+        bool r = SUCCEEDED(device->CreateTexture2D(&desc, data ? &init : nullptr, &tex));
+        if (r && srv)
+            r = SUCCEEDED(device->CreateShaderResourceView(tex.Get(), nullptr, srv->GetAddressOf()));
+        if (r && rtv)
+            r = SUCCEEDED(device->CreateRenderTargetView(tex.Get(), nullptr, rtv->GetAddressOf()));
+        return r;
+    };
+    const auto readTexture = [&](ID3D11Texture2D* tex, uint32_t w, uint32_t h, DXGI_FORMAT format, uint32_t texelBytes,
+                                 std::vector<uint8_t>& out)
+    {
+        D3D11_TEXTURE2D_DESC desc{};
+        desc.Width = w;
+        desc.Height = h;
+        desc.MipLevels = 1u;
+        desc.ArraySize = 1u;
+        desc.Format = format;
+        desc.SampleDesc.Count = 1u;
+        desc.Usage = D3D11_USAGE_STAGING;
+        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        ComPtr<ID3D11Texture2D> staging;
+        if (FAILED(device->CreateTexture2D(&desc, nullptr, &staging)))
+            return false;
+        command->CopyResource(staging.Get(), tex);
+        D3D11_MAPPED_SUBRESOURCE m{};
+        if (FAILED(command->Map(staging.Get(), 0u, D3D11_MAP_READ, 0u, &m)))
+            return false;
+        out.resize(static_cast<size_t>(w) * h * texelBytes);
+        for (uint32_t y = 0u; y < h; ++y)
+            std::memcpy(out.data() + static_cast<size_t>(y) * w * texelBytes,
+                        static_cast<const uint8_t*>(m.pData) + static_cast<size_t>(y) * m.RowPitch, w * texelBytes);
+        command->Unmap(staging.Get(), 0u);
+        return true;
+    };
+    const auto halfToFloat = [](uint16_t h)
+    {
+        const uint32_t sign = (h >> 15u) & 1u, exponent = (h >> 10u) & 0x1Fu, mantissa = h & 0x3FFu;
+        float v = exponent == 0u ? std::ldexp(static_cast<float>(mantissa), -24)
+                                 : std::ldexp(static_cast<float>(mantissa | 0x400u), static_cast<int>(exponent) - 25);
+        return sign ? -v : v;
+    };
+
+    ComPtr<ID3D11Texture2D> depthTex, giTex, outTex, whiteTex;
+    ComPtr<ID3D11ShaderResourceView> depthSrv, giSrv, whiteSrv;
+    ComPtr<ID3D11RenderTargetView> giRtv, outRtv;
+    const uint32_t white = 0xFFFFFFFFu;
+    ok = makeTexture(kW, kH, DXGI_FORMAT_R32_FLOAT, depth.data(), kW * 4u, false, depthTex, &depthSrv, nullptr) &&
+         makeTexture(kHalfW, kHalfH, DXGI_FORMAT_R16G16B16A16_FLOAT, nullptr, 0u, true, giTex, &giSrv, &giRtv) &&
+         makeTexture(kW, kH, DXGI_FORMAT_R32G32B32A32_FLOAT, nullptr, 0u, true, outTex, nullptr, &outRtv) &&
+         makeTexture(1u, 1u, DXGI_FORMAT_R8G8B8A8_UNORM, &white, 4u, false, whiteTex, &whiteSrv, nullptr);
+    CHECK(ctx, ok);
+    if (!ok)
+        return;
+
+    D3D11_BUFFER_DESC cbDesc{};
+    cbDesc.Usage = D3D11_USAGE_DEFAULT;
+    cbDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    cbDesc.ByteWidth = sizeof(FrameConstants);
+    ComPtr<ID3D11Buffer> perFrame, params;
+    ok = SUCCEEDED(device->CreateBuffer(&cbDesc, nullptr, &perFrame));
+    cbDesc.ByteWidth = sizeof(sc::SurfaceCacheConstants);
+    ok = ok && SUCCEEDED(device->CreateBuffer(&cbDesc, nullptr, &params));
+    CHECK(ctx, ok);
+    if (!ok)
+        return;
+    const auto setFrame = [&](uint32_t giFlags)
+    {
+        FrameConstants fc{};
+        std::memcpy(fc.viewMatrix, view.Data(), sizeof(fc.viewMatrix));
+        std::memcpy(fc.projMatrix, proj.Data(), sizeof(fc.projMatrix));
+        std::memcpy(fc.viewProjMatrix, viewProj.Data(), sizeof(fc.viewProjMatrix));
+        std::memcpy(fc.invViewProjMatrix, invViewProj.Data(), sizeof(fc.invViewProjMatrix));
+        fc.cameraPosition[0] = camera.x; fc.cameraPosition[1] = camera.y; fc.cameraPosition[2] = camera.z; fc.cameraPosition[3] = 1.f;
+        fc.cameraForward[0] = forward.x; fc.cameraForward[1] = forward.y; fc.cameraForward[2] = forward.z;
+        fc.screenSize[0] = static_cast<float>(kW);
+        fc.screenSize[1] = static_cast<float>(kH);
+        fc.screenSize[2] = 1.f / kW;
+        fc.screenSize[3] = 1.f / kH;
+        fc.ambientColor[0] = fc.ambientColor[1] = fc.ambientColor[2] = ambient;
+        fc.ambientColor[3] = 1.f;
+        fc.nearPlane = 0.1f;
+        fc.farPlane = 200.f;
+        sc::SurfaceCacheFrameParams gp{};
+        gp.flags = giFlags;
+        gp.strength = 1.f;
+        gp.depthTolerance = 0.1f;
+        WriteFrameParameterBlock(fc, sc::kSurfaceCacheFrameParameterBlock, gp);
+        command->UpdateSubresource(perFrame.Get(), 0u, nullptr, &fc, 0u, 0u);
+        sc::SurfaceCacheConstants c{};
+        c.capacityMask = kCapacity - 1u;
+        c.frame = 1u;
+        c.cellSize = cellSize;
+        c.levelDistance = levelDistance;
+        c.viewportWidth = kW;
+        c.viewportHeight = kH;
+        c.flags = 0u;   // no IBL, no probes: the far field is ambient * pi
+        command->UpdateSubresource(params.Get(), 0u, nullptr, &c, 0u, 0u);
+    };
+    D3D11_RASTERIZER_DESC rasterDesc{};
+    rasterDesc.FillMode = D3D11_FILL_SOLID;
+    rasterDesc.CullMode = D3D11_CULL_NONE;   // as the add-on's pipelines (CullMode::None)
+    rasterDesc.DepthClipEnable = TRUE;
+    ComPtr<ID3D11RasterizerState> raster;
+    CHECK(ctx, SUCCEEDED(device->CreateRasterizerState(&rasterDesc, &raster)));
+    const auto draw = [&](ID3D11PixelShader* ps, ID3D11RenderTargetView* rtv, uint32_t w, uint32_t h)
+    {
+        command->RSSetState(raster.Get());
+        D3D11_VIEWPORT vp{ 0.f, 0.f, static_cast<float>(w), static_cast<float>(h), 0.f, 1.f };
+        command->RSSetViewports(1u, &vp);
+        command->OMSetRenderTargets(1u, &rtv, nullptr);
+        command->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+        command->IASetInputLayout(nullptr);
+        command->VSSetShader(vs.Get(), nullptr, 0u);
+        command->PSSetShader(ps, nullptr, 0u);
+        ID3D11Buffer* cbs[4] = { perFrame.Get(), nullptr, nullptr, params.Get() };
+        command->VSSetConstantBuffers(0u, 4u, cbs);
+        command->PSSetConstantBuffers(0u, 4u, cbs);
+        command->Draw(3u, 0u);
+        ID3D11RenderTargetView* none = nullptr;
+        command->OMSetRenderTargets(1u, &none, nullptr);
+    };
+
+    // View depth the resolve stores per half-resolution texel (nearest of 2 x 2,
+    // 0 = sky): pixels with no tap within the depth tolerance (the floor far
+    // away at a grazing angle) take the closest tap by design and are only counted.
+    std::vector<float> texelDepth(kHalfW * kHalfH, 0.f);
+    for (uint32_t y = 0u; y < kHalfH; ++y)
+        for (uint32_t x = 0u; x < kHalfW; ++x)
+        {
+            float best = 1.f;
+            for (uint32_t i = 0u; i < 4u; ++i)
+            {
+                const uint32_t px = x * 2u + (i & 1u), py = y * 2u + (i >> 1u);
+                if (px < kW && py < kH && depth[py * kW + px] < best)
+                {
+                    best = depth[py * kW + px];
+                    texelDepth[y * kHalfW + x] = Vec3::Dot(hitPos[py * kW + px] - camera, forward);
+                }
+            }
+        }
+    const auto hasMatchingTap = [&](uint32_t x, uint32_t y)
+    {
+        const float d = Vec3::Dot(hitPos[y * kW + x] - camera, forward);
+        const int32_t bx = static_cast<int32_t>(std::floor((static_cast<float>(x) + 0.5f) * 0.5f - 0.5f));
+        const int32_t by = static_cast<int32_t>(std::floor((static_cast<float>(y) + 0.5f) * 0.5f - 0.5f));
+        for (int32_t i = 0; i < 4; ++i)
+        {
+            const int32_t qx = std::clamp(bx + (i & 1), 0, static_cast<int32_t>(kHalfW) - 1);
+            const int32_t qy = std::clamp(by + (i >> 1), 0, static_cast<int32_t>(kHalfH) - 1);
+            const float t = texelDepth[static_cast<uint32_t>(qy) * kHalfW + static_cast<uint32_t>(qx)];
+            if (t > 0.f && std::fabs(t - d) < 0.1f * d)
+                return true;
+        }
+        return false;
+    };
+
+    for (int run = 0; run < 2; ++run)
+    {
+        const bool hole = run == 1;
+        std::vector<uint32_t> keys, cellA, cellB;
+        CHECK_EQ(ctx, fillGrid(hole, keys, cellA, cellB), 0u);
+        ComPtr<ID3D11Buffer> bk, ba, bb;
+        ComPtr<ID3D11ShaderResourceView> sk, sa, sb;
+        ok = makeSrvBuffer(keys, 4u, bk, sk) && makeSrvBuffer(cellA, 16u, ba, sa) && makeSrvBuffer(cellB, 16u, bb, sb);
+        CHECK(ctx, ok);
+        if (!ok)
+            return;
+
+        // Resolve in half resolution.
+        setFrame(sc::kSurfaceCacheShadeFlagEnabled);
+        ID3D11ShaderResourceView* applySrvs[15] = {};
+        applySrvs[8] = depthSrv.Get();
+        applySrvs[12] = sk.Get();
+        applySrvs[13] = sa.Get();
+        applySrvs[14] = sb.Get();
+        command->PSSetShaderResources(0u, 15u, applySrvs);
+        draw(applyPs.Get(), giRtv.Get(), kHalfW, kHalfH);
+        ID3D11ShaderResourceView* noSrvs[22] = {};
+        command->PSSetShaderResources(0u, 22u, noSrvs);
+        std::vector<uint8_t> giBytes;
+        CHECK(ctx, readTexture(giTex.Get(), kHalfW, kHalfH, DXGI_FORMAT_R16G16B16A16_FLOAT, 8u, giBytes));
+        if (giBytes.empty())
+            return;
+
+        uint32_t sky = 0u, skyWrong = 0u, interpolated = 0u, farFieldTexels = 0u, wrong = 0u, holeChecked = 0u, holeWrong = 0u;
+        double maxRel = 0.0;
+        for (uint32_t y = 0u; y < kHalfH; ++y)
+            for (uint32_t x = 0u; x < kHalfW; ++x)
+            {
+                const uint16_t* t = reinterpret_cast<const uint16_t*>(giBytes.data()) + (y * kHalfW + x) * 4u;
+                const float r = halfToFloat(t[0]), g = halfToFloat(t[1]), b = halfToFloat(t[2]), a = halfToFloat(t[3]);
+                // Nearest of the 2 x 2 pixels, as the shader picks it.
+                float best = 1.f;
+                Vec3 p{ 0.f, 0.f, 0.f };
+                for (uint32_t i = 0u; i < 4u; ++i)
+                {
+                    const uint32_t px = x * 2u + (i & 1u), py = y * 2u + (i >> 1u);
+                    if (px >= kW || py >= kH)
+                        continue;
+                    if (depth[py * kW + px] < best)
+                    {
+                        best = depth[py * kW + px];
+                        p = hitPos[py * kW + px];
+                    }
+                }
+                if (best >= 1.f)
+                {
+                    ++sky;
+                    if (a != 0.f || r != 0.f)
+                        ++skyWrong;
+                    continue;
+                }
+                // Far-away texels: the reconstructed normal gets noisy in 16-bit depth steps; skip.
+                if ((p - camera).Length() > 60.f)
+                    continue;
+                const Vec3 e = linearE(p);
+                const uint32_t level = ScLevelCpu(p, camera, levelDistance);
+                const bool inHole = hole && std::fabs(p.x) < 0.4f && level <= 2u;
+                if (a < 0.f)
+                    ++farFieldTexels;
+                else
+                    ++interpolated;
+                if (inHole)
+                {
+                    ++holeChecked;
+                    if (a >= 0.f || std::fabs(r - farField) > 0.01f || std::fabs(g - farField) > 0.01f)
+                        ++holeWrong;
+                    continue;
+                }
+                if (hole && std::fabs(p.x) < 3.5f)
+                    continue;   // edge of the hole: partly far field
+                const double rel = std::max({ std::fabs(r - e.x) / e.x, std::fabs(g - e.y) / e.y, std::fabs(b - e.z) / e.z });
+                maxRel = std::max(maxRel, rel);
+                if (a <= 0.f || rel > 0.01)
+                {
+                    if (++wrong <= 3u)
+                        std::fprintf(stdout, "  # test_gi.cpp: apply texel %u,%u at (%.2f, %.2f, %.2f): %.4f %.4f %.4f a=%.3f, expected %.4f %.4f %.4f\n",
+                                     x, y, p.x, p.y, p.z, r, g, b, a, e.x, e.y, e.z);
+                }
+            }
+        std::fprintf(stdout, "  # test_gi.cpp: WARP apply (%s): %u interpolated, %u far field, %u sky, max rel. error %.5f, "
+                             "%u wrong, %u hole texels checked (%u wrong), %u sky wrong\n",
+                     hole ? "with hole" : "full cache", interpolated, farFieldTexels, sky, maxRel, wrong, holeChecked, holeWrong, skyWrong);
+        CHECK(ctx, sky > 0u && interpolated > 500u);
+        CHECK_EQ(ctx, skyWrong, 0u);
+        CHECK_EQ(ctx, wrong, 0u);
+        if (hole)
+        {
+            CHECK(ctx, holeChecked > 20u);
+            CHECK_EQ(ctx, holeWrong, 0u);
+        }
+
+        // Upsampling at full resolution (pbr_gi.hlsl): GI texture, white
+        // fallback, flag off.
+        for (int variant = 0; variant < (hole ? 1 : 3); ++variant)
+        {
+            setFrame(variant == 2 ? 0u : sc::kSurfaceCacheShadeFlagEnabled);
+            ID3D11ShaderResourceView* srvs[22] = {};
+            srvs[8] = depthSrv.Get();
+            srvs[21] = variant == 1 ? whiteSrv.Get() : giSrv.Get();
+            command->PSSetShaderResources(0u, 22u, srvs);
+            draw(upsamplePs.Get(), outRtv.Get(), kW, kH);
+            command->PSSetShaderResources(0u, 22u, noSrvs);
+            std::vector<uint8_t> outBytes;
+            CHECK(ctx, readTexture(outTex.Get(), kW, kH, DXGI_FORMAT_R32G32B32A32_FLOAT, 16u, outBytes));
+            if (outBytes.empty())
+                return;
+            const float* o = reinterpret_cast<const float*>(outBytes.data());
+            uint32_t applied = 0u, notApplied = 0u, upWrong = 0u, surfaces = 0u, grazing = 0u, checked = 0u, outside = 0u;
+            double upMaxRel = 0.0;
+            for (uint32_t y = 0u; y < kH; ++y)
+                for (uint32_t x = 0u; x < kW; ++x)
+                {
+                    const float* t = o + (y * kW + x) * 4u;
+                    if (depth[y * kW + x] >= 1.f)
+                        continue;
+                    ++surfaces;
+                    if (t[3] < -0.25f)
+                    {
+                        ++notApplied;
+                        continue;
+                    }
+                    ++applied;
+                    const Vec3 p = hitPos[y * kW + x];
+                    if ((p - camera).Length() > 50.f || (hole && std::fabs(p.x) < 4.f))
+                        continue;
+                    if (!hasMatchingTap(x, y))
+                    {
+                        ++grazing;
+                        continue;
+                    }
+                    const Vec3 e = linearE(p);
+                    const double rel = std::max({ std::fabs(t[0] - e.x) / e.x, std::fabs(t[1] - e.y) / e.y,
+                                                  std::fabs(t[2] - e.z) / e.z });
+                    upMaxRel = std::max(upMaxRel, rel);
+                    ++checked;
+                    // No extrapolation, no foreign value: within the range of the taps the
+                    // shader may use (depth within twice the tolerance).
+                    {
+                        const float d = Vec3::Dot(p - camera, forward);
+                        const int32_t bx = static_cast<int32_t>(std::floor((static_cast<float>(x) + 0.5f) * 0.5f - 0.5f));
+                        const int32_t by = static_cast<int32_t>(std::floor((static_cast<float>(y) + 0.5f) * 0.5f - 0.5f));
+                        float lo[3] = { 1e30f, 1e30f, 1e30f }, hi[3] = { -1e30f, -1e30f, -1e30f };
+                        for (int32_t i = 0; i < 4; ++i)
+                        {
+                            const int32_t qx = std::clamp(bx + (i & 1), 0, static_cast<int32_t>(kHalfW) - 1);
+                            const int32_t qy = std::clamp(by + (i >> 1), 0, static_cast<int32_t>(kHalfH) - 1);
+                            const size_t texel = static_cast<size_t>(qy) * kHalfW + static_cast<size_t>(qx);
+                            if (texelDepth[texel] <= 0.f || std::fabs(texelDepth[texel] - d) > 0.2f * d)
+                                continue;
+                            const uint16_t* h = reinterpret_cast<const uint16_t*>(giBytes.data()) + texel * 4u;
+                            for (int ch = 0; ch < 3; ++ch)
+                            {
+                                lo[ch] = std::min(lo[ch], halfToFloat(h[ch]));
+                                hi[ch] = std::max(hi[ch], halfToFloat(h[ch]));
+                            }
+                        }
+                        for (int ch = 0; ch < 3; ++ch)
+                            if (t[ch] < lo[ch] - 2e-3f || t[ch] > hi[ch] + 2e-3f)
+                            {
+                                ++outside;
+                                break;
+                            }
+                    }
+                    if (rel > 0.02 && ++upWrong <= 4u)
+                        std::fprintf(stdout, "  # test_gi.cpp: upsampled pixel %u,%u at (%.2f, %.2f, %.2f): %.4f %.4f %.4f, expected %.4f %.4f %.4f\n",
+                                     x, y, p.x, p.y, p.z, t[0], t[1], t[2], e.x, e.y, e.z);
+                }
+            const char* names[3] = { "GI texture", "white fallback", "flag off" };
+            std::fprintf(stdout, "  # test_gi.cpp: WARP upsampling (%s, %s): %u of %u surface pixels applied, "
+                                 "max rel. error %.5f, %u of %u beyond 2 %%, %u outside the tap range, "
+                                 "%u at grazing angles without a matching tap\n",
+                         hole ? "with hole" : "full cache", names[variant], applied, surfaces, upMaxRel, upWrong, checked,
+                         outside, grazing);
+            if (variant == 0)
+            {
+                // Edges of the sky may fall back; the floor itself must take the GI.
+                CHECK(ctx, applied * 100u >= surfaces * 97u);
+                CHECK(ctx, checked > (hole ? 1000u : 5000u));
+                CHECK_EQ(ctx, outside, 0u);
+                CHECK(ctx, upMaxRel < 0.1);
+                // Bilinear in screen space between half-resolution rows: exact enough
+                // except on the floor far away at a grazing angle (the run with the
+                // hole checks only that part, beyond |x| = 4 m).
+                if (!hole)
+                    CHECK(ctx, upWrong * 100u <= checked * 5u);
+            }
+            else
+            {
+                CHECK_EQ(ctx, applied, 0u);
+            }
+        }
+    }
+#else
+    (void)ctx;
+    std::fprintf(stdout, "  # test_gi.cpp: no DX11 backend, WARP apply skipped\n");
+#endif
+}
+
+
+// KromGiSpecularScale (pbr_gi.hlsl) on WARP: the environment reflection keeps
+// its strength where the GI matches the probe/IBL irradiance, follows the
+// ratio where the GI is darker, is never brightened, and strength 0 or a black
+// environment leave it alone.
+void TestGiSpecularScaleOnWarp(test::TestContext& ctx)
+{
+#if defined(_WIN32) && defined(KROM_DX11_BACKEND)
+    static const char* const kCs = R"(#include "surface_cache_common.hlsl"
+#include "pbr_gi.hlsl"
+struct Case { float4 gi; float4 base; };
+StructuredBuffer<Case> gCases : register(t0);
+RWStructuredBuffer<float> gOut : register(u0);
+[numthreads(8, 1, 1)]
+void main(uint3 id : SV_DispatchThreadID)
+{
+    const Case c = gCases[id.x];
+    gOut[id.x] = KromGiSpecularScale(c.gi.rgb, c.base.rgb, c.gi.w);
+}
+)";
+    struct Case { float gi[4]; float base[4]; };
+    // gi rgb + strength, base rgb; expected
+    const Case cases[8] = {
+        { { 1.f, 1.f, 1.f, 1.f }, { 1.f, 1.f, 1.f, 0.f } },        // equal -> 1
+        { { 0.25f, 0.25f, 0.25f, 1.f }, { 1.f, 1.f, 1.f, 0.f } },  // a quarter -> 0.25
+        { { 0.f, 0.f, 0.f, 1.f }, { 2.f, 2.f, 2.f, 0.f } },        // dark room -> 0
+        { { 4.f, 4.f, 4.f, 1.f }, { 1.f, 1.f, 1.f, 0.f } },        // brighter -> 1
+        { { 0.f, 0.f, 0.f, 0.f }, { 2.f, 2.f, 2.f, 0.f } },        // strength 0 -> 1
+        { { 0.f, 0.f, 0.f, 0.5f }, { 2.f, 2.f, 2.f, 0.f } },       // strength 0.5 -> 0.5
+        { { 0.5f, 0.5f, 0.5f, 1.f }, { 0.f, 0.f, 0.f, 0.f } },     // black environment -> 1
+        { { 0.f, 1.f, 0.f, 1.f }, { 0.f, 2.f, 0.f, 0.f } },        // luminance ratio -> 0.5
+    };
+    const float expected[8] = { 1.f, 0.25f, 0.f, 1.f, 1.f, 0.5f, 1.f, 0.5f };
+
+    assets::ShaderAsset shader{};
+    shader.debugName = "gi_specular_scale_test.cs";
+    shader.stage = assets::ShaderStage::Compute;
+    shader.sourceLanguage = assets::ShaderSourceLanguage::HLSL;
+    shader.entryPoint = "main";
+    shader.sourceCode = kCs;
+    assets::CompiledShaderArtifact compiled{};
+    std::string error;
+    const bool compiledOk = ShaderCompiler::CompileForTarget(shader, assets::ShaderTargetProfile::DirectX11_SM5, compiled, &error);
+    if (!compiledOk)
+        std::fprintf(stderr, "test_gi.cpp: specular scale shader: %s\n", error.c_str());
+    CHECK(ctx, compiledOk);
+    if (!compiledOk)
+        return;
+
+    using Microsoft::WRL::ComPtr;
+    ComPtr<ID3D11Device> device;
+    ComPtr<ID3D11DeviceContext> command;
+    HRESULT hr = D3D11CreateDevice(nullptr, D3D_DRIVER_TYPE_WARP, nullptr, 0, nullptr, 0,
+                                   D3D11_SDK_VERSION, &device, nullptr, &command);
+    CHECK(ctx, SUCCEEDED(hr));
+    if (FAILED(hr))
+        return;
+    ComPtr<ID3D11ComputeShader> cs;
+    CHECK(ctx, SUCCEEDED(device->CreateComputeShader(compiled.bytecode.data(), compiled.bytecode.size(), nullptr, &cs)));
+
+    D3D11_BUFFER_DESC desc{};
+    desc.ByteWidth = sizeof(cases);
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    desc.MiscFlags = D3D11_RESOURCE_MISC_BUFFER_STRUCTURED;
+    desc.StructureByteStride = sizeof(Case);
+    D3D11_SUBRESOURCE_DATA init{ cases, 0u, 0u };
+    ComPtr<ID3D11Buffer> in, out, staging;
+    ComPtr<ID3D11ShaderResourceView> srv;
+    ComPtr<ID3D11UnorderedAccessView> uav;
+    bool ok = SUCCEEDED(device->CreateBuffer(&desc, &init, &in)) &&
+              SUCCEEDED(device->CreateShaderResourceView(in.Get(), nullptr, &srv));
+    desc.ByteWidth = 8u * sizeof(float);
+    desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+    desc.StructureByteStride = sizeof(float);
+    ok = ok && SUCCEEDED(device->CreateBuffer(&desc, nullptr, &out)) &&
+         SUCCEEDED(device->CreateUnorderedAccessView(out.Get(), nullptr, &uav));
+    D3D11_BUFFER_DESC stagingDesc{};
+    stagingDesc.ByteWidth = 8u * sizeof(float);
+    stagingDesc.Usage = D3D11_USAGE_STAGING;
+    stagingDesc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    ok = ok && SUCCEEDED(device->CreateBuffer(&stagingDesc, nullptr, &staging));
+    CHECK(ctx, ok);
+    if (!ok)
+        return;
+    ID3D11ShaderResourceView* srvs[1] = { srv.Get() };
+    ID3D11UnorderedAccessView* uavs[1] = { uav.Get() };
+    command->CSSetShader(cs.Get(), nullptr, 0u);
+    command->CSSetShaderResources(0u, 1u, srvs);
+    command->CSSetUnorderedAccessViews(0u, 1u, uavs, nullptr);
+    command->Dispatch(1u, 1u, 1u);
+    command->CopyResource(staging.Get(), out.Get());
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    CHECK(ctx, SUCCEEDED(command->Map(staging.Get(), 0u, D3D11_MAP_READ, 0u, &mapped)));
+    if (!mapped.pData)
+        return;
+    const float* result = static_cast<const float*>(mapped.pData);
+    for (int i = 0; i < 8; ++i)
+    {
+        if (std::fabs(result[i] - expected[i]) > 1e-4f)
+            std::fprintf(stderr, "test_gi.cpp: specular scale case %d: %.5f, expected %.5f\n", i, result[i], expected[i]);
+        CHECK(ctx, std::fabs(result[i] - expected[i]) <= 1e-4f);
+    }
+    command->Unmap(staging.Get(), 0u);
+#else
+    (void)ctx;
+    std::fprintf(stdout, "  # test_gi.cpp: no DX11 backend, WARP specular scale skipped\n");
+#endif
 }
 
 } // namespace
@@ -1650,6 +2403,10 @@ int RunGiTests()
          .Add("Surface cache shaders compile for DX11 and Vulkan", TestSurfaceCacheShadersCompile)
          .Add("Surface cache trace kernel on WARP against the CPU BVH", TestSurfaceCacheTraceOnWarp)
          .Add("Radiance cache settles in a closed box (furnace, WARP)", TestSurfaceCacheFurnaceOnWarp)
-         .Add("Radiance cache settles with fewer rays than cells (furnace, WARP)", TestSurfaceCacheFurnaceSmallBudgetOnWarp);
+         .Add("Radiance cache settles with fewer rays than cells (furnace, WARP)", TestSurfaceCacheFurnaceSmallBudgetOnWarp)
+         .Add("Radiance cache knows the wall behind the camera (furnace, WARP)", TestSurfaceCacheFurnaceFixedCameraOnWarp)
+         .Add("Closed room without light stays black under a bright sky (WARP)", TestSurfaceCacheDarkRoomOnWarp)
+         .Add("GI resolve and upsampling: interpolation, holes, fallbacks (WARP)", TestSurfaceCacheApplyOnWarp)
+         .Add("GI dims the environment reflection where it is darker (WARP)", TestGiSpecularScaleOnWarp);
     return suite.Run();
 }

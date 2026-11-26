@@ -81,7 +81,7 @@ cbuffer PerFrame : register(b0)
     uint         shadowViewCount;
     uint         shadowBufferLightCount;
     uint         shadowBufferViewCount;
-    float4       featureParams[8]; // add-on parameter blocks (FrameConstants::featureParams)
+    float4       featureParams[9]; // add-on parameter blocks (FrameConstants::featureParams)
 };
 
 // GTAO add-on block (krom-gtao, featureParams slot 0, see kGtaoFrameParameterBlock):
@@ -566,6 +566,7 @@ uint2 ComputeTileCoord(float2 pixelPos)
 #include "pbr_box_projection.hlsl"
 
 #include "pbr_local_probe.hlsl"
+#include "pbr_gi.hlsl"
 
 #include "pbr_ssr_output.hlsl"
 
@@ -685,6 +686,8 @@ float4 KROM_PBR_ENTRY(PSInput IN) : SV_Target
     float3 iblDiffuse = float3(0.0f, 0.0f, 0.0f);
     float3 iblSpecular = float3(0.0f, 0.0f, 0.0f);
     float3 iblSpecularWeight = float3(0.0f, 0.0f, 0.0f);
+    // Diffuse irradiance of the probe/IBL path (pbr_gi.hlsl compares the GI with it).
+    float3 giBaseIrradiance = ambientColor.rgb * ambientColor.a * PI;
 LocalProbeIBL localProbes;
     localProbes.irradiance = float3(0.0f, 0.0f, 0.0f);
     localProbes.specular = float3(0.0f, 0.0f, 0.0f);
@@ -708,6 +711,7 @@ LocalProbeIBL localProbes;
         }
         // Lambert: irradiance E times albedo / pi, as for the direct light.
         iblDiffuse = kD_a * albedoValue * irradiance / PI;
+        giBaseIrradiance = irradiance;
         if (!(debugFlags & DBG_DISABLE_IBL_SPEC))
         {
             float3 R = reflect(-V, N);
@@ -722,6 +726,28 @@ LocalProbeIBL localProbes;
 #else
     iblDiffuse = ambientColor.rgb * ambientColor.a * albedoValue;
 #endif
+    // Surface cache GI (pbr_gi.hlsl): its irradiance replaces the probe/IBL
+    // irradiance of the diffuse term (never added on top: the cache holds sky,
+    // probes and bounced light). giStrength blends between both for comparing.
+    float3 giIrradiance = float3(0.0f, 0.0f, 0.0f);
+    float giCoverage = 0.0f;
+    const bool giApplied = KromSampleGI(IN.positionCS.xy, IN.positionWS, giIrradiance, giCoverage);
+    float giSpecularScale = 1.0f;
+    if (giApplied)
+    {
+        // Same weight as the path it replaces: Lambert with kD under IBL, the
+        // plain ambient term (albedo * E / pi, E = pi * ambient) without it.
+#ifdef KROM_IBL
+        const float3 giDiffuseWeight = kD_a * albedoValue;
+#else
+        const float3 giDiffuseWeight = albedoValue;
+#endif
+        iblDiffuse = max(lerp(iblDiffuse, giDiffuseWeight * giIrradiance / PI, giStrength), 0.0f);
+        // Where the cache sees less light than the probe/IBL path (an enclosed
+        // room, under an overhang) the environment reflection is occluded alike.
+        giSpecularScale = KromGiSpecularScale(giIrradiance, giBaseIrradiance, giStrength);
+        iblSpecular *= giSpecularScale;
+    }
     // Clear coat: its own reflection on top, the base IBL attenuated by 1 - Fc.
     float3 coatIBL = float3(0.0f, 0.0f, 0.0f);
 #ifdef KROM_IBL
@@ -784,7 +810,7 @@ LocalProbeIBL localProbes;
 
     // The coat reflection takes the same specular occlusion as the base; SSR
     // replaces only the base reflection (KromStoreSsrInputs below).
-    ambientIBL += coatIBL * specularOcclusion;
+    ambientIBL += coatIBL * (specularOcclusion * giSpecularScale);
 
     float3 totalDirectDiffuse = float3(0.0f, 0.0f, 0.0f);
     float3 totalDirectSpecular = float3(0.0f, 0.0f, 0.0f);
@@ -1058,6 +1084,10 @@ LocalProbeIBL localProbes;
     if (probeDebugView == 1u) return float4(LocalProbeDebugColor(localProbes.firstProbe), 1.0f);
     if (probeDebugView == 2u) return float4((1.0f - localProbes.remaining).xxx, 1.0f);
     if (probeDebugView == 3u) return float4(specularOcclusion.xxx, 1.0f);
+    if (giDebugView == 1u) return float4(giIrradiance / PI, 1.0f);
+    if (giDebugView == 2u) return float4(iblDiffuse * ao * gtaoDiffuse, 1.0f);
+    if (giDebugView == 3u) return float4(KromGiCoverageColor(giApplied, giCoverage), 1.0f);
+    if (giDebugView == 4u) return float4(giSpecularScale.xxx, 1.0f);
 #ifdef KROM_SSR_OUTPUT
     // Specular environment light as added above (incl. specular occlusion).
     KromStoreSsrInputs(N, roughness, iblSpecularWeight * specularOcclusion, iblSpecular * specularOcclusion);

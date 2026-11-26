@@ -344,10 +344,13 @@ struct EditorState
     float    ssrThickness = 0.3f;
     // Reflection probes: debug view (viewport setting, not saved).
     uint32_t probeDebugView = 0u;
-    // Surface cache GI test (doc/PLAN_GI.md, package 2): trace kernel with debug
-    // view and measuring mode. Viewport setting, not saved, off by default.
+    // Surface cache GI test (doc/PLAN_GI.md, packages 2-4): trace kernel, radiance
+    // cache, shading, debug views and measuring mode. Viewport setting, not
+    // saved, off by default.
     bool     surfaceCacheEnabled = false;
-    uint32_t surfaceCacheDebugView = 1u;   // SurfaceCacheDebugView
+    uint32_t surfaceCacheDebugView = 0u;   // SurfaceCacheDebugView
+    bool     surfaceCacheApply = true;     // the PBR shaders take the cache as indirect diffuse light
+    float    surfaceCacheStrength = 1.0f;  // 0 = probe/IBL, 1 = GI, > 1 exaggerates the difference
     float    surfaceCacheOverlay = 1.0f;
     float    surfaceCacheDistance = 50.0f;
     int      surfaceCacheRayBudgetK = 128;   // thousands of cache rays per frame

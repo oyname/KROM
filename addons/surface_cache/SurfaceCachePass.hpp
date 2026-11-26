@@ -7,7 +7,10 @@
 //                            ray trace, resolve; shaders/surface_cache_update.hlsl,
 //                            package 3), then the trace of the debug view, the
 //                            measuring dispatches and the GPU/CPU check
-//                            (shaders/surface_cache_trace.hlsl, package 2)
+//                            (shaders/surface_cache_trace.hlsl, package 2), and
+//                            the resolve for shading into kSurfaceCacheGiResource
+//                            (half resolution, opaque input on
+//                            TexSlots::GlobalIllumination, package 4)
 //   SurfaceCacheOverlayPass  (AfterPostProcess) shows the debug view over the
 //                            finished image, blended by SurfaceCacheSettings::overlay
 //
@@ -18,6 +21,7 @@
 #include "SurfaceCacheTypes.hpp"
 #include "renderer/RenderFramePassInterfaces.hpp"
 #include <memory>
+#include <string>
 #include <string_view>
 
 namespace engine::renderer::addons::surface_cache {
@@ -26,6 +30,10 @@ namespace engine::renderer::addons::surface_cache {
 extern const char* const kTraceCsHlsl;
 extern const char* const kOverlayPsHlsl;
 extern const char* const kFullscreenVsHlsl;
+// Resolve for shading (shaders/surface_cache_apply.hlsl): [0] depth, [1] MSAA depth.
+extern const char* const kApplyPsHlsl[2];
+// Render-graph resource of the resolve for shading (RGBA16F, half resolution).
+inline constexpr std::string_view kSurfaceCacheGiResource = "SurfaceCacheGI";
 // Radiance cache kernels (shaders/surface_cache_update.hlsl), CacheKernel order.
 extern const char* const kCacheKernelHlsl[SurfaceCacheGpuResources::kCacheKernelCount];
 extern const char* const kCacheKernelNames[SurfaceCacheGpuResources::kCacheKernelCount];
@@ -71,6 +79,8 @@ public:
     void      BuildPass(const PassBuildContext& ctx) const override;
 
 private:
+    void BuildApplyPass(const PassBuildContext& ctx, const std::string& resolveToken) const;
+
     std::shared_ptr<SurfaceCacheGpuResources> m_resources;
 };
 

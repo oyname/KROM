@@ -1278,6 +1278,16 @@ std::string EditorSettingsJson(const renderer::addons::editor::EditorState& stat
       << "    \"showProfiler\":" << (state.showProfiler ? "true" : "false") << ",\n"
       << "    \"profilerSections\":" << state.profilerSections << ",\n"
       << "    \"showSelectionOutline\":" << (state.showSelectionOutline ? "true" : "false") << "\n"
+      << "  },\n"
+      // Surface cache GI test (viewport settings; the debug view starts off every time).
+      << "  \"surfaceCacheGI\":{\n"
+      << "    \"enabled\":" << (state.surfaceCacheEnabled ? "true" : "false") << ",\n"
+      << "    \"apply\":" << (state.surfaceCacheApply ? "true" : "false") << ",\n"
+      << "    \"strength\":" << FloatJson(state.surfaceCacheStrength) << ",\n"
+      << "    \"rayBudgetK\":" << state.surfaceCacheRayBudgetK << ",\n"
+      << "    \"rayLength\":" << FloatJson(state.surfaceCacheRayLength) << ",\n"
+      << "    \"cellSize\":" << FloatJson(state.surfaceCacheCellSize) << ",\n"
+      << "    \"history\":" << state.surfaceCacheHistory << "\n"
       << "  }\n"
       << "}\n";
     return f.str();
@@ -1411,6 +1421,24 @@ void LoadEditorSettings(const std::filesystem::path& projectRoot,
             state.profilerSections = static_cast<uint32_t>(std::max(v->AsInt(), 0));
         if (const auto* outline = viewport->Get("showSelectionOutline"); outline && outline->IsBool())
             state.showSelectionOutline = outline->AsBool();
+    }
+
+    if (const serialization::JsonValue* gi = root.Get("surfaceCacheGI"); gi && gi->IsObject())
+    {
+        if (const auto* v = gi->Get("enabled"); v && v->IsBool())
+            state.surfaceCacheEnabled = v->AsBool();
+        if (const auto* v = gi->Get("apply"); v && v->IsBool())
+            state.surfaceCacheApply = v->AsBool();
+        if (const auto* v = gi->Get("strength"); v && v->IsNumber())
+            state.surfaceCacheStrength = std::clamp(v->AsFloat(), 0.f, 2.f);
+        if (const auto* v = gi->Get("rayBudgetK"); v && v->IsNumber())
+            state.surfaceCacheRayBudgetK = std::clamp(v->AsInt(), 16, 1024);
+        if (const auto* v = gi->Get("rayLength"); v && v->IsNumber())
+            state.surfaceCacheRayLength = std::clamp(v->AsFloat(), 0.f, 100.f);
+        if (const auto* v = gi->Get("cellSize"); v && v->IsNumber())
+            state.surfaceCacheCellSize = std::clamp(v->AsFloat(), 0.1f, 4.f);
+        if (const auto* v = gi->Get("history"); v && v->IsNumber())
+            state.surfaceCacheHistory = std::clamp(v->AsInt(), 32, 2048);
     }
 
     if (const serialization::JsonValue* codeEditor = root.Get("codeEditor");
@@ -4528,6 +4556,8 @@ void KromEditorApp::UpdateSurfaceCache()
     res.settings.rayLength = std::max(m_editorState.surfaceCacheRayLength, 0.0f);
     res.settings.cellSize = std::clamp(m_editorState.surfaceCacheCellSize, 0.05f, 16.0f);
     res.settings.maxSamples = static_cast<uint32_t>(std::clamp(m_editorState.surfaceCacheHistory, 1, 65536));
+    res.settings.apply = m_editorState.surfaceCacheApply;
+    res.settings.strength = std::clamp(m_editorState.surfaceCacheStrength, 0.0f, 2.0f);
     sc::TickSurfaceCache(res, m_renderLoop.GetRenderSystem().GetGpuPassTimings());
 
     if (!ctx->startSurfaceCacheBench)

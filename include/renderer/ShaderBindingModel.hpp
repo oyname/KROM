@@ -93,7 +93,13 @@ struct TexSlots
     // in Forward+, so this is the first free register.
     static constexpr uint32_t ContactShadow    = 20u;
 
-    static constexpr uint32_t COUNT           = 21u;
+    // Indirect diffuse irradiance of the surface cache GI (surface cache add-on,
+    // opaque pass only; doc/PLAN_GI.md, package 4). RGBA16F in half resolution:
+    // rgb = irradiance E, a = linear view depth (negative where the cache had no
+    // cell and the far field filled in). Vulkan binding 16 + 21 = 37.
+    static constexpr uint32_t GlobalIllumination = 21u;
+
+    static constexpr uint32_t COUNT           = 22u;
 };
 
 // ---------------------------------------------------------------------------
@@ -160,7 +166,7 @@ struct BindingRegisterRanges
 
     static constexpr uint32_t ConstantBufferBase = 0u;
     static constexpr uint32_t ShaderResourceBase = 16u;
-    static constexpr uint32_t SamplerBase        = 40u; // Behind the 21 + 3 reserved texture bindings.
+    static constexpr uint32_t SamplerBase        = 40u; // Behind the 22 + 2 reserved texture bindings.
     static constexpr uint32_t UnorderedAccessBase= 48u;
     static constexpr uint32_t BufferSRVBase      = 64u;
 

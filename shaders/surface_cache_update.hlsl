@@ -7,9 +7,14 @@
 //   SC_KERNEL_REGISTER  camera rays on a jittered grid (one per scRegisterStep^2
 //                       pixels) insert their cells and append them to the
 //                       active list; new cells start with the probe/IBL value
+//   SC_KERNEL_PENDING   appends the cells last frame's cache rays hit outside
+//                       the view (pending list) to the active list (package 4)
 //   SC_KERNEL_TRACE     scRayBudget cosine rays from the active cells; shading
 //                       at the hit: emission + albedo / pi * (sun + lights +
-//                       cache of the hit cell); miss: far field
+//                       cache of the hit cell); miss: far field. A hit without a
+//                       cell inserts it; a hit cell not active this frame goes
+//                       to the pending list, so the cache also knows surfaces
+//                       outside the view (walls behind the camera)
 //   SC_KERNEL_RESOLVE   per active cell: mean of this frame's rays blended into
 //                       the stored irradiance (weight capped at scMaxSamples)
 //   SC_KERNEL_AGE       per slot: frees cells not registered for scMaxAge
@@ -19,7 +24,8 @@
 //
 // UAVs of the cache kernels: u0 keys, u1 cellA, u2 cellB, u3 cellFrame,
 // u4 accum (4 uint per slot: rgb sums, sample count), u5 active list,
-// u6 counters (SC_COUNTER_*; 16..31 hold the previous frame's values).
+// u6 counters (SC_COUNTER_*; 16..31 hold the previous frame's values),
+// u7 pending list (cells hit by cache rays, registered next frame).
 // =============================================================================
 
 #define SC_COUNTER_ACTIVE    0u
@@ -34,6 +40,8 @@
 #define SC_COUNTER_SUN_CSM   9u   // sun visibility taken from the cascades
 #define SC_COUNTER_SUN_RAYS  10u  // sun visibility from an occlusion ray
 #define SC_COUNTER_SUN_LIT   11u  // sum of the sun visibility of both, x 1000
+#define SC_COUNTER_PENDING   12u  // cells put on the pending list by cache rays
+#define SC_COUNTER_FROM_HITS 13u  // cells activated from the pending list
 #define SC_COUNTER_PREVIOUS  16u
 
 #if defined(SC_KERNEL_MATERIAL)
@@ -106,11 +114,33 @@ RWStructuredBuffer<uint>  gCellFrame  : register(u3);
 RWStructuredBuffer<uint>  gAccum      : register(u4);
 RWStructuredBuffer<uint>  gActiveList : register(u5);
 RWStructuredBuffer<uint>  gCounters   : register(u6);
+RWStructuredBuffer<uint>  gPending    : register(u7);
 
 KROM_BUFFER_SRV(StructuredBuffer<float4>, gMaterials,  10);   // 2 per material
 KROM_BUFFER_SRV(StructuredBuffer<float4>, gDirtyBoxes, 11);   // 2 per box: min, max
 
 SC_DEFINE_FIND(ScFind, gCellKeys)
+
+// Slot of the cell, inserted if missing; SC_NONE if the probing range is full.
+// inserted: true if this call created the key.
+uint ScFindOrInsert(ScKey k, out bool inserted)
+{
+    inserted = false;
+    [loop] for (uint i = 0u; i < SC_MAX_PROBE; ++i)
+    {
+        const uint slot = (k.start + i) & scCapacityMask;
+        uint previous;
+        InterlockedCompareExchange(gCellKeys[slot], 0u, k.key, previous);
+        if (previous == 0u)
+        {
+            inserted = true;
+            return slot;
+        }
+        if (previous == k.key)
+            return slot;
+    }
+    return SC_NONE;
+}
 
 #if defined(SC_KERNEL_BEGIN)
 
@@ -125,20 +155,6 @@ void main()
 }
 
 #elif defined(SC_KERNEL_REGISTER)
-
-// Slot of the cell, inserted if missing; SC_NONE if the probing range is full.
-uint ScFindOrInsert(ScKey k)
-{
-    [loop] for (uint i = 0u; i < SC_MAX_PROBE; ++i)
-    {
-        const uint slot = (k.start + i) & scCapacityMask;
-        uint previous;
-        InterlockedCompareExchange(gCellKeys[slot], 0u, k.key, previous);
-        if (previous == 0u || previous == k.key)
-            return slot;
-    }
-    return SC_NONE;
-}
 
 [numthreads(8, 8, 1)]
 void main(uint3 dtid : SV_DispatchThreadID)
@@ -169,7 +185,8 @@ void main(uint3 dtid : SV_DispatchThreadID)
         n = -n;
     const float3 p = origin + dir * hit.t;
 
-    const uint slot = ScFindOrInsert(ScMakeKey(p, n));
+    bool inserted;
+    const uint slot = ScFindOrInsert(ScMakeKey(p, n), inserted);
     uint previous;
     if (slot == SC_NONE)
     {
@@ -189,6 +206,29 @@ void main(uint3 dtid : SV_DispatchThreadID)
         gCellA[slot] = uint4(asuint(ScFarFieldIrradiance(p, n)), SC_START_WEIGHT);
         InterlockedAdd(gCounters[SC_COUNTER_NEW], 1u, previous);
     }
+}
+
+#elif defined(SC_KERNEL_PENDING)
+
+// Cells last frame's cache rays hit outside the view (count in the previous
+// counters, the begin kernel moved it there): active from this frame on,
+// unless a camera ray registered them already.
+[numthreads(64, 1, 1)]
+void main(uint3 dtid : SV_DispatchThreadID)
+{
+    if (dtid.x >= gCounters[SC_COUNTER_PREVIOUS + SC_COUNTER_PENDING] || dtid.x > scCapacityMask)
+        return;
+    const uint slot = gPending[dtid.x];
+    if (gCellKeys[slot] == 0u)
+        return;   // freed meanwhile
+    uint lastFrame;
+    InterlockedExchange(gCellFrame[slot], scFrame, lastFrame);
+    if (lastFrame == scFrame)
+        return;
+    uint index, previous;
+    InterlockedAdd(gCounters[SC_COUNTER_ACTIVE], 1u, index);
+    gActiveList[index] = slot;
+    InterlockedAdd(gCounters[SC_COUNTER_FROM_HITS], 1u, previous);
 }
 
 #elif defined(SC_KERNEL_TRACE)
@@ -274,14 +314,24 @@ float3 ScDirectIrradiance(float3 p, float3 n, inout uint seed, inout TraceStats 
 [numthreads(64, 1, 1)]
 void main(uint3 dtid : SV_DispatchThreadID)
 {
+    // Active list: the cells camera rays registered (first), then the cells
+    // activated from the pending list (outside the view, seen only through
+    // bounces): those get a quarter of the rays per cell and the budget that
+    // is left.
     const uint active = gCounters[SC_COUNTER_ACTIVE];
     if (active == 0u)
         return;
-    const uint total = min(scRayBudget, active * max(scMaxRaysPerCell, 1u));
-    if (dtid.x >= total)
+    const uint fromHits = min(gCounters[SC_COUNTER_FROM_HITS], active);
+    const uint onScreen = active - fromHits;
+    const uint raysPerCell = clamp(scMaxRaysPerCell, 1u, 255u);   // fixed-point headroom (SC_ACCUM_SCALE)
+    const uint onScreenRays = min(scRayBudget, onScreen * raysPerCell);
+    const uint hitRays = min(scRayBudget - onScreenRays, fromHits * max(raysPerCell / 4u, 1u));
+    if (dtid.x >= onScreenRays + hitRays)
         return;
     // More cells than rays: a different share of the cells every frame.
-    const uint listIndex = (dtid.x + scFrame * total) % active;
+    const uint listIndex = dtid.x < onScreenRays
+        ? (dtid.x + scFrame * onScreenRays) % onScreen
+        : onScreen + (dtid.x - onScreenRays + scFrame * hitRays) % fromHits;
     const uint slot = gActiveList[listIndex];
     const uint4 cell = gCellB[slot];
     const float3 origin = asfloat(cell.xyz);
@@ -310,9 +360,68 @@ void main(uint3 dtid : SV_DispatchThreadID)
             hn = -hn;
         const float3 hp = o + dir * hit.t;
         const float3 hpo = hp + hn * (2e-3f + 2e-4f * length(hp - cameraPositionWS.xyz));
-        // Next bounce from the cache (last frame's value), else the far field.
-        const uint hitSlot = ScFind(ScMakeKey(hp, hn));
-        const float3 indirect = hitSlot != SC_NONE ? asfloat(gCellA[hitSlot].xyz) : ScFarFieldIrradiance(hp, hn);
+        // Next bounce from the cache (last frame's value). Rays of cells on
+        // screen: a surface without a cell gets one (start value: the far
+        // field) and, like every hit cell not active this frame, goes to the
+        // pending list: next frame it gets rays of its own. Rays of cells that
+        // came from the pending list only look up (one step out of the view;
+        // otherwise chains of such cells spread through the scene and keep
+        // themselves alive inside closed meshes).
+        const bool fromScreen = listIndex < onScreen;
+        bool inserted = false;
+        const ScKey hitKey = ScMakeKey(hp, hn);
+        const uint hitSlot = fromScreen ? ScFindOrInsert(hitKey, inserted) : ScFind(hitKey);
+        float3 indirect;
+        if (hitSlot == SC_NONE)
+        {
+            // A surface the cache does not know: only its emission and direct
+            // light count, no further bounce. Never the far field: the ray hit
+            // geometry, and in an enclosed room the far field (sky, probes) is
+            // light from outside (biased dark rather than leaking light in).
+            // The far field stays only for a full probing range.
+            indirect = float3(0.0f, 0.0f, 0.0f);
+            uint full;
+            if (fromScreen)
+            {
+                indirect = ScFarFieldIrradiance(hp, hn);
+                InterlockedAdd(gCounters[SC_COUNTER_FULL], 1u, full);
+            }
+        }
+        else
+        {
+            if (inserted)
+            {
+                // Start value for the display until the cell's own rays arrive
+                // (weight 0); this ray takes no bounce from it, like a surface
+                // without a cell, so no sky enters an enclosed room this way.
+                indirect = float3(0.0f, 0.0f, 0.0f);
+                gCellA[hitSlot] = uint4(asuint(ScFarFieldIrradiance(hp, hn)), SC_START_WEIGHT);
+                gCellB[hitSlot] = uint4(asuint(hp), ScOctEncode(hn));
+                uint created;
+                InterlockedAdd(gCounters[SC_COUNTER_NEW], 1u, created);
+            }
+            else
+            {
+                // A cell without rays of its own yet (weight 0) holds only its
+                // start value, the far field: no bounce from it either.
+                const uint4 hitCell = gCellA[hitSlot];
+                indirect = hitCell.w > 0u ? asfloat(hitCell.xyz) : float3(0.0f, 0.0f, 0.0f);
+            }
+            // Stamped with this frame: stays alive while rays from the screen
+            // hit it, and is queued once per frame.
+            if (fromScreen)
+            {
+                uint lastFrame;
+                InterlockedExchange(gCellFrame[hitSlot], scFrame, lastFrame);
+                if (lastFrame != scFrame)
+                {
+                    uint index;
+                    InterlockedAdd(gCounters[SC_COUNTER_PENDING], 1u, index);
+                    if (index <= scCapacityMask)
+                        gPending[index] = hitSlot;
+                }
+            }
+        }
         radiance = emission + albedo * (1.0f / SC_PI) * (ScDirectIrradiance(hpo, hn, seed, stats) + indirect);
     }
     else
@@ -322,7 +431,7 @@ void main(uint3 dtid : SV_DispatchThreadID)
         radiance = ScFarFieldIrradiance(o + dir * min(tMax, 1e4f), dir) * (1.0f / SC_PI);
     }
     radiance = min(max(radiance, 0.0f), SC_MAX_RADIANCE);
-    const uint3 fixedPoint = (uint3)(radiance * SC_ACCUM_SCALE + 0.5f);
+    const uint3 fixedPoint = (uint3)(radiance * SC_ACCUM_SCALE + ScRandom(seed));   // dithered: unbiased
     uint previous;
     InterlockedAdd(gAccum[slot * 4u + 0u], fixedPoint.x, previous);
     InterlockedAdd(gAccum[slot * 4u + 1u], fixedPoint.y, previous);
@@ -351,7 +460,12 @@ void main(uint3 dtid : SV_DispatchThreadID)
     gAccum[slot * 4u + 3u] = 0u;
     const uint4 cell = gCellA[slot];
     const float3 old = asfloat(cell.xyz);
-    const uint weight = min(cell.w + samples, max(scMaxSamples, 1u));
+    // History: scMaxSamples, but at least SC_MIN_HISTORY_FRAMES frames of this
+    // cell's rays. The flicker of a resting image is set by the history in
+    // frames, not by the ray count: the cell's ray origin moves within the cell
+    // every frame (registration jitter), which more rays do not average out
+    // (measured: 32, 64 and 128 rays per cell gave the same noise floor).
+    const uint weight = min(cell.w + samples, max(max(scMaxSamples, 1u), samples * SC_MIN_HISTORY_FRAMES));
     const float alpha = min((float)samples / (float)weight, 1.0f);
     const float3 e = lerp(old, mean, alpha);
     gCellA[slot] = uint4(asuint(e), weight);

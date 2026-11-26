@@ -299,10 +299,16 @@ const char* const kCacheKernelHlsl[SurfaceCacheGpuResources::kCacheKernelCount] 
     "#define SC_KERNEL_RESOLVE 1\n#include \"surface_cache_update.hlsl\"\n",
     "#define SC_KERNEL_AGE 1\n#include \"surface_cache_update.hlsl\"\n",
     "#define SC_KERNEL_MATERIAL 1\n#include \"surface_cache_update.hlsl\"\n",
+    "#define SC_KERNEL_PENDING 1\n#include \"surface_cache_update.hlsl\"\n",
+};
+// Resolve for shading (package 4): [0] depth, [1] MSAA depth (sample 0).
+const char* const kApplyPsHlsl[2] = {
+    "#include \"surface_cache_apply.hlsl\"\n",
+    "#define SC_APPLY_MSAA 1\n#include \"surface_cache_apply.hlsl\"\n",
 };
 const char* const kCacheKernelNames[SurfaceCacheGpuResources::kCacheKernelCount] = {
     "surface_cache_begin.cs", "surface_cache_register.cs", "surface_cache_raytrace.cs",
-    "surface_cache_resolve.cs", "surface_cache_age.cs", "surface_cache_material.cs",
+    "surface_cache_resolve.cs", "surface_cache_age.cs", "surface_cache_material.cs", "surface_cache_pending.cs",
 };
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -320,8 +326,11 @@ constexpr uint32_t         kOverlayKeysSlot   = 12u;
 constexpr uint32_t         kOverlayCellASlot  = 13u;
 constexpr uint32_t         kMaterialsSlot     = 10u; // BufSRV slots of the cache kernels
 constexpr uint32_t         kDirtyBoxesSlot    = 11u;
-constexpr uint32_t         kGridUavCount      = 7u;
+constexpr uint32_t         kGridUavCount      = 8u;
 constexpr std::string_view kShadowMapResource = "ShadowMap";
+constexpr uint32_t         kApplyKeysSlot     = 12u; // BufSRV slots of the resolve for shading
+constexpr uint32_t         kApplyCellASlot    = 13u;
+constexpr uint32_t         kApplyCellBSlot    = 14u;
 
 struct float4Value { float v[4]; };
 
@@ -387,6 +396,25 @@ PipelineHandle OverlayPipeline(IDevice& device, SurfaceCacheGpuResources& res, F
     const PipelineHandle pipeline = device.CreatePipeline(desc);
     res.overlayPipelines.emplace(key, pipeline);
     return pipeline;
+}
+
+// Resolve for shading: half-resolution RGBA16F target, no depth attachment.
+PipelineHandle ApplyPipeline(IDevice& device, ShaderHandle vs, ShaderHandle ps, const char* debugName)
+{
+    if (!vs.IsValid() || !ps.IsValid())
+        return PipelineHandle::Invalid();
+    PipelineDesc desc{};
+    desc.shaderStages.push_back({ vs, ShaderStageMask::Vertex });
+    desc.shaderStages.push_back({ ps, ShaderStageMask::Fragment });
+    desc.topology                 = PrimitiveTopology::TriangleList;
+    desc.colorFormat              = Format::RGBA16_FLOAT;
+    desc.depthFormat              = Format::Unknown;
+    desc.sampleCount              = 1u;
+    desc.rasterizer.cullMode      = CullMode::None;
+    desc.depthStencil.depthEnable = false;
+    desc.depthStencil.depthWrite  = false;
+    desc.debugName                = debugName;
+    return device.CreatePipeline(desc);
 }
 
 BufferHandle NextConstants(IDevice& device, SurfaceCacheGpuResources& res, const void* data, size_t size)
@@ -478,7 +506,8 @@ bool BenchDispatching(const SurfaceCacheBench& bench) noexcept
 
 bool DebugTraceWanted(const SurfaceCacheGpuResources& res) noexcept
 {
-    return res.settings.debugView != SurfaceCacheDebugView::None && res.settings.overlay > 0.0f;
+    return res.settings.debugView != SurfaceCacheDebugView::None && !IsShadedDebugView(res.settings.debugView) &&
+           res.settings.overlay > 0.0f;
 }
 
 // ─── Radiance cache: grid buffers ───────────────────────────────────────────
@@ -511,6 +540,7 @@ void ClearGrid(IDevice& device, SurfaceCacheGrid& g)
     device.UploadBufferData(g.cellFrame, zeros.data(), n * 4u);
     device.UploadBufferData(g.accum, zeros.data(), n * 16u);
     device.UploadBufferData(g.activeList, zeros.data(), n * 4u);
+    device.UploadBufferData(g.pending, zeros.data(), n * 4u);
     device.UploadBufferData(g.counters, zeros.data(), SurfaceCacheGrid::kCounterWords * 4u);
     g.frame = 0u;
     g.pendingBoxes.clear();
@@ -529,6 +559,7 @@ bool EnsureGrid(IDevice& device, SurfaceCacheGrid& g)
               CreateGridBuffer(device, g.cellFrame, n, 4u, "SurfaceCache_CellFrame") &&
               CreateGridBuffer(device, g.accum, n * 4u, 4u, "SurfaceCache_Accum") &&
               CreateGridBuffer(device, g.activeList, n, 4u, "SurfaceCache_ActiveList") &&
+              CreateGridBuffer(device, g.pending, n, 4u, "SurfaceCache_Pending") &&
               CreateGridBuffer(device, g.counters, SurfaceCacheGrid::kCounterWords, 4u, "SurfaceCache_Counters");
     if (ok)
     {
@@ -551,8 +582,34 @@ bool EnsureGrid(IDevice& device, SurfaceCacheGrid& g)
     ClearGrid(device, g);
     g.ready = true;
     Debug::Log("SurfaceCachePass.cpp: radiance cache created (%u cells, %.1f MB)", SurfaceCacheGrid::kCapacity,
-               static_cast<double>(n * (4u + 16u + 16u + 4u + 16u + 4u)) / (1024.0 * 1024.0));
+               static_cast<double>(n * (4u + 16u + 16u + 4u + 16u + 4u + 4u)) / (1024.0 * 1024.0));
     return true;
+}
+
+// Far field of ScFarFieldIrradiance (surface_cache_common.hlsl): IBL irradiance
+// (needs the sampler) and the local probes. Returns kSurfaceCacheFlag* bits.
+uint32_t BindFarField(ICommandList& cmd, const FrameGraphRuntimeBindings& bindings, ShaderStageMask stage)
+{
+    uint32_t flags = 0u;
+    if (bindings.material.shaderRuntime)
+    {
+        const EnvironmentRuntimeState& env = bindings.material.shaderRuntime->GetEnvironmentState();
+        if (env.active && env.irradiance.IsValid())
+        {
+            cmd.SetShaderResource(TexSlots::IBLIrradiance, env.irradiance, stage);
+            flags |= kSurfaceCacheFlagIbl;
+        }
+    }
+    cmd.SetSampler(SamplerSlots::LinearClamp, SamplerSlots::LinearClamp, stage);
+    if (const auto* scene = bindings.scene.frameData.GetFrameData<forward::ForwardSceneBindings>())
+        for (uint32_t i = 0u; i < scene->textureCount; ++i)
+            if (scene->textures[i].slot == TexSlots::FeatureTexture && scene->textures[i].texture.IsValid())
+            {
+                cmd.TransitionResource(scene->textures[i].texture, ResourceState::Unknown, ResourceState::ShaderRead);
+                cmd.SetShaderResource(TexSlots::FeatureTexture, scene->textures[i].texture, stage);
+                flags |= kSurfaceCacheFlagProbes;
+            }
+    return flags;
 }
 
 // Everything the cache kernels read and write, bound for one executor.
@@ -567,7 +624,7 @@ CacheBinding BindCache(const rendergraph::RGExecContext& ec, SurfaceCacheGpuReso
     ICommandList& cmd = *ec.cmd;
     SurfaceCacheGrid& g = world.grid;
     CacheBinding b{};
-    const BufferHandle uavs[kGridUavCount] = { g.keys, g.cellA, g.cellB, g.cellFrame, g.accum, g.activeList, g.counters };
+    const BufferHandle uavs[kGridUavCount] = { g.keys, g.cellA, g.cellB, g.cellFrame, g.accum, g.activeList, g.counters, g.pending };
     for (const BufferHandle uav : uavs)
         cmd.TransitionResource(uav, ResourceState::ShaderRead, ResourceState::UnorderedAccess);
     for (uint32_t i = 0u; i < kGridUavCount; ++i)
@@ -578,26 +635,7 @@ CacheBinding BindCache(const rendergraph::RGExecContext& ec, SurfaceCacheGpuReso
     cmd.SetShaderResource(2u, world.gpu.blasTriangles, ShaderStageMask::Compute);
     cmd.SetShaderResource(3u, world.gpu.instances, ShaderStageMask::Compute);
     cmd.SetShaderResource(kMaterialsSlot, res.materials.buffer, ShaderStageMask::Compute);
-
-    // Far field: IBL irradiance (needs the sampler) and the local probes.
-    if (bindings.material.shaderRuntime)
-    {
-        const EnvironmentRuntimeState& env = bindings.material.shaderRuntime->GetEnvironmentState();
-        if (env.active && env.irradiance.IsValid())
-        {
-            cmd.SetShaderResource(TexSlots::IBLIrradiance, env.irradiance, ShaderStageMask::Compute);
-            b.flags |= kSurfaceCacheFlagIbl;
-        }
-    }
-    cmd.SetSampler(SamplerSlots::LinearClamp, SamplerSlots::LinearClamp, ShaderStageMask::Compute);
-    if (const auto* scene = bindings.scene.frameData.GetFrameData<forward::ForwardSceneBindings>())
-        for (uint32_t i = 0u; i < scene->textureCount; ++i)
-            if (scene->textures[i].slot == TexSlots::FeatureTexture && scene->textures[i].texture.IsValid())
-            {
-                cmd.TransitionResource(scene->textures[i].texture, ResourceState::Unknown, ResourceState::ShaderRead);
-                cmd.SetShaderResource(TexSlots::FeatureTexture, scene->textures[i].texture, ShaderStageMask::Compute);
-                b.flags |= kSurfaceCacheFlagProbes;
-            }
+    b.flags |= BindFarField(cmd, bindings, ShaderStageMask::Compute);
     if (withShadowMap && res.settings.useCascades)
     {
         const TextureHandle shadow = ec.GetTexture(FindResourceId(ec, kShadowMapResource));
@@ -620,7 +658,7 @@ void UnbindCache(const rendergraph::RGExecContext& ec, SurfaceCacheWorldState& w
         cmd.SetShaderResource(slot, BufferHandle::Invalid(), ShaderStageMask::Compute);
     for (uint32_t slot : { TexSlots::ShadowMap, TexSlots::IBLIrradiance, TexSlots::FeatureTexture })
         cmd.SetShaderResource(slot, TextureHandle::Invalid(), ShaderStageMask::Compute);
-    const BufferHandle uavs[kGridUavCount] = { g.keys, g.cellA, g.cellB, g.cellFrame, g.accum, g.activeList, g.counters };
+    const BufferHandle uavs[kGridUavCount] = { g.keys, g.cellA, g.cellB, g.cellFrame, g.accum, g.activeList, g.counters, g.pending };
     for (const BufferHandle uav : uavs)
         cmd.TransitionResource(uav, ResourceState::UnorderedAccess, ResourceState::ShaderRead);
 }
@@ -794,6 +832,8 @@ void ExecuteCacheStep(const rendergraph::RGExecContext& ec, SurfaceCacheGpuResou
         const uint32_t gridW = (width + c.registerStep - 1u) / c.registerStep;
         const uint32_t gridH = (height + c.registerStep - 1u) / c.registerStep;
         DispatchCache(ec, res, SurfaceCacheGpuResources::kRegister, c, Groups(gridW), Groups(gridH));
+        // Cells last frame's cache rays hit outside the view.
+        DispatchCache(ec, res, SurfaceCacheGpuResources::kPending, c, LinearGroups(SurfaceCacheGrid::kCapacity));
         break;
     }
     case CacheStep::Trace:
@@ -909,7 +949,13 @@ bool EnsureSurfaceCachePrograms(IDevice& device, SurfaceCacheGpuResources& res)
     res.vsFullscreen = CompileShader(device, target, assets::ShaderStage::Vertex,   kFullscreenVsHlsl, "surface_cache_fullscreen.vs");
     res.psOverlay    = CompileShader(device, target, assets::ShaderStage::Fragment, kOverlayPsHlsl,    "surface_cache_overlay.ps");
     res.traceCompute = CreateComputePipeline(device, res.csTrace, "SurfaceCacheTrace_Pipeline");
-    bool cacheReady = true;
+    static const char* const kApplyNames[2] = { "surface_cache_apply.ps", "surface_cache_apply_ms.ps" };
+    for (uint32_t i = 0u; i < 2u; ++i)
+    {
+        res.psApply[i] = CompileShader(device, target, assets::ShaderStage::Fragment, kApplyPsHlsl[i], kApplyNames[i]);
+        res.applyPipelines[i] = ApplyPipeline(device, res.vsFullscreen, res.psApply[i], kApplyNames[i]);
+    }
+    bool cacheReady = res.applyPipelines[0].IsValid() && res.applyPipelines[1].IsValid();
     for (uint32_t k = 0u; k < SurfaceCacheGpuResources::kCacheKernelCount; ++k)
     {
         res.cacheShaders[k] = CompileShader(device, target, assets::ShaderStage::Compute, kCacheKernelHlsl[k], kCacheKernelNames[k]);
@@ -953,7 +999,7 @@ bool EnsureSurfaceCachePrograms(IDevice& device, SurfaceCacheGpuResources& res)
 
 void ReleaseSurfaceCacheGrid(IDevice& device, SurfaceCacheGrid& g)
 {
-    for (BufferHandle* b : { &g.keys, &g.cellA, &g.cellB, &g.cellFrame, &g.accum, &g.activeList, &g.counters, &g.readback })
+    for (BufferHandle* b : { &g.keys, &g.cellA, &g.cellB, &g.cellFrame, &g.accum, &g.activeList, &g.pending, &g.counters, &g.readback })
         if (b->IsValid())
         {
             device.DestroyBuffer(*b);
@@ -995,6 +1041,11 @@ void ReleaseSurfaceCacheGpu(IDevice& device, SurfaceCacheGpuResources& res)
     }
     destroyBuffer(res.materials.buffer);
     res.materials = SurfaceCacheMaterialTable{};
+    for (uint32_t i = 0u; i < 2u; ++i)
+    {
+        if (res.applyPipelines[i].IsValid()) { device.DestroyPipeline(res.applyPipelines[i]); res.applyPipelines[i] = {}; }
+        if (res.psApply[i].IsValid())        { device.DestroyShader(res.psApply[i]);          res.psApply[i] = {}; }
+    }
     if (res.traceCompute.IsValid()) { device.DestroyPipeline(res.traceCompute); res.traceCompute = {}; }
     if (res.csTrace.IsValid())      { device.DestroyShader(res.csTrace);        res.csTrace = {}; }
     if (res.vsFullscreen.IsValid()) { device.DestroyShader(res.vsFullscreen);   res.vsFullscreen = {}; }
@@ -1024,6 +1075,8 @@ uint64_t SurfaceCacheStructureRevision(const SurfaceCacheGpuResources& res) noex
         revision |= 4u;
     if (DebugTraceWanted(res))
         revision |= 8u;
+    if (res.settings.apply)
+        revision |= 16u;
     return revision;
 }
 
@@ -1032,7 +1085,8 @@ uint64_t SurfaceCacheStructureRevision(const SurfaceCacheGpuResources& res) noex
 bool SurfaceCacheComputePass::DeclaresResource(std::string_view name) const noexcept
 {
     return m_resources && SurfaceCacheStructureRevision(*m_resources) != 0u &&
-           (name == kDoneResource || name.substr(0, std::string_view(kTokenPrefix).size()) == kTokenPrefix);
+           (name == kDoneResource || name == kSurfaceCacheGiResource ||
+            name.substr(0, std::string_view(kTokenPrefix).size()) == kTokenPrefix);
 }
 
 uint64_t SurfaceCacheComputePass::GetStructureRevision() const noexcept
@@ -1158,6 +1212,72 @@ void SurfaceCacheComputePass::BuildPass(const PassBuildContext& ctx) const
                 }
             });
     }
+
+    if (m_resources->settings.apply && ctx.frame.enableDepthPrepass)
+        BuildApplyPass(ctx, jobs.size() == 3u ? std::string(kDoneResource) : std::string(kTokenPrefix) + "2");
+}
+
+// Resolve for shading (package 4): after the cache steps of this frame, before
+// the opaque pass, which reads the result on TexSlots::GlobalIllumination.
+void SurfaceCacheComputePass::BuildApplyPass(const PassBuildContext& ctx, const std::string& resolveToken) const
+{
+    const uint32_t w = std::max(ctx.frame.viewportWidth, 1u);
+    const uint32_t h = std::max(ctx.frame.viewportHeight, 1u);
+    const uint32_t halfW = (w + 1u) / 2u;
+    const uint32_t halfH = (h + 1u) / 2u;
+    const bool msaa = ctx.frame.msaaSamples > 1u;
+    ctx.recipe.resources.push_back(FrameRecipeResourceDesc{ std::string(kSurfaceCacheGiResource), false, halfW, halfH,
+                                                            Format::RGBA16_FLOAT, RGResourceKind::ColorTexture });
+    FrameRecipePassDesc pass{};
+    pass.name = "SurfaceCacheApply";
+    pass.executorName = std::string(kExecPrefix) + "apply";
+    pass.accesses.push_back({ resolveToken, FrameRecipeAccessKind::ReadTexture });
+    pass.accesses.push_back({ StandardFrameRecipeBuilder::kOpaqueDepthResource, FrameRecipeAccessKind::ReadDepthStencil });
+    pass.accesses.push_back({ std::string(kSurfaceCacheGiResource), FrameRecipeAccessKind::WriteRenderTarget });
+    pass.renderPass.enabled = true;
+    pass.renderPass.targetResourceName = std::string(kSurfaceCacheGiResource);
+    pass.renderPass.viewportWidth = halfW;
+    pass.renderPass.viewportHeight = halfH;
+    // Cleared to 0 (= sky, not applied) in case the executor has nothing to draw.
+    pass.renderPass.clearColor = true;
+    ctx.recipe.passes.push_back(std::move(pass));
+    ctx.recipe.opaqueInputs.push_back({ std::string(kSurfaceCacheGiResource), TexSlots::GlobalIllumination });
+
+    auto res = m_resources;
+    auto bindings = ctx.frame.runtimeBindings;
+    ctx.callbacks.Register(std::string(kExecPrefix) + "apply",
+        [res, bindings, w, h, msaa](const rendergraph::RGExecContext& ec)
+        {
+            if (!ec.cmd || !ec.device || !res || !res->programsReady || !bindings ||
+                !bindings->resources.perFrameCB.IsValid())
+                return;
+            const auto* frame = bindings->scene.frameData.GetFrameData<SurfaceCacheFrameData>();
+            if (!frame || !frame->world || !frame->world->grid.ready)
+                return;
+            const TextureHandle depth = ec.GetTexture(FindResourceId(ec, StandardFrameRecipeBuilder::kOpaqueDepthResource));
+            const PipelineHandle pipeline = res->applyPipelines[msaa ? 1u : 0u];
+            if (!depth.IsValid() || !pipeline.IsValid())
+                return;
+            ICommandList& cmd = *ec.cmd;
+            const SurfaceCacheGrid& g = frame->world->grid;
+            const uint32_t flags = BindFarField(cmd, *bindings, ShaderStageMask::Fragment);
+            const SurfaceCacheConstants c = MakeCacheConstants(*res, *frame->world, w, h, flags);
+            const BufferHandle cb = NextConstants(*ec.device, *res, &c, sizeof(c));
+            if (!cb.IsValid())
+                return;
+            cmd.SetPipeline(pipeline);
+            cmd.SetConstantBuffer(CBSlots::PerFrame, bindings->resources.perFrameCB, ShaderStageMask::Vertex | ShaderStageMask::Fragment);
+            cmd.SetConstantBuffer(CBSlots::PerPass, cb, ShaderStageMask::Fragment);
+            cmd.SetShaderResource(TexSlots::PassSRV0, depth, ShaderStageMask::Fragment);
+            cmd.SetShaderResource(kApplyKeysSlot, g.keys, ShaderStageMask::Fragment);
+            cmd.SetShaderResource(kApplyCellASlot, g.cellA, ShaderStageMask::Fragment);
+            cmd.SetShaderResource(kApplyCellBSlot, g.cellB, ShaderStageMask::Fragment);
+            cmd.Draw(3u, 1u, 0u, 0u);
+            for (uint32_t slot : { kApplyKeysSlot, kApplyCellASlot, kApplyCellBSlot })
+                cmd.SetShaderResource(slot, BufferHandle::Invalid(), ShaderStageMask::Fragment);
+            for (uint32_t slot : { TexSlots::PassSRV0, TexSlots::IBLIrradiance, TexSlots::FeatureTexture })
+                cmd.SetShaderResource(slot, TextureHandle::Invalid(), ShaderStageMask::Fragment);
+        });
 }
 
 // ─── SurfaceCacheOverlayPass ─────────────────────────────────────────────────
@@ -1200,7 +1320,7 @@ void SurfaceCacheOverlayPass::BuildPass(const PassBuildContext& ctx) const
             if (!ec.cmd || !ec.device || !res || !res->programsReady || !bindings || !res->primary.IsValid())
                 return;
             const SurfaceCacheSettings& s = res->settings;
-            if (s.debugView == SurfaceCacheDebugView::None || s.overlay <= 0.0f)
+            if (s.debugView == SurfaceCacheDebugView::None || IsShadedDebugView(s.debugView) || s.overlay <= 0.0f)
                 return;
             const auto* frame = bindings->scene.frameData.GetFrameData<SurfaceCacheFrameData>();
             if (!frame || !frame->world || !bindings->resources.perFrameCB.IsValid())

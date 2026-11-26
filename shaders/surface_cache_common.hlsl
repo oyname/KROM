@@ -61,7 +61,7 @@ cbuffer PerFrame : register(b0)
     uint         shadowLightCount;
     uint         shadowViewCount;
     float2       _shadowArrayPad;
-    float4       featureParams[8];
+    float4       featureParams[9];
 };
 
 // Dispatch constants of every cache kernel and the overlay (SurfaceCacheConstants).
@@ -100,10 +100,20 @@ static const uint  SC_NONE        = 0xFFFFFFFFu;
 static const uint  SC_MAX_PROBE   = 16u;          // linear probing steps
 static const uint  SC_MAX_LEVEL   = 15u;
 static const float SC_PI          = 3.14159265358979323846f;
-static const float SC_ACCUM_SCALE = 1024.0f;      // fixed point of the radiance sums
+// Fixed point of the radiance sums (uint atomics). 2^16 with dithered rounding:
+// with 1024 and +0.5 a dark cell kept itself lit (E = 0.003 gave a radiance of
+// 0.5/1024 per sample, rounded up to 1/1024, which is E = pi/1024 again).
+// Headroom: SC_MAX_RADIANCE * 2^16 = 2^24 per sample, so at most 255 samples
+// per cell and frame (the trace kernel caps the rays per cell).
+static const float SC_ACCUM_SCALE = 65536.0f;
 static const float SC_MAX_RADIANCE = 256.0f;      // per sample (fireflies)
-static const uint  SC_START_WEIGHT = 4u;          // weight of the probe start value
+// Weight of the probe/IBL start value of a new cell: 0, so the first rays of
+// the cell replace it completely. With a weight it stayed in the running mean
+// (4 of 100 samples = 4 % sky after 100 rays), and in an enclosed room every
+// cell that came into view brought some of the sky in.
+static const uint  SC_START_WEIGHT = 0u;
 static const uint  SC_DIRTY_WEIGHT = 2u;          // weight left in a changed region
+static const uint  SC_MIN_HISTORY_FRAMES = 16u;   // history in frames of a cell's rays (at least); sets the noise floor
 
 uint ScPcg(uint v)
 {
@@ -176,11 +186,11 @@ struct ScKey
     uint key;     // stored key, never 0
 };
 
-ScKey ScMakeKey(float3 p, float3 n)
+// Key of the cell q (integer cell coordinate) of a level and normal bucket.
+// The resolve of package 4 uses it for the neighbours of a pixel's cell.
+ScKey ScMakeKeyAt(int3 q, uint level, uint bucket)
 {
-    const uint level = ScLevel(p);
-    const int3 q = (int3)floor(p / ScCellSizeOfLevel(level));
-    const uint tag = level * 8u + ScNormalBucket(n);
+    const uint tag = level * 8u + bucket;
     ScKey k;
     k.start = ScPcg(asuint(q.x) + ScPcg(asuint(q.y) + ScPcg(asuint(q.z) + ScPcg(tag))));
     uint h = ScPcg(tag ^ 0x68E31DA4u);
@@ -189,6 +199,12 @@ ScKey ScMakeKey(float3 p, float3 n)
     h = ScPcg(h ^ asuint(q.x) * 0x85EBCA6Bu);
     k.key = max(h, 1u);
     return k;
+}
+
+ScKey ScMakeKey(float3 p, float3 n)
+{
+    const uint level = ScLevel(p);
+    return ScMakeKeyAt((int3)floor(p / ScCellSizeOfLevel(level)), level, ScNormalBucket(n));
 }
 
 // Slot of an existing cell or SC_NONE. Works on RW and read-only key buffers.

@@ -2372,7 +2372,10 @@ struct EditorLoadingSmokeTest final : IAppScene
     // package 2). KROM_PERF_SCENE=<name> picks the scene; KROM_GI_BENCH_DRAGONS=<n> hides
     // every mesh of it (in memory only) and places n dragon prefabs on a grid instead.
     // Order: wait for shaders, switch GI on, wait for the BVH, GPU/CPU check, captures
-    // of the debug view (PPM, when captureDir is given), measuring run, close.
+    // of the debug view and of the shaded image with and without GI (PPM, when
+    // captureDir is given), measuring run with GI in the PBR shaders, cascades
+    // against occlusion rays, measuring run without GI (opaque pass for
+    // comparison), switched off, close.
     bool giBench = false;
     std::filesystem::path giCaptureDir;
     int giStage = 0;
@@ -2381,6 +2384,7 @@ struct EditorLoadingSmokeTest final : IAppScene
     uint32_t giUploads = 0u;
     float giMeanCascades = 0.f;
     float giLitCascades = 0.f;
+    double giApplyOpaqueMs = 0.0;
 
     bool UpdateGiBench(AppSceneContext& context)
     {
@@ -2429,6 +2433,19 @@ struct EditorLoadingSmokeTest final : IAppScene
                 camera.pitchDeg = std::asin(direction.y) * math::RAD_TO_DEG;
                 giLabel += "+" + std::to_string(count) + "dragons";
             }
+            // KROM_GI_BENCH_CAMERA="px,py,pz,tx,ty,tz": camera at p looking at t.
+            if (const char* cam = std::getenv("KROM_GI_BENCH_CAMERA"))
+            {
+                float v[6] = {};
+                if (std::sscanf(cam, "%f,%f,%f,%f,%f,%f", &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) == 6)
+                {
+                    auto& camera = state.editorCamera;
+                    camera.position = math::Vec3{ v[0], v[1], v[2] };
+                    const math::Vec3 direction = (math::Vec3{ v[3], v[4], v[5] } - camera.position).Normalized();
+                    camera.yawDeg = std::atan2(-direction.x, -direction.z) * math::RAD_TO_DEG;
+                    camera.pitchDeg = std::asin(direction.y) * math::RAD_TO_DEG;
+                }
+            }
             state.surfaceCacheEnabled = true;
             state.surfaceCacheDebugView = 1u;
             state.surfaceCacheOverlay = 0.f;
@@ -2467,7 +2484,8 @@ struct EditorLoadingSmokeTest final : IAppScene
                 // geometry): the BVH must not have been uploaded again.
                 std::printf("GIBENCH uploads while the scene rested: %u\n", res.lastUploads - giUploads);
                 Check(res.lastUploads == giUploads, "GI bench: resting scene causes no BVH upload");
-                giStage = 6;
+                // KROM_GI_BENCH_CAPTURE_ONLY=1: captures only (no edits, no measuring).
+                giStage = (std::getenv("KROM_GI_BENCH_CAPTURE_ONLY") && !giCaptureDir.empty()) ? 3 : 6;
                 giWait = 0;
             }
             else if (giWait > 600)
@@ -2476,26 +2494,37 @@ struct EditorLoadingSmokeTest final : IAppScene
                 close();
             }
             break;
-        case 3:   // captures: scene, normals, 50 % blend, instances, node heat map
+        case 3:   // captures: scene with and without GI, debug views, shaded GI views
         {
-            struct Shot { const char* file; uint32_t view; float overlay; };
-            static const Shot shots[] = { { "gi_scene.ppm", 1u, 0.f }, { "gi_normal.ppm", 1u, 1.f },
-                                          { "gi_blend.ppm", 1u, 0.5f }, { "gi_instance.ppm", 3u, 1.f },
-                                          { "gi_nodes.ppm", 4u, 1.f }, { "gi_distance.ppm", 2u, 1.f },
-                                          { "gi_cells.ppm", 5u, 1.f }, { "gi_irradiance.ppm", 6u, 1.f },
-                                          { "gi_samples.ppm", 7u, 1.f } };
-            const int shot = giWait / 10;
-            const int phase = giWait % 10;
+            struct Shot { const char* file; uint32_t view; float overlay; bool apply; };
+            static const Shot shots[] = { { "gi_scene.ppm", 1u, 0.f, true }, { "gi_scene_without_gi.ppm", 1u, 0.f, false },
+                                          { "gi_normal.ppm", 1u, 1.f, true },
+                                          { "gi_blend.ppm", 1u, 0.5f, true }, { "gi_instance.ppm", 3u, 1.f, true },
+                                          { "gi_nodes.ppm", 4u, 1.f, true }, { "gi_distance.ppm", 2u, 1.f, true },
+                                          { "gi_cells.ppm", 5u, 1.f, true }, { "gi_irradiance.ppm", 6u, 1.f, true },
+                                          { "gi_samples.ppm", 7u, 1.f, true }, { "gi_shaded_irradiance.ppm", 8u, 0.f, true },
+                                          { "gi_shaded_indirect.ppm", 9u, 0.f, true },
+                                          { "gi_shaded_indirect_without_gi.ppm", 9u, 0.f, false },
+                                          { "gi_shaded_coverage.ppm", 10u, 0.f, true },
+                                          { "gi_shaded_specular.ppm", 11u, 0.f, true } };
+            // 30 frames per shot: switching GI on or off rebuilds the frame graph.
+            const int shot = giWait / 30;
+            const int phase = giWait % 30;
             if (shot >= static_cast<int>(std::size(shots)))
             {
                 state.surfaceCacheOverlay = 0.f;
+                state.surfaceCacheDebugView = 1u;
+                state.surfaceCacheApply = true;
                 giStage = 4;
                 giWait = 0;
+                if (std::getenv("KROM_GI_BENCH_CAPTURE_ONLY"))
+                    close();
                 break;
             }
             state.surfaceCacheDebugView = shots[shot].view;
             state.surfaceCacheOverlay = shots[shot].overlay;
-            if (phase == 9)
+            state.surfaceCacheApply = shots[shot].apply;
+            if (phase == 29)
             {
                 auto* device = context.renderLoop.GetRenderSystem().GetDevice();
                 const TextureHandle texture = device->GetRenderTargetColorTexture(app.m_sceneView.rt);
@@ -2534,6 +2563,11 @@ struct EditorLoadingSmokeTest final : IAppScene
                 Check(!res.bench.results.empty(), "GI bench produced results");
                 const sc::SurfaceCacheCounters counters = sc::SurfaceCacheLastCounters(res);
                 Check(counters.occupied > 0u && counters.full == 0u, "GI bench: radiance cache filled, no full probing range");
+                std::printf("GIBENCH shading with GI: apply %.3f ms, opaque pass %.3f ms\n", res.bench.resultApplyMs,
+                            res.bench.resultOpaqueMs);
+                if (context.renderLoop.GetRenderSystem().GetGpuPassTimings().supported)
+                    Check(res.bench.resultApplyMs > 0.0, "GI bench: the resolve for shading ran");
+                giApplyOpaqueMs = res.bench.resultOpaqueMs;
                 giMeanCascades = counters.meanRadiance;
                 giLitCascades = counters.sunLit;
                 std::printf("GIBENCH sun lookups: cascades %u, rays %u\n", counters.sunFromCascades, counters.sunRays);
@@ -2610,7 +2644,8 @@ struct EditorLoadingSmokeTest final : IAppScene
                 const float diff = std::fabs(rays - giMeanCascades) / std::max(std::max(rays, giMeanCascades), 1e-6f);
                 std::printf("GIBENCH sun visibility: cascades meanL=%.4f, occlusion rays meanL=%.4f, difference %.1f %%\n",
                             giMeanCascades, rays, 100.0f * diff);
-                Check(diff < 0.1f, "GI bench: cascades and occlusion rays agree");
+                // Relative in lit scenes; in a dark one (closed room) both are about 0.
+                Check(diff < 0.1f || std::fabs(rays - giMeanCascades) < 0.002f, "GI bench: cascades and occlusion rays agree");
                 std::printf("GIBENCH sunlit share of the shaded hits: cascades %.3f, occlusion rays %.3f\n",
                             giLitCascades, rayCounters.sunLit);
                 // Far away the coarse cascades lose fine self-shadowing (as in the PBR
@@ -2618,10 +2653,34 @@ struct EditorLoadingSmokeTest final : IAppScene
                 Check(std::fabs(giLitCascades - rayCounters.sunLit) < 0.15f, "GI bench: sunlit share agrees");
                 res.settings.useCascades = true;
                 std::fflush(stdout);
+                // The same run without GI in the PBR shaders: cost of the opaque pass.
+                state.surfaceCacheApply = false;
+                giStage = 10;
+                giWait = 0;
+            }
+            break;
+        case 10:   // wait for the frame graph without the resolve, then measure
+            if (giWait == 30)
+                sc::StartSurfaceCacheBench(res, BackendDisplayName(app.m_config.backend), giLabel + "+withoutGI");
+            if (giWait > 30 && !sc::SurfaceCacheBenchRunning(res))
+            {
+                for (const std::string& line : res.bench.results)
+                    if (line.find("GI cache bench") != std::string::npos)
+                        std::printf("GIBENCH %s\n", line.c_str());
+                std::printf("GIBENCH opaque pass: with GI %.3f ms, without GI %.3f ms, difference %.3f ms\n",
+                            giApplyOpaqueMs, res.bench.resultOpaqueMs, giApplyOpaqueMs - res.bench.resultOpaqueMs);
+                Check(res.bench.resultApplyMs == 0.0, "GI bench: without GI no resolve for shading");
+                std::fflush(stdout);
+                state.surfaceCacheApply = true;
                 // Switching it off must give everything back.
                 state.surfaceCacheEnabled = false;
                 giStage = 8;
                 giWait = 0;
+            }
+            else if (giWait > 3000)
+            {
+                Check(false, "GI bench without GI finished");
+                close();
             }
             break;
         case 8:   // off: no GPU objects left

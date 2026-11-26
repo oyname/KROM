@@ -80,11 +80,17 @@ float KromCsmLoadCompare(int2 texel, int2 texelMin, int2 texelMax, float cmpDept
 }
 
 // Directional shadow of lights[lightIndex] at positionWS. inside = false when the
-// light has no cascades or the point lies outside all of them (then 1 is
-// returned and the caller may trace an occlusion ray instead).
+// light has no cascades, the point lies outside all of them or outside the
+// camera frustum (then 1 is returned and the caller may trace an occlusion ray
+// instead). The cascades are fitted to the frustum and the cascade choice
+// clamps the view depth to the near plane: a point behind the camera or far
+// beside it would land in a cascade whose shadow map need not hold its casters.
 float KromCsmVisibilityLoad(float3 positionWS, float3 normalWS, float3 toLight, uint lightIndex, out bool inside)
 {
     inside = false;
+    const float4 clip = mul(viewProjMatrix, float4(positionWS, 1.0f));
+    if (clip.w <= nearPlane || any(abs(clip.xy) > clip.w))
+        return 1.0f;
     const float texelSize = max(shadowTexelSize, 1e-8f);
     const float atlasSize = 1.0f / texelSize;
     [loop]

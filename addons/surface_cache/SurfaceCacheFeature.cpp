@@ -5,6 +5,7 @@
 #include "core/Debug.hpp"
 #include "renderer/IDevice.hpp"
 #include "renderer/RenderExtractionContext.hpp"
+#include "renderer/RenderFrameConstants.hpp"
 #include "renderer/RenderFrameTypes.hpp"
 #include <algorithm>
 #include <array>
@@ -189,6 +190,42 @@ private:
     mutable std::vector<collision::GpuBvhInstance> m_scratch;
 };
 
+// featureParams[8] (pbr_gi.hlsl): the PBR shaders take the GI texture only
+// when this view's cache exists and the resolve for shading runs.
+class SurfaceCacheFrameConstantsContributor final : public IFrameConstantsContributor
+{
+public:
+    explicit SurfaceCacheFrameConstantsContributor(std::shared_ptr<SurfaceCacheGpuResources> resources)
+        : m_resources(std::move(resources)) {}
+
+    std::string_view GetName() const noexcept override { return "krom-surface-cache-constants"; }
+
+    void Contribute(const FrameConstantsContributionContext& ctx, FrameConstants& fc) const override
+    {
+        SurfaceCacheFrameParams params{};
+        const SurfaceCacheGpuResources* res = m_resources.get();
+        if (res && res->settings.enabled && res->supported && ctx.view.enableDepthPrepass)
+        {
+            const SurfaceCacheSettings& s = res->settings;
+            // The shaded debug views also show where GI is not applied (switched off: blue).
+            if (IsShadedDebugView(s.debugView))
+                params.debugView = static_cast<uint32_t>(s.debugView) -
+                                   static_cast<uint32_t>(SurfaceCacheDebugView::ShadedIrradiance) + 1u;
+            const auto* frame = ctx.GetFrameData<SurfaceCacheFrameData>();
+            if (s.apply && res->programsReady && frame && frame->world && frame->world->grid.ready)
+            {
+                params.flags = kSurfaceCacheShadeFlagEnabled;
+                params.strength = std::clamp(s.strength, 0.0f, 4.0f);
+                params.depthTolerance = std::clamp(s.depthTolerance, 0.001f, 1.0f);
+            }
+        }
+        WriteFrameParameterBlock(fc, kSurfaceCacheFrameParameterBlock, params);
+    }
+
+private:
+    std::shared_ptr<SurfaceCacheGpuResources> m_resources;
+};
+
 class SurfaceCacheFeature final : public IEngineFeature
 {
 public:
@@ -197,6 +234,7 @@ public:
         , m_extraction(std::make_shared<SurfaceCacheExtractionStep>(m_resources))
         , m_compute(std::make_shared<SurfaceCacheComputePass>(m_resources))
         , m_overlay(std::make_shared<SurfaceCacheOverlayPass>(m_resources))
+        , m_constants(std::make_shared<SurfaceCacheFrameConstantsContributor>(m_resources))
     {}
 
     std::string_view GetName() const noexcept override { return "krom-surface-cache"; }
@@ -207,6 +245,10 @@ public:
         context.RegisterSceneExtractionStep(m_extraction);
         context.RegisterPassContributor(m_compute);
         context.RegisterPassContributor(m_overlay);
+        if (context.RegisterFrameParameterBlock(kSurfaceCacheFrameParameterBlock))
+            context.RegisterFrameConstantsContributor(m_constants);
+        else
+            Debug::LogError("SurfaceCacheFeature.cpp: featureParams[8] taken, GI cannot reach the PBR shaders");
     }
 
     bool Initialize(const FeatureInitializationContext& context) override
@@ -234,6 +276,7 @@ private:
     std::shared_ptr<SurfaceCacheExtractionStep> m_extraction;
     std::shared_ptr<SurfaceCacheComputePass>    m_compute;
     std::shared_ptr<SurfaceCacheOverlayPass>    m_overlay;
+    std::shared_ptr<SurfaceCacheFrameConstantsContributor> m_constants;
 };
 
 const char* KindName(SurfaceCacheRayKind kind) noexcept
@@ -260,6 +303,8 @@ void FinishCacheBench(SurfaceCacheGpuResources& res)
         totalMs += ms[i];
     }
     const SurfaceCacheCounters counters = SurfaceCacheLastCounters(res);
+    bench.resultApplyMs = ms[3];
+    bench.resultOpaqueMs = bench.opaqueSamples > 0u ? bench.opaqueSumMs / bench.opaqueSamples : 0.0;
     // Noise floor: median change over the second half of the run (the cells keep
     // changing a little with every frame's new rays). Settled: first readback
     // frame from which the change stays below 1.5 x that floor.
@@ -284,13 +329,14 @@ void FinishCacheBench(SurfaceCacheGpuResources& res)
             settled = -1;
     }
     const SurfaceCacheSettings& s = res.settings;
-    char line[700];
+    char line[900];
     std::snprintf(line, sizeof(line),
         "SurfaceCacheFeature.cpp: GI cache bench backend=%s scene=%s budget=%u rayLength=%.0fm register=%.3fms "
-        "trace=%.3fms resolve=%.3fms total=%.3fms history=%u active=%u occupied=%u rays=%u sunCsm=%u sunRays=%u full=%u change=%.2f%% meanL=%.4f "
+        "trace=%.3fms resolve=%.3fms apply=%.3fms total=%.3fms opaque=%.3fms shade=%s history=%u active=%u fromHits=%u occupied=%u rays=%u sunCsm=%u sunRays=%u full=%u change=%.2f%% meanL=%.4f "
         "noiseFloor=%.2f%% settled=%d (cache frame from which the change stays below 1.5 x the noise floor)",
-        bench.backend.c_str(), bench.label.c_str(), s.rayBudget, s.rayLength, ms[0], ms[1], ms[2], totalMs, s.maxSamples,
-        counters.active, counters.occupied, counters.rays, counters.sunFromCascades, counters.sunRays, counters.full,
+        bench.backend.c_str(), bench.label.c_str(), s.rayBudget, s.rayLength, ms[0], ms[1], ms[2], ms[3], totalMs,
+        bench.resultOpaqueMs, s.apply ? "gi" : "probe/ibl", s.maxSamples,
+        counters.active, counters.fromHits, counters.occupied, counters.rays, counters.sunFromCascades, counters.sunRays, counters.full,
         100.0f * counters.change, counters.meanRadiance, 100.0f * floor, settled);
     bench.results.emplace_back(line);
     Debug::Log("%s", line);
@@ -519,6 +565,7 @@ void TickSurfaceCache(SurfaceCacheGpuResources& res, const GpuPassTimingReport& 
                 c.sunLit = words[9] + words[10] > 0u
                     ? static_cast<float>(words[11]) / (1000.0f * static_cast<float>(words[9] + words[10])) : 0.0f;
                 c.meanRadiance = words[7] > 0u ? static_cast<float>(words[8]) / (1000.0f * static_cast<float>(words[7])) : 0.0f;
+                c.fromHits = words[13];
                 g.lastCountersFrame = g.readbackFrameOfCopy;
                 if ((res.bench.state == SurfaceCacheBench::State::Warmup ||
                      res.bench.state == SurfaceCacheBench::State::Measuring) && res.bench.cacheTimeline.size() < 256u)
@@ -559,6 +606,13 @@ void TickSurfaceCache(SurfaceCacheGpuResources& res, const GpuPassTimingReport& 
                     ++bench.cacheSamples[i];
                     break;
                 }
+        for (const GpuPassTiming& timing : report.passes)
+            if (timing.name == "MainOpaquePass" && timing.ms > 0.0f)
+            {
+                bench.opaqueSumMs += timing.ms;
+                ++bench.opaqueSamples;
+                break;
+            }
         bench.instances = res.lastInstances;
         bench.triangles = res.lastTriangles;
         if (++bench.frame >= SurfaceCacheBench::kFrames)
