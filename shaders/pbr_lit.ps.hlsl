@@ -479,10 +479,16 @@ float SampleShadowAtlas(float4 positionLightCS, float biasValue, float strengthV
         const bool insideAtlas =
             localUv.x >= 0.0f && localUv.x <= 1.0f &&
             localUv.y >= 0.0f && localUv.y <= 1.0f &&
-            depth > 0.0f && depth < 1.0f;
+            depth > 0.0f;
 
         if (insideAtlas)
         {
+            // A receiver beyond the far plane of the shadow view (further from the
+            // light than its shadow distance) is compared just in front of that
+            // plane: casters inside the shadow distance still shadow it, an empty
+            // texel (cleared to 1) leaves it lit. Treated as lit outright, light
+            // passed through every wall behind the shadow distance.
+            depth = min(depth, 0.9999f);
             float2 atlasUv = atlasRect.xy + localUv * atlasRect.zw;
             // Set by the caller (gKromShadowGradient), see KromShadowGradientFor.
             float2 dDepth_dUV = gKromShadowGradient;
