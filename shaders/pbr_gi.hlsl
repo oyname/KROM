@@ -2,7 +2,7 @@
 // KROM Engine - shaders/pbr_gi.hlsl
 // Surface cache GI in the PBR shaders (doc/PLAN_GI.md, package 4).
 //
-// The surface cache add-on resolves its radiance cache into a half-resolution
+// The surface cache add-on resolves its radiance cache into a full- or half-resolution
 // texture (shaders/surface_cache_apply.hlsl) on TexSlots::GlobalIllumination:
 // rgb = indirect diffuse irradiance E, a = linear view depth (negative where
 // the far field filled in, 0 for the sky). KromSampleGI upsamples it at the
@@ -44,12 +44,44 @@ bool KromSampleGI(float2 pixelPos, float3 positionWS, out float3 irradiance, out
         return false;
     uint w, h;
     giIrradianceTex.GetDimensions(w, h);
-    const uint2 expected = (uint2(screenSize.xy) + 1u) / 2u;
-    if (w != expected.x || h != expected.y || w == 0u || h == 0u)
+    const uint2 full = uint2(screenSize.xy);
+    const uint2 expected = (full + 1u) / 2u;
+    const bool fullResolution = w == full.x && h == full.y;
+    if ((!fullResolution && (w != expected.x || h != expected.y)) || w == 0u || h == 0u)
         return false;
 
     const float depth = max(dot(positionWS - cameraPositionWS.xyz, normalize(cameraForwardWS.xyz)), 1e-4f);
     const float tolerance = max(giDepthTolerance, 1e-3f) * depth;
+    if (fullResolution)
+    {
+        // The texture holds this pixel. Only where its depth belongs to another
+        // surface (an MSAA edge: the resolve saw sample 0) the closest of the
+        // four neighbours in depth takes over.
+        const int2 q = clamp(int2(pixelPos), int2(0, 0), int2(w, h) - 1);
+        float4 best = giIrradianceTex.Load(int3(q, 0));
+        float bestDiff = best.a != 0.0f ? abs(abs(best.a) - depth) : 1e30f;
+        if (bestDiff > 0.25f * tolerance)
+        {
+            [unroll] for (uint k = 0u; k < 4u; ++k)
+            {
+                const int2 o = int2(k == 0u ? -1 : (k == 1u ? 1 : 0), k == 2u ? -1 : (k == 3u ? 1 : 0));
+                const float4 t = giIrradianceTex.Load(int3(clamp(q + o, int2(0, 0), int2(w, h) - 1), 0));
+                if (t.a == 0.0f)
+                    continue;
+                const float diff = abs(abs(t.a) - depth);
+                if (diff < bestDiff)
+                {
+                    bestDiff = diff;
+                    best = t;
+                }
+            }
+        }
+        if (bestDiff >= 1e30f)
+            return false;
+        irradiance = best.rgb;
+        coverage = best.a > 0.0f ? 1.0f : 0.0f;
+        return true;
+    }
     const float2 p = pixelPos * 0.5f - 0.5f;
     const float2 baseF = floor(p);
     const int2 base = int2(baseF);

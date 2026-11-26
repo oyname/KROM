@@ -1224,8 +1224,9 @@ void SurfaceCacheComputePass::BuildApplyPass(const PassBuildContext& ctx, const 
 {
     const uint32_t w = std::max(ctx.frame.viewportWidth, 1u);
     const uint32_t h = std::max(ctx.frame.viewportHeight, 1u);
-    const uint32_t halfW = (w + 1u) / 2u;
-    const uint32_t halfH = (h + 1u) / 2u;
+    const bool half = m_resources->settings.applyHalfResolution;
+    const uint32_t halfW = half ? (w + 1u) / 2u : w;
+    const uint32_t halfH = half ? (h + 1u) / 2u : h;
     const bool msaa = ctx.frame.msaaSamples > 1u;
     ctx.recipe.resources.push_back(FrameRecipeResourceDesc{ std::string(kSurfaceCacheGiResource), false, halfW, halfH,
                                                             Format::RGBA16_FLOAT, RGResourceKind::ColorTexture });
@@ -1247,7 +1248,7 @@ void SurfaceCacheComputePass::BuildApplyPass(const PassBuildContext& ctx, const 
     auto res = m_resources;
     auto bindings = ctx.frame.runtimeBindings;
     ctx.callbacks.Register(std::string(kExecPrefix) + "apply",
-        [res, bindings, w, h, msaa](const rendergraph::RGExecContext& ec)
+        [res, bindings, w, h, msaa, half](const rendergraph::RGExecContext& ec)
         {
             if (!ec.cmd || !ec.device || !res || !res->programsReady || !bindings ||
                 !bindings->resources.perFrameCB.IsValid())
@@ -1261,7 +1262,8 @@ void SurfaceCacheComputePass::BuildApplyPass(const PassBuildContext& ctx, const 
                 return;
             ICommandList& cmd = *ec.cmd;
             const SurfaceCacheGrid& g = frame->world->grid;
-            const uint32_t flags = BindFarField(cmd, *bindings, ShaderStageMask::Fragment);
+            const uint32_t flags = BindFarField(cmd, *bindings, ShaderStageMask::Fragment) |
+                                   (half ? kSurfaceCacheFlagApplyHalf : 0u);
             const SurfaceCacheConstants c = MakeCacheConstants(*res, *frame->world, w, h, flags);
             const BufferHandle cb = NextConstants(*ec.device, *res, &c, sizeof(c));
             if (!cb.IsValid())

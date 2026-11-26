@@ -70,6 +70,10 @@ struct SurfaceCacheSettings
     bool     apply          = true;     // the PBR shaders take the cache as indirect diffuse light
     float    strength       = 1.0f;     // 0 = probe/IBL only, 1 = GI, > 1 exaggerates the difference
     float    depthTolerance = 0.1f;     // upsampling: relative view-depth difference still taken
+    // The resolve for shading in half resolution: a quarter of its cost, but the
+    // upsampling assigns 2 x 2 pixel blocks to the wrong surface along edges
+    // (frayed silhouettes, steps in room corners).
+    bool     applyHalfResolution = false;
 };
 
 // The debug views the PBR shaders draw themselves (giDebugView, pbr_gi.hlsl).
@@ -123,6 +127,7 @@ static_assert(sizeof(SurfaceCacheConstants) == 112u, "SurfaceCacheConstants layo
 inline constexpr uint32_t kSurfaceCacheFlagIbl       = 1u << 0u;
 inline constexpr uint32_t kSurfaceCacheFlagShadowMap = 1u << 1u;
 inline constexpr uint32_t kSurfaceCacheFlagProbes    = 1u << 2u;
+inline constexpr uint32_t kSurfaceCacheFlagApplyHalf = 1u << 3u;   // resolve for shading in half resolution
 
 // Counters of the cache kernels (SC_COUNTER_*, shaders/surface_cache_update.hlsl).
 struct SurfaceCacheCounters

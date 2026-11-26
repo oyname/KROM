@@ -1,7 +1,7 @@
 // =============================================================================
 // KROM Engine - shaders/surface_cache_apply.hlsl
 // Resolve of the radiance cache for shading (doc/PLAN_GI.md, package 4): a
-// fullscreen pass in half resolution between the depth prepass and the opaque
+// fullscreen pass (full resolution, or half with SC_FLAG_APPLY_HALF) between the depth prepass and the opaque
 // pass. Per pixel it looks up the cells around the visible surface and writes
 // the indirect diffuse irradiance for the PBR shaders (TexSlots::GlobalIllumination,
 // read by shaders/pbr_gi.hlsl).
@@ -105,21 +105,30 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
 #endif
     gDepthSize = int2(w, h);
 
-    // Nearest of the 2 x 2 full-resolution pixels.
+    // Full resolution: the pixel itself. Half resolution: the nearest of the
+    // 2 x 2 full-resolution pixels.
     const int2 q = int2(pos.xy);
-    int2 pixel = q * 2;
+    int2 pixel = q;
     float depth = 1.0f;
-    [unroll] for (uint i = 0u; i < 4u; ++i)
+    if ((scFlags & SC_FLAG_APPLY_HALF) != 0u)
     {
-        const int2 candidate = q * 2 + int2(i & 1u, i >> 1u);
-        if (any(candidate >= gDepthSize))
-            continue;
-        const float d = ScApplyLoadDepth(candidate);
-        if (d < depth)
+        pixel = q * 2;
+        [unroll] for (uint i = 0u; i < 4u; ++i)
         {
-            depth = d;
-            pixel = candidate;
+            const int2 candidate = q * 2 + int2(i & 1u, i >> 1u);
+            if (any(candidate >= gDepthSize))
+                continue;
+            const float d = ScApplyLoadDepth(candidate);
+            if (d < depth)
+            {
+                depth = d;
+                pixel = candidate;
+            }
         }
+    }
+    else
+    {
+        depth = ScApplyLoadDepth(pixel);
     }
     if (depth >= 1.0f)
         return float4(0.0f, 0.0f, 0.0f, 0.0f);   // sky

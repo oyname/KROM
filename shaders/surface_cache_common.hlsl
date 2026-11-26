@@ -95,6 +95,7 @@ cbuffer SurfaceCacheParams : register(b3)
 static const uint SC_FLAG_IBL        = 1u << 0;   // tIBLIrradiance is bound
 static const uint SC_FLAG_SHADOW_MAP = 1u << 1;   // shadowMap holds this frame's cascades
 static const uint SC_FLAG_PROBES     = 1u << 2;   // tFeatureTexture holds the local probes
+static const uint SC_FLAG_APPLY_HALF = 1u << 3;   // resolve for shading in half resolution
 
 static const uint  SC_NONE        = 0xFFFFFFFFu;
 static const uint  SC_MAX_PROBE   = 16u;          // linear probing steps
