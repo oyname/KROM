@@ -1904,10 +1904,12 @@ static void DrawPostProcessVolumeSection(EditorFrameContext& ctx, EntityID entit
     wheel(O::GradingGamma, "grading.gamma", "grading.gamma_tip", "ppv.gamma", g.gamma);
     wheel(O::GradingGain, "grading.gain", "grading.gain_tip", "ppv.gain", g.gain);
 
-    // ── Effects (intensity only; on/off stays in the project settings) ──
+    // ── Effects (on/off stays in the project settings) ──
     ImGui::SeparatorText(Translate("ppv.effects"));
     row(O::BloomIntensity, "ppv.bloom_intensity", "ppv.bloom_intensity_tip",
         [&] { slider("ppv.bloom", &volume->bloomIntensity, 0.f, 1.f, "%.2f"); });
+    row(O::BloomThreshold, "ppv.bloom_threshold", "ppv.bloom_threshold_tip",
+        [&] { slider("ppv.bloom_threshold", &volume->bloomThreshold, 0.f, 8.f, "%.2f"); });
     row(O::GtaoIntensity, "ppv.gtao_intensity", "ppv.gtao_intensity_tip",
         [&] { slider("ppv.gtao", &volume->gtaoIntensity, 0.f, 2.f, "%.2f"); });
     row(O::SsrIntensity, "ppv.ssr_intensity", "ppv.ssr_intensity_tip",

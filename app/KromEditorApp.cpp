@@ -1832,7 +1832,6 @@ std::filesystem::path ResolveLegacyEditorScenePath()
 
 // Bloom strength the editor configures in the forward feature (base of the
 // post-process volumes).
-[[maybe_unused]] constexpr float kEditorBloomIntensity = 0.12f;
 
 // Position the post-process volumes are evaluated at: the main camera (else the
 // first camera) during play, the editor camera otherwise.
@@ -3807,7 +3806,8 @@ int KromEditorApp::Run(IAppScene& scene)
             // stored values (m_editorState, project settings) stay unchanged.
             engine::addons::postprocess::PostProcessValues ppBase;
             ppBase.tonemap = m_editorState.tonemap;
-            ppBase.bloomIntensity = kEditorBloomIntensity;
+            ppBase.bloomIntensity = m_projectSettings.rendering.bloomIntensity;
+            ppBase.bloomThreshold = m_projectSettings.rendering.bloomThreshold;
             ppBase.gtaoIntensity = m_editorState.gtaoSettings.intensity;
             ppBase.ssrIntensity = m_editorState.ssrIntensity;
             ppBase.contactShadowIntensity = m_projectSettings.rendering.contactShadowIntensity;
@@ -3816,7 +3816,8 @@ int KromEditorApp::Run(IAppScene& scene)
                       *m_world, PostProcessViewPosition(*m_world, m_playActive, m_editorState.editorCamera.position), ppBase)
                 : ppBase;
             *m_tonemapSettings = pp.tonemap;
-            m_tonemapSettings->bloomIntensity = pp.bloomIntensity;
+            m_tonemapSettings->bloomIntensity = m_projectSettings.rendering.bloomEnabled ? pp.bloomIntensity : 0.0f;
+            m_tonemapSettings->bloomThreshold = pp.bloomThreshold;
             if (m_contactShadowResources)
                 m_contactShadowResources->settings.intensity = pp.contactShadowIntensity;
             m_msaaSettings->sampleCount = m_editorState.msaaSamples;

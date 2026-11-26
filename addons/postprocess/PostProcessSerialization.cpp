@@ -37,6 +37,7 @@ void WritePostProcessVolumeFields(serialization::JsonWriter& w, const PostProces
     // Same object as the scene's colour grading; not written when neutral.
     renderer::addons::forward::WriteSceneColorGradingJson(w, c.grading);
     w.WriteFloat("bloomIntensity", c.bloomIntensity);
+    w.WriteFloat("bloomThreshold", c.bloomThreshold);
     w.WriteFloat("gtaoIntensity", c.gtaoIntensity);
     w.WriteFloat("ssrIntensity", c.ssrIntensity);
     w.WriteFloat("contactShadowIntensity", c.contactShadowIntensity);
@@ -72,6 +73,7 @@ PostProcessVolumeComponent ReadPostProcessVolumeFields(const serialization::Json
     readFloat("autoExposureMaxEv", c.autoExposureMaxEv);
     renderer::addons::forward::ReadSceneColorGradingJson(v, c.grading);
     readFloat("bloomIntensity", c.bloomIntensity);
+    readFloat("bloomThreshold", c.bloomThreshold);
     readFloat("gtaoIntensity", c.gtaoIntensity);
     readFloat("ssrIntensity", c.ssrIntensity);
     readFloat("contactShadowIntensity", c.contactShadowIntensity);
@@ -85,6 +87,7 @@ PostProcessVolumeComponent ReadPostProcessVolumeFields(const serialization::Json
     c.autoExposureMinEv = std::clamp(c.autoExposureMinEv, kMinExposureEv, kMaxExposureEv);
     c.autoExposureMaxEv = std::clamp(c.autoExposureMaxEv, c.autoExposureMinEv, kMaxExposureEv);
     c.bloomIntensity = std::clamp(c.bloomIntensity, 0.f, 4.f);
+    c.bloomThreshold = std::clamp(c.bloomThreshold, 0.f, 16.f);
     c.gtaoIntensity = std::clamp(c.gtaoIntensity, 0.f, 2.f);
     c.ssrIntensity = std::clamp(c.ssrIntensity, 0.f, 1.f);
     c.contactShadowIntensity = std::clamp(c.contactShadowIntensity, 0.f, 1.f);
