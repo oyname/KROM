@@ -430,8 +430,10 @@ void main(uint3 dtid : SV_DispatchThreadID)
             {
                 // A cell without rays of its own yet (weight 0) holds only its
                 // start value, the far field: no bounce from it either.
-                const uint4 hitCell = gCellA[hitSlot];
-                indirect = hitCell.w > 0u ? asfloat(hitCell.xyz) : float3(0.0f, 0.0f, 0.0f);
+                // The bounce value (SC_ACCUM_BOUNCE), not the long mean.
+                indirect = gCellA[hitSlot].w > 0u
+                    ? ScUnpackRgb9e5(gAccum[hitSlot * SC_ACCUM_WORDS + SC_ACCUM_BOUNCE])
+                    : float3(0.0f, 0.0f, 0.0f);
             }
             // Stamped with this frame: stays alive while rays from the screen
             // hit it, and is queued once per frame.
@@ -545,6 +547,11 @@ void main(uint3 dtid : SV_DispatchThreadID)
             weight = (uint)lerp((float)weight, (float)min(weight, shortCap), changed);
         }
     }
+    // What the cache rays read as the next bounce: a mean over a few frames.
+    const float3 bounce = cell.w > 0u
+        ? lerp(ScUnpackRgb9e5(gAccum[a + SC_ACCUM_BOUNCE]), mean, 1.0f / (float)SC_BOUNCE_FRAMES)
+        : mean;
+    gAccum[a + SC_ACCUM_BOUNCE] = ScPackRgb9e5(bounce);
     gAccum[a + 4u] = asuint(sumAbove);
     gAccum[a + 5u] = asuint(sumBelow);
     gAccum[a + 7u] = asuint(power);

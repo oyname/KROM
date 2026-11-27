@@ -2484,6 +2484,32 @@ struct EditorLoadingSmokeTest final : IAppScene
             }
             std::printf("; stays above 90%% from frame %d\n", reached90);
         }
+        if (std::string_view(fc.name) == "open_close" && flickerTimeline.size() > static_cast<size_t>(kFlickerStepAt) + 40u)
+        {
+            const char* openEnv = std::getenv("KROM_GI_FLICKER_OPEN");
+            const size_t openFrames = static_cast<size_t>(openEnv ? std::max(1, std::atoi(openEnv)) : 120);
+            const size_t closeAt = std::min(static_cast<size_t>(kFlickerStepAt) + openFrames, flickerTimeline.size() - 1u);
+            double before = 0.0;
+            for (size_t i = 0; i < static_cast<size_t>(kFlickerStepAt); ++i)
+                before += flickerTimeline[i];
+            before /= static_cast<double>(kFlickerStepAt);
+            const float open = flickerTimeline[closeAt > 0u ? closeAt - 1u : 0u];
+            std::printf("GIFLICKER open_close meanLuma shut=%.2f open(after %zu frames)=%.2f; n frames after shutting again:",
+                        before, openFrames, open);
+            int dark = -1;
+            for (size_t i = closeAt; i < flickerTimeline.size(); ++i)
+            {
+                const int n = static_cast<int>(i - closeAt);
+                if (n == 1 || n == 4 || n == 16 || n == 64 || n == 128 || n == 256 || n == 512 || n == 1024 || n == 2048 || n == 4096)
+                    std::printf(" %d:%.2f", n, flickerTimeline[i]);
+                // Dark again: within a tenth of the step of the shut value, for good.
+                if (flickerTimeline[i] > before + 0.1 * (open - before))
+                    dark = -1;
+                else if (dark < 0)
+                    dark = n;
+            }
+            std::printf("; within 10 %% of the shut value from frame %d\n", dark);
+        }
         if (std::string_view(fc.name) == "cache_reset" && flickerTimeline.size() > static_cast<size_t>(kFlickerStepAt) + 40u)
         {
             double end = 0.0;
@@ -2842,6 +2868,10 @@ struct EditorLoadingSmokeTest final : IAppScene
                 { "light_step",      false, true,  true,  true,  true,  0u, 1u, 0.f },
                 { "cache_reset",     false, true,  true,  true,  true,  0u, 1u, 0.f },
                 { "light_step_gi",   false, true,  true,  true,  true,  0u, 8u, 0.f },
+                // KROM_GI_FLICKER_TOGGLE=<entity name>: that entity is switched off after
+                // kFlickerStepAt frames and on again KROM_GI_FLICKER_OPEN frames later (a
+                // wall of a sealed room: light comes in, then the room is shut again).
+                { "open_close",      false, true,  true,  true,  true,  0u, 8u, 0.f },
             };
             const auto wanted = [](const char* name) {
                 const char* filter = std::getenv("KROM_GI_FLICKER_CASES");
@@ -2925,6 +2955,28 @@ struct EditorLoadingSmokeTest final : IAppScene
                 app.m_world->View<LightComponent>([](EntityID, LightComponent& light) {
                     light.intensity *= 3.f;
                 });
+            if (std::string_view(fc.name) == "open_close")
+            {
+                const char* toggle = std::getenv("KROM_GI_FLICKER_TOGGLE");
+                const char* openEnv = std::getenv("KROM_GI_FLICKER_OPEN");
+                const int openFrames = openEnv ? std::max(1, std::atoi(openEnv)) : 120;
+                const bool off = flickerCaptured == kFlickerStepAt;
+                const bool on = flickerCaptured == kFlickerStepAt + openFrames;
+                if (toggle && (off || on))
+                {
+                    bool found = false;
+                    app.m_world->ForEachAlive([&](EntityID e) {
+                        const auto* name = app.m_world->Get<NameComponent>(e);
+                        auto* active = app.m_world->Get<ActiveComponent>(e);
+                        if (name && active && name->name == toggle)
+                        {
+                            active->active = on;
+                            found = true;
+                        }
+                    });
+                    Check(found, "GI flicker: entity to toggle found");
+                }
+            }
             const bool resetCase = std::string_view(fc.name) == "cache_reset";
             if (resetCase && flickerCaptured == kFlickerStepAt)
             {
