@@ -14,6 +14,7 @@
 #include "addons/editor/EditorScriptAssets.hpp"
 #include "addons/editor/EditorTheme.hpp"
 #include "addons/editor/EditorIcons.hpp"
+#include "addons/editor/EditorPreferences.hpp"
 
 #ifdef KROM_EDITOR_HAS_IMGUI
 
@@ -1604,6 +1605,35 @@ bool IsParticleEffectPrefabJson(const std::string& json)
 
 namespace {
 
+// Tile size in the content panel, changed with Ctrl + mouse wheel.
+float& AssetTileScale()
+{
+    static float scale = GetEditorPreferences().assetIconScale;
+    return scale;
+}
+
+float AssetThumbSize() { return std::floor(72.f * AssetTileScale()); }
+// Room for the label under the picture; the text keeps its size.
+float AssetTileWidth() { return AssetThumbSize() + 32.f; }
+float AssetTileHeight() { return AssetThumbSize() + 28.f; }
+float AssetTileStride() { return AssetTileWidth() + 8.f; }
+
+void UpdateAssetTileScale()
+{
+    const ImGuiIO& io = ImGui::GetIO();
+    float& scale = AssetTileScale();
+    if (io.KeyCtrl && io.MouseWheel != 0.f && ImGui::IsWindowHovered(ImGuiHoveredFlags_ChildWindows))
+        scale = std::clamp(scale * std::pow(1.1f, io.MouseWheel), kAssetIconScaleMin, kAssetIconScaleMax);
+    // Written once the gesture ends, not on every wheel step.
+    if (!io.KeyCtrl && scale != GetEditorPreferences().assetIconScale)
+    {
+        EditorPreferences preferences = GetEditorPreferences();
+        preferences.assetIconScale = scale;
+        if (!SaveEditorPreferences(preferences))
+            scale = GetEditorPreferences().assetIconScale;
+    }
+}
+
 void DrawAssetTileSelectionFrame(ImDrawList* drawList, const ImVec2& min, const ImVec2& max)
 {
     drawList->AddRect(min, max, IM_COL32(160, 200, 245, 255), 0.f, 0, 2.f);
@@ -1616,9 +1646,9 @@ bool DrawAssetPreviewTile(AssetBrowserState& browser,
                           const char* iconGlyph = nullptr,
                           const char* labelOverride = nullptr)
 {
-    constexpr float kThumbSize = 72.f;
-    constexpr float kLabelWidth = 104.f;
-    constexpr float kTileHeight = 100.f;
+    const float kThumbSize = AssetThumbSize();
+    const float kLabelWidth = AssetTileWidth();
+    const float kTileHeight = AssetTileHeight();
 
     // Assets shown as a plain symbol do not need a rendered thumbnail.
     AssetBrowserState::AssetPreviewThumbnail* thumb =
@@ -1648,7 +1678,7 @@ bool DrawAssetPreviewTile(AssetBrowserState& browser,
         drawList->AddRectFilled(previewMin, previewMax, IM_COL32(48, 52, 56, 255));
         if (iconGlyph)
         {
-            DrawIcon(drawList, iconGlyph, ImVec2(previewMin.x + kThumbSize * 0.5f, previewMin.y + kThumbSize * 0.5f), 38.f,
+            DrawIcon(drawList, iconGlyph, ImVec2(previewMin.x + kThumbSize * 0.5f, previewMin.y + kThumbSize * 0.5f), 38.f * AssetTileScale(),
                      ImGui::GetColorU32(ImGuiCol_Text));
             fallbackText = "";
         }
@@ -1735,8 +1765,8 @@ ImVec2& ModelClipBadgeMax() { static ImVec2 value; return value; }
 // Clip count in the top right corner of the model tile drawn last; true when clicked.
 bool DrawModelClipBadge(size_t count, bool expanded)
 {
-    constexpr float kThumbSize = 72.f;
-    constexpr float kLabelWidth = 104.f;
+    const float kThumbSize = AssetThumbSize();
+    const float kLabelWidth = AssetTileWidth();
     const ImVec2 itemMin = ImGui::GetItemRectMin();
     const bool tileHovered = ImGui::IsItemHovered();
     const std::string text = std::string(expanded ? "< " : "") + std::to_string(count) + " " + ICON_LC_VIDEO;
@@ -1758,8 +1788,8 @@ void DrawTextureAssetTile(EditorFrameContext& ctx,
                           AssetBrowserState& browser,
                           const std::filesystem::path& path)
 {
-    constexpr float kThumbSize = 72.f;
-    constexpr float kTileWidth = 104.f;
+    const float kThumbSize = AssetThumbSize();
+    const float kTileWidth = AssetTileWidth();
 
     ImGui::PushID(PathToUtf8(path).c_str());
 
@@ -2092,7 +2122,7 @@ static void DrawFolderGlyph(AssetBrowserState& browser, const ImVec2& min, float
 // Kachel-Zeilenumbruch im Inhaltsbereich: SameLine solange die Zeile Platz hat
 static void BeginTileInRow(float& rowUsed, float rowAvail)
 {
-    constexpr float kTileStride = 112.f;
+    const float kTileStride = AssetTileStride();
     if (rowUsed > 0.f && rowUsed + kTileStride <= rowAvail)
         ImGui::SameLine();
     else
@@ -2109,9 +2139,9 @@ static bool DrawIconTile(AssetBrowserState& browser,
                          const char* fallbackText,
                          const std::function<void(const ImVec2&, float)>& drawFallback = {}, bool* activated = nullptr)
 {
-    constexpr float kThumbSize = 72.f;
-    constexpr float kLabelWidth = 104.f;
-    constexpr float kTileHeight = 100.f;
+    const float kThumbSize = AssetThumbSize();
+    const float kLabelWidth = AssetTileWidth();
+    const float kTileHeight = AssetTileHeight();
     constexpr float kInset = 6.f;
 
     const bool pressed = ImGui::InvisibleButton("##icon_tile", ImVec2(kLabelWidth, kTileHeight));
@@ -2579,6 +2609,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
     // Rechte Spalte: Dateiinhalt
     ImGui::BeginChild("##content_panel", ImVec2(0.f, 0.f), ImGuiChildFlags_None);
+    UpdateAssetTileScale();
 
     if (ImGui::BeginPopupContextWindow("AssetBrowserContext##editor", ImGuiPopupFlags_MouseButtonRight))
     {
@@ -2862,7 +2893,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
     }
 
     float materialTileRowUsed = 0.f;
-    const float assetTileWidth = 112.f;
+    const float assetTileWidth = AssetTileStride();
     const float assetTileAvail = std::max(ImGui::GetContentRegionAvail().x, assetTileWidth);
     for (const auto& entry : CurrentDirEntries(browser))
     {
@@ -3488,7 +3519,7 @@ void DrawAssetBrowser(EditorFrameContext& ctx, AssetBrowserState& browser)
 
     bool textureHeaderDrawn = false;
     float textureRowUsed = 0.f;
-    const float textureTileWidth = 112.f;
+    const float textureTileWidth = AssetTileStride();
     const float textureAvail = std::max(ImGui::GetContentRegionAvail().x, textureTileWidth);
     for (const auto& entry : CurrentDirEntries(browser))
     {

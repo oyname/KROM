@@ -6,6 +6,9 @@
 
 namespace engine::renderer::addons::editor {
 
+inline constexpr float kAssetIconScaleMin = .5f;
+inline constexpr float kAssetIconScaleMax = 3.f;
+
 struct EditorPreferences
 {
     bool lightTheme = false;
@@ -16,6 +19,8 @@ struct EditorPreferences
     float mouseSensitivity = 1.f;
     bool invertMouseY = false;
     float gizmoScale = 1.f;
+    // Tile size in the asset browser (Ctrl + mouse wheel).
+    float assetIconScale = 1.f;
     int backupMinutes = 0;
     // Material and animation editor write every change at once. Off: only the
     // Save button writes, and leaving unsaved changes asks first.

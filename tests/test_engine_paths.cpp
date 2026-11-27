@@ -41,6 +41,15 @@ void Write(const fs::path& file, const std::string& text)
 
 int main()
 {
+    // Stored paths with Windows separators load on every platform.
+    Check(ToPortablePathSeparators("Textures\\sky\\day.hdr") == "Textures/sky/day.hdr" &&
+          ToPortablePathSeparators("Textures/sky.hdr") == "Textures/sky.hdr",
+          "backslashes in a stored path become forward slashes");
+    {
+        const fs::path p = PathFromUtf8("Textures\\sky.hdr");
+        Check(p.parent_path() == fs::path("Textures") && p.filename() == fs::path("sky.hdr"),
+              "a path with a backslash splits into directory and file");
+    }
     ScratchDirectory scratch;
     const auto user = scratch.path / "user";
     const auto documents = scratch.path / "Documents";

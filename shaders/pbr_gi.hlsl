@@ -2,10 +2,10 @@
 // KROM Engine - shaders/pbr_gi.hlsl
 // Surface cache GI in the PBR shaders (doc/PLAN_GI.md, package 4).
 //
-// The surface cache add-on resolves its radiance cache into a half-resolution
+// The surface cache add-on resolves its radiance cache into a full- or half-resolution
 // texture (shaders/surface_cache_apply.hlsl) on TexSlots::GlobalIllumination:
-// rgb = indirect diffuse irradiance E, a = linear view depth (negative where
-// the far field filled in, 0 for the sky). KromSampleGI upsamples it at the
+// rgb = indirect diffuse irradiance E, a = view depth and surface normal of
+// the texel (gi_texel.hlsl; negative where the far field filled in, 0 for the sky). KromSampleGI upsamples it at the
 // shaded pixel with bilinear weights times a depth weight.
 //
 // The irradiance replaces the probe/IBL irradiance of the diffuse term; it is
@@ -18,6 +18,8 @@
 // =============================================================================
 #ifndef KROM_PBR_GI_HLSL
 #define KROM_PBR_GI_HLSL
+
+#include "gi_texel.hlsl"
 
 Texture2D giIrradianceTex : register(t21);
 
@@ -35,8 +37,9 @@ static const uint GI_FLAG_ENABLED = 1u;
 // switched off, the transparent pass (the white fallback is bound there, not
 // a half-resolution texture) or only sky around the pixel. The caller then
 // keeps the probe/IBL irradiance. coverage: share of the samples
-// the cache served (1) rather than the far field (0).
-bool KromSampleGI(float2 pixelPos, float3 positionWS, out float3 irradiance, out float coverage)
+// the cache served (1) rather than the far field (0). normalWS: the normal of
+// the geometry (not the normal map), either side.
+bool KromSampleGI(float2 pixelPos, float3 positionWS, float3 normalWS, out float3 irradiance, out float coverage)
 {
     irradiance = float3(0.0f, 0.0f, 0.0f);
     coverage = 0.0f;
@@ -44,12 +47,64 @@ bool KromSampleGI(float2 pixelPos, float3 positionWS, out float3 irradiance, out
         return false;
     uint w, h;
     giIrradianceTex.GetDimensions(w, h);
-    const uint2 expected = (uint2(screenSize.xy) + 1u) / 2u;
-    if (w != expected.x || h != expected.y || w == 0u || h == 0u)
+    const uint2 full = uint2(screenSize.xy);
+    const uint2 expected = (full + 1u) / 2u;
+    const bool fullResolution = w == full.x && h == full.y;
+    if ((!fullResolution && (w != expected.x || h != expected.y)) || w == 0u || h == 0u)
         return false;
 
     const float depth = max(dot(positionWS - cameraPositionWS.xyz, normalize(cameraForwardWS.xyz)), 1e-4f);
     const float tolerance = max(giDepthTolerance, 1e-3f) * depth;
+    // The texel normals face the camera; so does this one.
+    float3 surfaceN = normalize(normalWS);
+    if (dot(surfaceN, cameraPositionWS.xyz - positionWS) < 0.0f)
+        surfaceN = -surfaceN;
+    if (fullResolution)
+    {
+        // The texture holds this pixel. Only where its texel belongs to another
+        // surface (an MSAA edge: the resolve saw sample 0) the best of the
+        // eight neighbours takes over. Another surface: the depth differs (a
+        // silhouette) or the normal does (two surfaces that touch, where the
+        // depth is the same on both). The misfit is the depth difference in
+        // tolerances, plus 1 for a normal that points elsewhere.
+        const int2 q = clamp(int2(pixelPos), int2(0, 0), int2(w, h) - 1);
+        float4 best = giIrradianceTex.Load(int3(q, 0));
+        float bestDiff = 1e30f;
+        if (best.a != 0.0f)
+        {
+            float texelDepth;
+            float3 texelN;
+            GiTexelDecode(best.a, texelDepth, texelN);
+            bestDiff = abs(texelDepth - depth) / tolerance + (dot(texelN, surfaceN) < 0.7f ? 1.0f : 0.0f);
+        }
+        if (bestDiff > 0.25f)
+        {
+            [unroll] for (uint k = 0u; k < 8u; ++k)
+            {
+                const uint cell = k < 4u ? k : k + 1u;   // 3 x 3 without the centre
+                const int2 o = int2((int)(cell % 3u) - 1, (int)(cell / 3u) - 1);
+                const float4 t = giIrradianceTex.Load(int3(clamp(q + o, int2(0, 0), int2(w, h) - 1), 0));
+                if (t.a == 0.0f)
+                    continue;
+                float texelDepth;
+                float3 texelN;
+                GiTexelDecode(t.a, texelDepth, texelN);
+                // Straight neighbours before diagonal ones of the same fit.
+                const float diff = abs(texelDepth - depth) / tolerance + (dot(texelN, surfaceN) < 0.7f ? 1.0f : 0.0f) +
+                                   ((o.x != 0 && o.y != 0) ? 0.01f : 0.0f);
+                if (diff < bestDiff)
+                {
+                    bestDiff = diff;
+                    best = t;
+                }
+            }
+        }
+        if (bestDiff >= 1e30f)
+            return false;
+        irradiance = best.rgb;
+        coverage = best.a > 0.0f ? 1.0f : 0.0f;
+        return true;
+    }
     const float2 p = pixelPos * 0.5f - 0.5f;
     const float2 baseF = floor(p);
     const int2 base = int2(baseF);
@@ -67,7 +122,10 @@ bool KromSampleGI(float2 pixelPos, float3 positionWS, out float3 irradiance, out
         const float4 t = giIrradianceTex.Load(int3(q, 0));
         if (t.a == 0.0f)
             continue;   // sky
-        const float diff = abs(abs(t.a) - depth);
+        float texelDepth;
+        float3 texelN;
+        GiTexelDecode(t.a, texelDepth, texelN);
+        const float diff = abs(texelDepth - depth);
         if (diff < bestDiff)
         {
             bestDiff = diff;

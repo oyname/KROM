@@ -107,7 +107,14 @@ bool BvhRayBox(float3 bmin, float3 bmax, float3 origin, float3 invDir, float tMi
     return t0 <= t1;
 }
 
-// Möller-Trumbore, both faces.
+/// Set around an occlusion ray towards a local light: triangles whose front
+// faces the ray origin do not count. A closed mesh between the surface and the
+// light still occludes with the face the ray leaves through; a closed mesh
+// around the light (a lamp inside its housing) does not, as in the shadow maps,
+// which the light renders without the faces turned away from it.
+static bool gBvhIgnoreFrontFaces = false;
+
+// Möller-Trumbore, both faces (see gBvhIgnoreFrontFaces).
 bool BvhRayTriangle(BvhTriangle tri, float3 origin, float3 direction, float tMin, float tMax,
                     out float t, out float u, out float v)
 {
@@ -117,6 +124,8 @@ bool BvhRayTriangle(BvhTriangle tri, float3 origin, float3 direction, float tMin
     const float3 p = cross(direction, e2);
     const float det = dot(e1, p);
     if (det > -1e-12f && det < 1e-12f)
+        return false;
+    if (gBvhIgnoreFrontFaces && det > 0.0f)
         return false;
     const float invDet = 1.0f / det;
     const float3 s = origin - tri.v0;

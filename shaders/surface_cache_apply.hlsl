@@ -1,14 +1,15 @@
 // =============================================================================
 // KROM Engine - shaders/surface_cache_apply.hlsl
 // Resolve of the radiance cache for shading (doc/PLAN_GI.md, package 4): a
-// fullscreen pass in half resolution between the depth prepass and the opaque
+// fullscreen pass (full resolution, or half with SC_FLAG_APPLY_HALF) between the depth prepass and the opaque
 // pass. Per pixel it looks up the cells around the visible surface and writes
 // the indirect diffuse irradiance for the PBR shaders (TexSlots::GlobalIllumination,
 // read by shaders/pbr_gi.hlsl).
 //
-// Output (RGBA16F): rgb = irradiance E (W/m^2, like the IBL irradiance cube),
-// a = linear view depth of the sample, negative where the cache had too few
-// cells and the far field (probes, IBL) filled in, 0 for the sky.
+// Output (RGBA32F): rgb = irradiance E (W/m^2, like the IBL irradiance cube),
+// a = view depth and surface normal of the sample in one number (gi_texel.hlsl),
+// negative where the cache had too few cells and the far field (probes, IBL)
+// filled in, 0 for the sky.
 //
 // Per pixel: the nearest of the 2 x 2 full-resolution depths, the world
 // position and a normal reconstructed from the depth (like GTAO). Trilinear
@@ -23,10 +24,12 @@
 
 #define SC_WITH_ENVIRONMENT 1
 #include "surface_cache_common.hlsl"
+#include "gi_texel.hlsl"
 
 KROM_BUFFER_SRV(StructuredBuffer<uint>,  gApplyKeys,  12);
 KROM_BUFFER_SRV(StructuredBuffer<uint4>, gApplyCellA, 13);
 KROM_BUFFER_SRV(StructuredBuffer<uint4>, gApplyCellB, 14);
+KROM_BUFFER_SRV(StructuredBuffer<uint>,  gApplyAccum, 15);   // SC_ACCUM_WORDS per slot, the display value
 
 #ifdef SC_APPLY_MSAA
 Texture2DMS<float> tApplyDepth : register(t8);
@@ -42,6 +45,10 @@ static int2 gDepthSize;
 static const float SC_APPLY_MIN_AXIS_WEIGHT = 0.05f;
 // Trilinear weight that counts as fully covered by the cache.
 static const float SC_APPLY_FULL_WEIGHT = 0.25f;
+// A cell counts in full from SC_CONFIDENT_SAMPLES on. A younger cell fades in
+// next to its neighbours: its first frames are a mean of a few rays, and shown
+// in full every new cell was a patch that came and went (cells are born all the
+// time, also in a resting view: registration reaches small ones only now and then).
 
 float ScApplyLoadDepth(int2 pixel)
 {
@@ -100,21 +107,30 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
 #endif
     gDepthSize = int2(w, h);
 
-    // Nearest of the 2 x 2 full-resolution pixels.
+    // Full resolution: the pixel itself. Half resolution: the nearest of the
+    // 2 x 2 full-resolution pixels.
     const int2 q = int2(pos.xy);
-    int2 pixel = q * 2;
+    int2 pixel = q;
     float depth = 1.0f;
-    [unroll] for (uint i = 0u; i < 4u; ++i)
+    if ((scFlags & SC_FLAG_APPLY_HALF) != 0u)
     {
-        const int2 candidate = q * 2 + int2(i & 1u, i >> 1u);
-        if (any(candidate >= gDepthSize))
-            continue;
-        const float d = ScApplyLoadDepth(candidate);
-        if (d < depth)
+        pixel = q * 2;
+        [unroll] for (uint i = 0u; i < 4u; ++i)
         {
-            depth = d;
-            pixel = candidate;
+            const int2 candidate = q * 2 + int2(i & 1u, i >> 1u);
+            if (any(candidate >= gDepthSize))
+                continue;
+            const float d = ScApplyLoadDepth(candidate);
+            if (d < depth)
+            {
+                depth = d;
+                pixel = candidate;
+            }
         }
+    }
+    else
+    {
+        depth = ScApplyLoadDepth(pixel);
     }
     if (depth >= 1.0f)
         return float4(0.0f, 0.0f, 0.0f, 0.0f);   // sky
@@ -133,6 +149,7 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
 
     float3 sum = float3(0.0f, 0.0f, 0.0f);
     float weight = 0.0f;
+    float found = 0.0f;   // trilinear weight of the cells found, young or not
     [unroll] for (uint axis = 0u; axis < 3u; ++axis)
     {
         const float wa = axisWeight[axis];
@@ -154,7 +171,13 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
                 continue;   // only its start value (the far field), no rays of its own yet
             const float plane = abs(dot(asfloat(gApplyCellB[slot].xyz) - P, n));
             wc *= saturate(1.0f - plane / size);
-            sum += asfloat(cell.xyz) * wc;
+            found += wc;
+            // Young cells count little while older ones are around; alone they
+            // still fill the pixel (the sum is normalised).
+            wc *= max(saturate((float)cell.w / SC_CONFIDENT_SAMPLES), 0.02f);
+            // The display value: the cell averaged with its neighbours on the surface.
+            const uint d = slot * SC_ACCUM_WORDS + SC_ACCUM_DISPLAY;
+            sum += asfloat(uint3(gApplyAccum[d], gApplyAccum[d + 1u], gApplyAccum[d + 2u])) * wc;
             weight += wc;
         }
     }
@@ -162,7 +185,8 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
     // Missing cells drop out and the rest is normalised; the far field only
     // where no cell was found at all. Blending it in by the missing share put
     // sky light into the corners and edges of enclosed rooms.
-    const float coverage = saturate(weight / SC_APPLY_FULL_WEIGHT);
-    const float3 irradiance = weight > 1e-5f ? sum / weight : ScFarFieldIrradiance(P, n);
-    return float4(max(irradiance, 0.0f), coverage >= 0.5f ? viewDepth : -viewDepth);
+    const float coverage = saturate(found / SC_APPLY_FULL_WEIGHT);
+    const float3 irradiance = weight > 1e-7f ? sum / weight : ScFarFieldIrradiance(P, n);
+    const float texel = GiTexelEncode(viewDepth, n);
+    return float4(max(irradiance, 0.0f), coverage >= 0.5f ? texel : -texel);
 }

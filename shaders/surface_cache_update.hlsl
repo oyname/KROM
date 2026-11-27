@@ -24,7 +24,7 @@
 //                       the smallest mips of its textures
 //
 // UAVs of the cache kernels: u0 keys, u1 cellA, u2 cellB, u3 cellFrame,
-// u4 accum (4 uint per slot: rgb sums, sample count), u5 active list,
+// u4 accum (12 uint per slot: rgb sums, sample count, change detector, display value, anchor distance), u5 active list,
 // u6 counters (SC_COUNTER_*; 16..31 hold the previous frame's values),
 // u7 pending list (cells hit by cache rays, registered next frame).
 // =============================================================================
@@ -201,7 +201,20 @@ void main(uint3 dtid : SV_DispatchThreadID)
     uint index;
     InterlockedAdd(gCounters[SC_COUNTER_ACTIVE], 1u, index);
     gActiveList[index] = slot;
-    gCellB[slot] = uint4(asuint(p), ScOctEncode(n));
+    // The anchor (the point the cell's rays start from and the resolve and
+    // the neighbour average weight the cell by) stays where it is: only a
+    // hit clearly closer to the centre of the cell replaces it, so it comes
+    // to rest after a few frames. Taking this frame's jittered hit every
+    // time moved it every frame; where a cell holds more than one surface
+    // or a curved one (a ramp over the floor, a small box, a detailed mesh)
+    // those weights then jumped from frame to frame and the image flickered.
+    const uint anchor = slot * SC_ACCUM_WORDS + SC_ACCUM_ANCHOR;
+    const float anchorDistance = ScAnchorDistance(p);
+    if (lastFrame == 0u || anchorDistance < 0.8f * asfloat(gAccum[anchor]))
+    {
+        gCellB[slot] = uint4(asuint(p), ScOctEncode(n));
+        gAccum[anchor] = asuint(anchorDistance);
+    }
     if (lastFrame == 0u)
     {
         gCellA[slot] = uint4(asuint(ScFarFieldIrradiance(p, n)), SC_START_WEIGHT);
@@ -244,8 +257,8 @@ float ScCalcAttenuation(float dist, float range)
     return (ratio * ratio) / max(dist * dist, 1e-4f);
 }
 
-// Direct irradiance at p (normal n): every directional light (cascades or an
-// occlusion ray), one local light picked at random (occlusion ray, weighted
+// Direct irradiance at p (normal n): every directional light (an occlusion
+// ray), one local light picked at random (occlusion ray, weighted
 // by the number of local lights).
 float3 ScDirectIrradiance(float3 p, float3 n, inout uint seed, inout TraceStats stats)
 {
@@ -260,9 +273,16 @@ float3 ScDirectIrradiance(float3 p, float3 n, inout uint seed, inout TraceStats 
             const float NoL = dot(n, L);
             if (NoL <= 0.0f)
                 continue;
+            // The sun's visibility comes from an occlusion ray, never from the
+            // shadow cascades (SC_SUN_FROM_CASCADES). In Room 0 the cascade
+            // lookup called points inside a sealed niche between solid blocks
+            // lit: the sun (and everything it bounced off) filled a room that
+            // no ray can leave. A ray is exact for the geometry the cache
+            // traces anyway, and costs little (Room 0: cache total 1.38 ms
+            // Vulkan, 1.68 ms DX11 on a GTX 1660).
             float visibility = 1.0f;
             bool inside = false;
-            if ((scFlags & SC_FLAG_SHADOW_MAP) != 0u)
+            if (SC_SUN_FROM_CASCADES && (scFlags & SC_FLAG_SHADOW_MAP) != 0u)
                 visibility = KromCsmVisibilityLoad(p, n, L, i, inside);
             uint previous;
             if (!inside)
@@ -305,7 +325,10 @@ float3 ScDirectIrradiance(float3 p, float3 n, inout uint seed, inout TraceStats 
         }
         if (NoL <= 0.0f || atten <= 0.0f)
             break;
-        if (!TraceAny(p, L, 0.0f, dist - 1e-3f, scTlasNodeCount, stats))
+        gBvhIgnoreFrontFaces = true;
+        const bool occluded = TraceAny(p, L, 0.0f, dist - 1e-3f, scTlasNodeCount, stats);
+        gBvhIgnoreFrontFaces = false;
+        if (!occluded)
             e += lights[j].colorIntensity.rgb * lights[j].colorIntensity.w * atten * NoL * (float)localCount;
         break;
     }
@@ -398,6 +421,8 @@ void main(uint3 dtid : SV_DispatchThreadID)
                 indirect = float3(0.0f, 0.0f, 0.0f);
                 gCellA[hitSlot] = uint4(asuint(ScFarFieldIrradiance(hp, hn)), SC_START_WEIGHT);
                 gCellB[hitSlot] = uint4(asuint(hp), ScOctEncode(hn));
+                // A point the camera may not see: the first camera ray replaces it.
+                gAccum[hitSlot * SC_ACCUM_WORDS + SC_ACCUM_ANCHOR] = asuint(SC_ANCHOR_FREE);
                 uint created;
                 InterlockedAdd(gCounters[SC_COUNTER_NEW], 1u, created);
             }
@@ -405,8 +430,10 @@ void main(uint3 dtid : SV_DispatchThreadID)
             {
                 // A cell without rays of its own yet (weight 0) holds only its
                 // start value, the far field: no bounce from it either.
-                const uint4 hitCell = gCellA[hitSlot];
-                indirect = hitCell.w > 0u ? asfloat(hitCell.xyz) : float3(0.0f, 0.0f, 0.0f);
+                // The bounce value (SC_ACCUM_BOUNCE), not the long mean.
+                indirect = gCellA[hitSlot].w > 0u
+                    ? ScUnpackRgb9e5(gAccum[hitSlot * SC_ACCUM_WORDS + SC_ACCUM_BOUNCE])
+                    : float3(0.0f, 0.0f, 0.0f);
             }
             // Stamped with this frame: stays alive while rays from the screen
             // hit it, and is queued once per frame.
@@ -441,10 +468,10 @@ void main(uint3 dtid : SV_DispatchThreadID)
     radiance = min(max(radiance, 0.0f), SC_MAX_RADIANCE);
     const uint3 fixedPoint = (uint3)(radiance * SC_ACCUM_SCALE + ScRandom(seed));   // dithered: unbiased
     uint previous;
-    InterlockedAdd(gAccum[slot * 4u + 0u], fixedPoint.x, previous);
-    InterlockedAdd(gAccum[slot * 4u + 1u], fixedPoint.y, previous);
-    InterlockedAdd(gAccum[slot * 4u + 2u], fixedPoint.z, previous);
-    InterlockedAdd(gAccum[slot * 4u + 3u], 1u, previous);
+    InterlockedAdd(gAccum[slot * SC_ACCUM_WORDS + 0u], fixedPoint.x, previous);
+    InterlockedAdd(gAccum[slot * SC_ACCUM_WORDS + 1u], fixedPoint.y, previous);
+    InterlockedAdd(gAccum[slot * SC_ACCUM_WORDS + 2u], fixedPoint.z, previous);
+    InterlockedAdd(gAccum[slot * SC_ACCUM_WORDS + 3u], 1u, previous);
     InterlockedAdd(gCounters[SC_COUNTER_RAYS], 1u, previous);
 }
 
@@ -456,30 +483,134 @@ void main(uint3 dtid : SV_DispatchThreadID)
     if (dtid.x >= gCounters[SC_COUNTER_ACTIVE])
         return;
     const uint slot = gActiveList[dtid.x];
-    const uint samples = gAccum[slot * 4u + 3u];
+    const uint a = slot * SC_ACCUM_WORDS;
+    const uint samples = gAccum[a + 3u];
     if (samples == 0u)
         return;
     // Cosine-weighted rays: E = pi * mean radiance.
-    const float3 mean = float3(gAccum[slot * 4u + 0u], gAccum[slot * 4u + 1u], gAccum[slot * 4u + 2u]) *
+    const float3 mean = float3(gAccum[a + 0u], gAccum[a + 1u], gAccum[a + 2u]) *
                         (SC_PI / (SC_ACCUM_SCALE * (float)samples));
-    gAccum[slot * 4u + 0u] = 0u;
-    gAccum[slot * 4u + 1u] = 0u;
-    gAccum[slot * 4u + 2u] = 0u;
-    gAccum[slot * 4u + 3u] = 0u;
+    gAccum[a + 0u] = 0u;
+    gAccum[a + 1u] = 0u;
+    gAccum[a + 2u] = 0u;
+    gAccum[a + 3u] = 0u;
     const uint4 cell = gCellA[slot];
     const float3 old = asfloat(cell.xyz);
-    // History: scMaxSamples, but at least SC_MIN_HISTORY_FRAMES frames of this
-    // cell's rays. The flicker of a resting image is set by the history in
-    // frames, not by the ray count: the cell's ray origin moves within the cell
-    // every frame (registration jitter), which more rays do not average out
-    // (measured: 32, 64 and 128 rays per cell gave the same noise floor).
-    const uint weight = min(cell.w + samples, max(max(scMaxSamples, 1u), samples * SC_MIN_HISTORY_FRAMES));
-    const float alpha = min((float)samples / (float)weight, 1.0f);
+    const float3 luma = float3(0.2126f, 0.7152f, 0.0722f);
+    const float lumOld = dot(old, luma);
+    const float lumMean = dot(mean, luma);
+
+    // History: a running mean up to SC_LONG_HISTORY_FRAMES frames of this
+    // cell's rays (scMaxSamples if that is more). What is left of the flicker
+    // of a resting image is plain sampling noise, so it is set by the number
+    // of rays in the history.
+    const uint longCap = max(max(scMaxSamples, 1u), samples * SC_LONG_HISTORY_FRAMES);
+    const uint shortCap = samples * SC_SHORT_HISTORY_FRAMES;
+    uint weight = min(cell.w + samples, longCap);
+
+    // Change detector: a two-sided cumulative sum. Every frame the deviation of
+    // the frame value from the long mean, in standard deviations of the frame
+    // values (limited to three), minus half a standard deviation of slack, adds
+    // to the sum of its side (words 4 and 5); a sum never falls below zero.
+    // Noise cancels out, a deviation that lasts to one side adds up, however
+    // noisy the single frame is. From SC_CHANGE_EVIDENCE on the history shortens,
+    // at twice that it is the short one, and it stays short while the deviation
+    // lasts: the light of the cell has changed (a lamp switched, a door opened
+    // further away) and the cell follows within a few frames. One outlier frame
+    // (a few rays that hit a very bright spot) adds at most 2.5.
+    //
+    // The noise power (word 7) learns from the limited deviations, and slowly
+    // while a sum is building up. Learning from the unlimited deviation, a real
+    // change raised the noise estimate with it and was then read as noise: a
+    // lamp switched off faded over the whole long history, and in a bright
+    // enclosed room over one long history per bounce (minutes).
+    float power = 0.25f * lumMean * lumMean;   // a new cell: half its value, until it has learned
+    float sumAbove = 0.0f;
+    float sumBelow = 0.0f;
+    if (cell.w > 0u)
+    {
+        const float oldPower = asfloat(gAccum[a + 7u]);
+        sumAbove = asfloat(gAccum[a + 4u]);
+        sumBelow = asfloat(gAccum[a + 5u]);
+        const float sigma = sqrt(oldPower) + 0.03f * lumOld + 1e-5f;
+        const float z = clamp((lumMean - lumOld) / sigma, -3.0f, 3.0f);
+        sumAbove = clamp(sumAbove + z - 0.5f, 0.0f, 4.0f * SC_CHANGE_EVIDENCE);
+        sumBelow = clamp(sumBelow - z - 0.5f, 0.0f, 4.0f * SC_CHANGE_EVIDENCE);
+        const float evidence = max(sumAbove, sumBelow);
+        const float running = min((float)samples / (float)weight, 1.0f);
+        const float rate = evidence < 2.0f ? 1.0f / (2.0f * (float)SC_SHORT_HISTORY_FRAMES)
+                                           : 1.0f / (8.0f * (float)SC_SHORT_HISTORY_FRAMES);
+        power = lerp(oldPower, z * z * sigma * sigma, max(rate, running));
+        if (cell.w >= 2u * shortCap)
+        {
+            const float changed = saturate((evidence - SC_CHANGE_EVIDENCE) / SC_CHANGE_EVIDENCE);
+            weight = (uint)lerp((float)weight, (float)min(weight, shortCap), changed);
+        }
+    }
+    // What the cache rays read as the next bounce: a mean over a few frames.
+    const float3 bounce = cell.w > 0u
+        ? lerp(ScUnpackRgb9e5(gAccum[a + SC_ACCUM_BOUNCE]), mean, 1.0f / (float)SC_BOUNCE_FRAMES)
+        : mean;
+    gAccum[a + SC_ACCUM_BOUNCE] = ScPackRgb9e5(bounce);
+    gAccum[a + 4u] = asuint(sumAbove);
+    gAccum[a + 5u] = asuint(sumBelow);
+    gAccum[a + 7u] = asuint(power);
+
+    const float alpha = min((float)samples / (float)max(weight, 1u), 1.0f);
     const float3 e = lerp(old, mean, alpha);
     gCellA[slot] = uint4(asuint(e), weight);
 
-    const float lumOld = dot(old, float3(0.2126f, 0.7152f, 0.0722f));
-    const float lumNew = dot(e, float3(0.2126f, 0.7152f, 0.0722f));
+    // Display value (read by the resolve for shading, not by the cache rays):
+    // this cell averaged with its four neighbours in the plane of the surface,
+    // each at half weight. The cells' noise is independent, so this about
+    // halves the patches of a resting image, at the price of indirect light
+    // that is half a cell softer. A neighbour counts only on the same surface
+    // (near this cell's tangent plane, facing alike) and with a free line to
+    // it: no light through a wall that stands between two floor cells.
+    {
+        const uint4 cellB = gCellB[slot];
+        const float3 p = asfloat(cellB.xyz);
+        const float3 n = ScOctDecode(cellB.w);
+        const uint level = ScLevel(p);
+        const float size = ScCellSizeOfLevel(level);
+        const uint bucket = ScNormalBucket(n);
+        const int3 q = (int3)floor(p / size);
+        const uint axis = bucket / 2u;
+        const float lift = 2e-3f + 2e-4f * length(p - cameraPositionWS.xyz);
+        const float3 po = p + n * lift;
+        const float self = min((float)weight, SC_CONFIDENT_SAMPLES);
+        float3 sum = e * self;
+        float total = self;
+        TraceStats stats = TraceStatsZero();
+        [loop] for (uint i = 0u; i < 4u; ++i)
+        {
+            const uint inPlane = (axis + 1u + (i >> 1u)) % 3u;
+            const int3 step = int3(inPlane == 0u ? 1 : 0, inPlane == 1u ? 1 : 0, inPlane == 2u ? 1 : 0) * ((i & 1u) != 0u ? 1 : -1);
+            const uint other = ScFind(ScMakeKeyAt(q + step, level, bucket));
+            if (other == SC_NONE)
+                continue;
+            const uint4 otherA = gCellA[other];
+            if (otherA.w == 0u)
+                continue;
+            const uint4 otherB = gCellB[other];
+            const float3 op = asfloat(otherB.xyz);
+            if (abs(dot(op - p, n)) > 0.25f * size || dot(ScOctDecode(otherB.w), n) < 0.9f)
+                continue;
+            const float3 toOther = op + n * lift - po;
+            const float dist = length(toOther);
+            if (dist > 1e-4f && TraceAny(po, toOther / dist, 0.0f, dist, scTlasNodeCount, stats))
+                continue;
+            const float w = 0.5f * min((float)otherA.w, SC_CONFIDENT_SAMPLES);
+            sum += asfloat(otherA.xyz) * w;
+            total += w;
+        }
+        const float3 display = sum / max(total, 1e-6f);
+        gAccum[a + SC_ACCUM_DISPLAY + 0u] = asuint(display.x);
+        gAccum[a + SC_ACCUM_DISPLAY + 1u] = asuint(display.y);
+        gAccum[a + SC_ACCUM_DISPLAY + 2u] = asuint(display.z);
+    }
+
+    const float lumNew = dot(e, luma);
     const float change = abs(lumNew - lumOld) / max(max(lumOld, lumNew), 1e-3f);
     uint previous;
     InterlockedAdd(gCounters[SC_COUNTER_CHANGE], (uint)(min(change, 1.0f) * 1000.0f + 0.5f), previous);
@@ -519,9 +650,14 @@ void main(uint3 dtid : SV_DispatchThreadID)
         const float3 hi = gDirtyBoxes[i * 2u + 1u].xyz;
         if (all(p >= lo) && all(p <= hi))
         {
+            // The anchor may lie on a surface that is gone: the next camera ray sets it anew.
+            gAccum[slot * SC_ACCUM_WORDS + SC_ACCUM_ANCHOR] = asuint(SC_ANCHOR_FREE);
             const uint4 cell = gCellA[slot];
-            if (cell.w > SC_DIRTY_WEIGHT)
-                gCellA[slot] = uint4(cell.xyz, SC_DIRTY_WEIGHT);
+            // The short history, not none: while something keeps moving the
+            // cells around it would otherwise show the raw noise of one frame.
+            const uint dirtyWeight = max(scMaxRaysPerCell, 1u) * SC_SHORT_HISTORY_FRAMES / 2u;
+            if (cell.w > dirtyWeight)
+                gCellA[slot] = uint4(cell.xyz, dirtyWeight);
             break;
         }
     }

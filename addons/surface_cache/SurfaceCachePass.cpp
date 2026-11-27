@@ -331,6 +331,7 @@ constexpr std::string_view kShadowMapResource = "ShadowMap";
 constexpr uint32_t         kApplyKeysSlot     = 12u; // BufSRV slots of the resolve for shading
 constexpr uint32_t         kApplyCellASlot    = 13u;
 constexpr uint32_t         kApplyCellBSlot    = 14u;
+constexpr uint32_t         kApplyAccumSlot    = 15u; // the cells' display values (SC_ACCUM_WORDS)
 
 struct float4Value { float v[4]; };
 
@@ -533,12 +534,12 @@ bool CreateGridBuffer(IDevice& device, BufferHandle& buffer, uint64_t count, uin
 void ClearGrid(IDevice& device, SurfaceCacheGrid& g)
 {
     const uint64_t n = SurfaceCacheGrid::kCapacity;
-    const std::vector<uint8_t> zeros(n * 16u, 0u);
+    const std::vector<uint8_t> zeros(n * 48u, 0u);
     device.UploadBufferData(g.keys, zeros.data(), n * 4u);
     device.UploadBufferData(g.cellA, zeros.data(), n * 16u);
     device.UploadBufferData(g.cellB, zeros.data(), n * 16u);
     device.UploadBufferData(g.cellFrame, zeros.data(), n * 4u);
-    device.UploadBufferData(g.accum, zeros.data(), n * 16u);
+    device.UploadBufferData(g.accum, zeros.data(), n * 48u);
     device.UploadBufferData(g.activeList, zeros.data(), n * 4u);
     device.UploadBufferData(g.pending, zeros.data(), n * 4u);
     device.UploadBufferData(g.counters, zeros.data(), SurfaceCacheGrid::kCounterWords * 4u);
@@ -557,7 +558,7 @@ bool EnsureGrid(IDevice& device, SurfaceCacheGrid& g)
               CreateGridBuffer(device, g.cellA, n, 16u, "SurfaceCache_CellA") &&
               CreateGridBuffer(device, g.cellB, n, 16u, "SurfaceCache_CellB") &&
               CreateGridBuffer(device, g.cellFrame, n, 4u, "SurfaceCache_CellFrame") &&
-              CreateGridBuffer(device, g.accum, n * 4u, 4u, "SurfaceCache_Accum") &&
+              CreateGridBuffer(device, g.accum, n * 12u, 4u, "SurfaceCache_Accum") &&
               CreateGridBuffer(device, g.activeList, n, 4u, "SurfaceCache_ActiveList") &&
               CreateGridBuffer(device, g.pending, n, 4u, "SurfaceCache_Pending") &&
               CreateGridBuffer(device, g.counters, SurfaceCacheGrid::kCounterWords, 4u, "SurfaceCache_Counters");
@@ -699,22 +700,40 @@ void DispatchCache(const rendergraph::RGExecContext& ec, SurfaceCacheGpuResource
 
 // ─── Radiance cache: material table ─────────────────────────────────────────
 
-float4Value ReadVec4(const MaterialParameterLayout& layout, const MaterialInstance& inst, std::string_view name,
-                     float4Value fallback)
+// The values of a material live in its parameter list (parameterOverrides). The
+// parameter blob holds no constants: MaterialSystem::GetCBData fills the
+// constant buffer of a draw from the list. Reading the blob gave zero for every
+// material, so no surface reflected any light in the cache: only the sky lit a
+// scene, and an enclosed room stayed black whatever lamp was in it.
+const MaterialParam* FindParameter(const MaterialInstance& inst, std::string_view name)
 {
-    const MaterialParameterSlot* slot = layout.FindByName(name);
-    const std::vector<uint8_t>& data = inst.parameters.ConstantData();
-    if (!slot || slot->byteSize < 12u || slot->byteOffset + 12u > data.size())
+    for (const MaterialParam& param : inst.parameterOverrides)
+        if (param.name == name)
+            return &param;
+    return nullptr;
+}
+
+float4Value ReadVec4(const MaterialInstance& inst, std::string_view name, float4Value fallback)
+{
+    const MaterialParam* param = FindParameter(inst, name);
+    if (!param)
         return fallback;
     float4Value v = fallback;
-    std::memcpy(v.v, data.data() + slot->byteOffset, std::min<size_t>(slot->byteSize, 16u));
+    std::memcpy(v.v, param->value.f, sizeof(float) * 4u);
     return v;
 }
 
+// The texture of a slot: from the parameter list (the blob gets it only with
+// the material's first draw), else what the blob holds.
 TextureHandle MaterialTexture(const MaterialParameterLayout& layout, const MaterialInstance& inst, uint32_t binding)
 {
     const int32_t index = layout.FindSlotIndexByBinding(binding, MaterialParameterType::Texture2D);
-    return index >= 0 ? inst.parameters.GetTexture(static_cast<uint32_t>(index)) : TextureHandle::Invalid();
+    if (index < 0)
+        return TextureHandle::Invalid();
+    if (const MaterialParam* param = FindParameter(inst, layout.slots[static_cast<uint32_t>(index)].Name());
+        param && param->texture.IsValid())
+        return param->texture;
+    return inst.parameters.GetTexture(static_cast<uint32_t>(index));
 }
 
 // Mean albedo and emission of new or changed materials (at most
@@ -762,8 +781,8 @@ void UpdateMaterialTable(const rendergraph::RGExecContext& ec, SurfaceCacheGpuRe
         const MaterialParameterLayout* layout = materials && handle.IsValid() ? materials->GetParameterLayout(handle) : nullptr;
         if (inst && layout)
         {
-            albedo = ReadVec4(*layout, *inst, "baseColorFactor", float4Value{ { 1.0f, 1.0f, 1.0f, 1.0f } });
-            emission = ReadVec4(*layout, *inst, "emissiveFactor", float4Value{ { 0.0f, 0.0f, 0.0f, 0.0f } });
+            albedo = ReadVec4(*inst, "baseColorFactor", float4Value{ { 1.0f, 1.0f, 1.0f, 1.0f } });
+            emission = ReadVec4(*inst, "emissiveFactor", float4Value{ { 0.0f, 0.0f, 0.0f, 0.0f } });
             albedoTex = MaterialTexture(*layout, *inst, TexSlots::Albedo);
             emissionTex = MaterialTexture(*layout, *inst, TexSlots::Emissive);
         }
@@ -1223,11 +1242,12 @@ void SurfaceCacheComputePass::BuildApplyPass(const PassBuildContext& ctx, const 
 {
     const uint32_t w = std::max(ctx.frame.viewportWidth, 1u);
     const uint32_t h = std::max(ctx.frame.viewportHeight, 1u);
-    const uint32_t halfW = (w + 1u) / 2u;
-    const uint32_t halfH = (h + 1u) / 2u;
+    const bool half = m_resources->settings.applyHalfResolution;
+    const uint32_t halfW = half ? (w + 1u) / 2u : w;
+    const uint32_t halfH = half ? (h + 1u) / 2u : h;
     const bool msaa = ctx.frame.msaaSamples > 1u;
     ctx.recipe.resources.push_back(FrameRecipeResourceDesc{ std::string(kSurfaceCacheGiResource), false, halfW, halfH,
-                                                            Format::RGBA16_FLOAT, RGResourceKind::ColorTexture });
+                                                            Format::RGBA32_FLOAT, RGResourceKind::ColorTexture });
     FrameRecipePassDesc pass{};
     pass.name = "SurfaceCacheApply";
     pass.executorName = std::string(kExecPrefix) + "apply";
@@ -1246,7 +1266,7 @@ void SurfaceCacheComputePass::BuildApplyPass(const PassBuildContext& ctx, const 
     auto res = m_resources;
     auto bindings = ctx.frame.runtimeBindings;
     ctx.callbacks.Register(std::string(kExecPrefix) + "apply",
-        [res, bindings, w, h, msaa](const rendergraph::RGExecContext& ec)
+        [res, bindings, w, h, msaa, half](const rendergraph::RGExecContext& ec)
         {
             if (!ec.cmd || !ec.device || !res || !res->programsReady || !bindings ||
                 !bindings->resources.perFrameCB.IsValid())
@@ -1260,7 +1280,8 @@ void SurfaceCacheComputePass::BuildApplyPass(const PassBuildContext& ctx, const 
                 return;
             ICommandList& cmd = *ec.cmd;
             const SurfaceCacheGrid& g = frame->world->grid;
-            const uint32_t flags = BindFarField(cmd, *bindings, ShaderStageMask::Fragment);
+            const uint32_t flags = BindFarField(cmd, *bindings, ShaderStageMask::Fragment) |
+                                   (half ? kSurfaceCacheFlagApplyHalf : 0u);
             const SurfaceCacheConstants c = MakeCacheConstants(*res, *frame->world, w, h, flags);
             const BufferHandle cb = NextConstants(*ec.device, *res, &c, sizeof(c));
             if (!cb.IsValid())
@@ -1272,8 +1293,9 @@ void SurfaceCacheComputePass::BuildApplyPass(const PassBuildContext& ctx, const 
             cmd.SetShaderResource(kApplyKeysSlot, g.keys, ShaderStageMask::Fragment);
             cmd.SetShaderResource(kApplyCellASlot, g.cellA, ShaderStageMask::Fragment);
             cmd.SetShaderResource(kApplyCellBSlot, g.cellB, ShaderStageMask::Fragment);
+            cmd.SetShaderResource(kApplyAccumSlot, g.accum, ShaderStageMask::Fragment);
             cmd.Draw(3u, 1u, 0u, 0u);
-            for (uint32_t slot : { kApplyKeysSlot, kApplyCellASlot, kApplyCellBSlot })
+            for (uint32_t slot : { kApplyKeysSlot, kApplyCellASlot, kApplyCellBSlot, kApplyAccumSlot })
                 cmd.SetShaderResource(slot, BufferHandle::Invalid(), ShaderStageMask::Fragment);
             for (uint32_t slot : { TexSlots::PassSRV0, TexSlots::IBLIrradiance, TexSlots::FeatureTexture })
                 cmd.SetShaderResource(slot, TextureHandle::Invalid(), ShaderStageMask::Fragment);

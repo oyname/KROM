@@ -24,6 +24,20 @@
 
 namespace engine::renderer::addons::editor {
 
+// File time -> time_t. libstdc++ before GCC 13 has no std::chrono::clock_cast;
+// there the offset between the two clocks is taken from their current times.
+static std::time_t FileTimeToTimeT(std::filesystem::file_time_type fileTime)
+{
+#if defined(__cpp_lib_chrono) && __cpp_lib_chrono >= 201907L
+    return std::chrono::system_clock::to_time_t(
+        std::chrono::clock_cast<std::chrono::system_clock>(fileTime));
+#else
+    const auto systemTime = std::chrono::time_point_cast<std::chrono::system_clock::duration>(
+        fileTime - std::filesystem::file_time_type::clock::now() + std::chrono::system_clock::now());
+    return std::chrono::system_clock::to_time_t(systemTime);
+#endif
+}
+
 using namespace detail;
 
 namespace {
@@ -173,8 +187,7 @@ static std::vector<StartProjectEntry> ScanStartProjects(EditorFrameContext& ctx)
         p.projectFile = PathToUtf8(projectFile);
         p.writeTime = std::filesystem::last_write_time(projectFile, ec);
         if (!ec)
-            p.date = FormatProjectTime(std::chrono::system_clock::to_time_t(
-                std::chrono::clock_cast<std::chrono::system_clock>(p.writeTime)), false);
+            p.date = FormatProjectTime(FileTimeToTimeT(p.writeTime), false);
         p.lastOpened = FormatProjectTime(ReadProjectLastOpened(entry.path()), true);
         projects.push_back(std::move(p));
     }

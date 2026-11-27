@@ -94,7 +94,9 @@ cbuffer SurfaceCacheParams : register(b3)
 
 static const uint SC_FLAG_IBL        = 1u << 0;   // tIBLIrradiance is bound
 static const uint SC_FLAG_SHADOW_MAP = 1u << 1;   // shadowMap holds this frame's cascades
+static const bool SC_SUN_FROM_CASCADES = false;   // see ScDirectIrradiance (surface_cache_update.hlsl)
 static const uint SC_FLAG_PROBES     = 1u << 2;   // tFeatureTexture holds the local probes
+static const uint SC_FLAG_APPLY_HALF = 1u << 3;   // resolve for shading in half resolution
 
 static const uint  SC_NONE        = 0xFFFFFFFFu;
 static const uint  SC_MAX_PROBE   = 16u;          // linear probing steps
@@ -112,8 +114,32 @@ static const float SC_MAX_RADIANCE = 256.0f;      // per sample (fireflies)
 // (4 of 100 samples = 4 % sky after 100 rays), and in an enclosed room every
 // cell that came into view brought some of the sky in.
 static const uint  SC_START_WEIGHT = 0u;
-static const uint  SC_DIRTY_WEIGHT = 2u;          // weight left in a changed region
-static const uint  SC_MIN_HISTORY_FRAMES = 16u;   // history in frames of a cell's rays (at least); sets the noise floor
+// History of a cell in frames of its rays. A resting cell averages over
+// SC_LONG_HISTORY_FRAMES (the flicker of a resting image falls with the square
+// root of it: measured in Room 2, 16 -> 64 frames halves it). A cell whose
+// light changed (resolve kernel: its short mean leaves the long one by more
+// than the noise) or whose surroundings moved (dirty boxes) falls back to
+// SC_SHORT_HISTORY_FRAMES and settles within that time.
+static const uint  SC_LONG_HISTORY_FRAMES  = 256u;
+static const uint  SC_SHORT_HISTORY_FRAMES = 8u;
+static const float SC_CHANGE_EVIDENCE = 10.0f;     // cumulative sum of the change detector from which the history shortens
+static const uint  SC_ACCUM_WORDS = 12u;          // gAccum words per slot: 0-2 sums, 3 count, 4-5 change sums, 6 bounce value, 7 noise power,
+                                                  // 8-10 display value (irradiance averaged with the neighbours)
+static const uint  SC_ACCUM_DISPLAY = 8u;
+// Word 6: the irradiance the cache rays read as the next bounce (RGB9E5), a mean
+// over SC_BOUNCE_FRAMES frames only. The bounces feed each other: with the long
+// mean in that loop a change took one long history per bounce, and what a
+// bright sealed room held of a light that had gone faded for minutes (the walls
+// lit each other with their stored values). The long mean stays what is shown.
+static const uint  SC_ACCUM_BOUNCE = 6u;
+static const uint  SC_BOUNCE_FRAMES = 2u;
+// Word 11: squared distance of the cell's anchor (position in cellB) to the
+// centre of the cell, SC_ANCHOR_FREE while any camera ray may replace it.
+static const uint  SC_ACCUM_ANCHOR = 11u;
+static const float SC_ANCHOR_FREE = 1e30f;
+// Sample weight from which a cell counts in full, in the display average and in
+// the resolve for shading.
+static const float SC_CONFIDENT_SAMPLES = 1024.0f;
 
 uint ScPcg(uint v)
 {
@@ -126,6 +152,28 @@ float ScRandom(inout uint seed)
 {
     seed = ScPcg(seed);
     return (seed & 0xFFFFFFu) / 16777216.0f;
+}
+
+// RGB9E5: three 9-bit mantissas with one 5-bit exponent, values >= 0.
+uint ScPackRgb9e5(float3 c)
+{
+    c = clamp(c, 0.0f, 65408.0f);
+    const float largest = max(max(c.r, c.g), c.b);
+    float exponent = max(-16.0f, floor(log2(max(largest, 1e-30f)))) + 1.0f + 15.0f;
+    float scale = exp2(exponent - 15.0f - 9.0f);
+    if (floor(largest / scale + 0.5f) >= 512.0f)
+    {
+        exponent += 1.0f;
+        scale *= 2.0f;
+    }
+    const uint3 m = (uint3)floor(c / scale + 0.5f);
+    return m.r | (m.g << 9u) | (m.b << 18u) | ((uint)exponent << 27u);
+}
+
+float3 ScUnpackRgb9e5(uint v)
+{
+    const float scale = exp2((float)(v >> 27u) - 15.0f - 9.0f);
+    return float3((float)(v & 511u), (float)((v >> 9u) & 511u), (float)((v >> 18u) & 511u)) * scale;
 }
 
 uint ScOctEncode(float3 n)
@@ -167,6 +215,14 @@ uint ScLevel(float3 p)
 float ScCellSizeOfLevel(uint level)
 {
     return scCellSize * exp2((float)level);
+}
+
+// Squared distance of p to the centre of its cell.
+float ScAnchorDistance(float3 p)
+{
+    const float size = ScCellSizeOfLevel(ScLevel(p));
+    const float3 d = p - (floor(p / size) + 0.5f) * size;
+    return dot(d, d);
 }
 
 // Dominant axis of the normal with sign: 0..5.

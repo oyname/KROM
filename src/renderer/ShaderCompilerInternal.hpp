@@ -46,8 +46,8 @@ std::string StageToToolExtension(assets::ShaderStage stage, assets::ShaderSource
 bool ReadBinaryFile(const std::filesystem::path& path, std::vector<uint8_t>& outBytes);
 GlslSourceSections SplitGlslSourceSections(std::string_view source);
 std::string BuildShaderSource(const SourceBundle& bundle, const std::vector<std::string>& defines);
-#ifdef _WIN32
 std::string GetHlslTargetProfile(assets::ShaderStage stage, assets::ShaderTargetProfile target);
+#ifdef _WIN32
 // D3DReflect aus der geladenen d3dcompiler-DLL, nullptr wenn nicht verfuegbar.
 void* ResolveD3DReflectProc(std::string* outError);
 #endif

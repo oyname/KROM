@@ -2386,6 +2386,148 @@ struct EditorLoadingSmokeTest final : IAppScene
     float giLitCascades = 0.f;
     double giApplyOpaqueMs = 0.0;
 
+    // KROM_GI_FLICKER=1 (needs captureDir): flicker of the resting image. Per case
+    // the scene settles, then kFlickerFrames consecutive frames are read back and
+    // the luminance range and deviation per pixel are written as a heat map
+    // (<case>_range.ppm, 10 grey levels per 8-bit step) next to the mean image.
+    // KROM_GI_FLICKER_CASES="a,b" runs only these cases; KROM_GI_FLICKER_EV=<ev>
+    // sets the fixed exposure.
+    struct FlickerCase
+    {
+        const char* name;
+        bool autoExposure, gi, apply, gtao, ssr;
+        uint32_t debugFlags;
+        uint32_t view;
+        float overlay;
+    };
+    static constexpr int kFlickerSettle = 180;
+    static constexpr int kFlickerFrames = 60;
+    int flickerCase = -1;
+    int flickerCaptured = 0;
+    uint32_t flickerWidth = 0u, flickerHeight = 0u;
+    std::vector<float> flickerMin, flickerMax, flickerSum, flickerSumSq, flickerRgb;
+    uint32_t flickerCreated = 0u, flickerEvicted = 0u, flickerActiveMin = 0u, flickerActiveMax = 0u, flickerUploads = 0u;
+    bool flickerGtao = true, flickerSsr = true;
+    // Case "light_step": after kFlickerStepAt frames every light gets three times its
+    // intensity; the mean image luminance per frame shows how fast the cache follows.
+    static constexpr int kFlickerStepAt = 20;
+    std::vector<float> flickerTimeline;
+    // Case "cache_reset": after kFlickerStepAt frames the cache is cleared; the mean
+    // difference per pixel to the image before shows how fast it comes back.
+    std::vector<float> flickerReference;
+
+    void FinishFlickerCase(const FlickerCase& fc, uint32_t uploadsNow)
+    {
+        const size_t pixels = static_cast<size_t>(flickerWidth) * flickerHeight;
+        if (pixels == 0u || flickerCaptured == 0)
+        {
+            Check(false, "GI flicker: frames captured");
+            return;
+        }
+        const float n = static_cast<float>(flickerCaptured);
+        std::vector<float> range(pixels);
+        std::vector<char> heat(pixels * 3u), mean(pixels * 3u);
+        double sumStd = 0.0, sumLuma = 0.0;
+        size_t over3 = 0u, over6 = 0u;
+        for (size_t i = 0; i < pixels; ++i)
+        {
+            range[i] = flickerMax[i] - flickerMin[i];
+            const float m = flickerSum[i] / n;
+            sumStd += std::sqrt(std::max(flickerSumSq[i] / n - m * m, 0.f));
+            sumLuma += m;
+            over3 += range[i] >= 3.f ? 1u : 0u;
+            over6 += range[i] >= 6.f ? 1u : 0u;
+            const char h = static_cast<char>(static_cast<uint8_t>(std::min(range[i] * 10.f, 255.f)));
+            heat[i * 3u] = heat[i * 3u + 1u] = heat[i * 3u + 2u] = h;
+            for (size_t c = 0; c < 3u; ++c)
+                mean[i * 3u + c] = static_cast<char>(static_cast<uint8_t>(std::min(flickerRgb[i * 3u + c] / n + 0.5f, 255.f)));
+        }
+        const auto write = [&](const char* suffix, const std::vector<char>& rgb) {
+            std::ofstream out(giCaptureDir / (std::string(fc.name) + suffix), std::ios::binary);
+            out << "P6\n" << flickerWidth << ' ' << flickerHeight << "\n255\n";
+            out.write(rgb.data(), static_cast<std::streamsize>(rgb.size()));
+            Check(static_cast<bool>(out), "GI flicker: image written");
+        };
+        write("_range.ppm", heat);
+        write("_mean.ppm", mean);
+        std::sort(range.begin(), range.end());
+        const auto pct = [&](double q) { return range[std::min(pixels - 1u, static_cast<size_t>(q * static_cast<double>(pixels)))]; };
+        std::printf("GIFLICKER case=%s frames=%d meanLuma=%.1f range p50=%.1f p90=%.1f p99=%.1f max=%.1f meanStd=%.3f "
+                    "share>=3=%.2f%% share>=6=%.2f%% cells created<=%u evicted<=%u active=%u..%u bvhUploads=%u\n",
+                    fc.name, flickerCaptured, sumLuma / static_cast<double>(pixels), pct(0.5), pct(0.9), pct(0.99),
+                    range.back(), sumStd / static_cast<double>(pixels), 100.0 * static_cast<double>(over3) / static_cast<double>(pixels),
+                    100.0 * static_cast<double>(over6) / static_cast<double>(pixels), flickerCreated, flickerEvicted,
+                    flickerActiveMin, flickerActiveMax, uploadsNow - flickerUploads);
+        if (std::string_view(fc.name).substr(0, 10) == "light_step" && flickerTimeline.size() > static_cast<size_t>(kFlickerStepAt) + 40u)
+        {
+            const auto meanOf = [&](size_t first, size_t count) {
+                double sum = 0.0;
+                for (size_t i = first; i < first + count; ++i)
+                    sum += flickerTimeline[i];
+                return static_cast<float>(sum / static_cast<double>(count));
+            };
+            const float before = meanOf(0u, static_cast<size_t>(kFlickerStepAt));
+            const float end = meanOf(flickerTimeline.size() - 20u, 20u);
+            const float step = end - before;
+            std::printf("GIFLICKER light_step meanLuma before=%.2f end=%.2f; share of the step reached after n frames:", before, end);
+            int reached90 = -1;
+            for (size_t i = static_cast<size_t>(kFlickerStepAt); i < flickerTimeline.size(); ++i)
+            {
+                const int n = static_cast<int>(i) - kFlickerStepAt;
+                const float share = std::fabs(step) > 1e-3f ? (flickerTimeline[i] - before) / step : 0.f;
+                if (n == 1 || n == 2 || n == 4 || n == 8 || n == 16 || n == 32 || n == 64 || n == 128)
+                    std::printf(" %d:%.0f%%", n, 100.f * share);
+                if (share < 0.9f)
+                    reached90 = -1;
+                else if (reached90 < 0)
+                    reached90 = n;
+            }
+            std::printf("; stays above 90%% from frame %d\n", reached90);
+        }
+        if (std::string_view(fc.name) == "open_close" && flickerTimeline.size() > static_cast<size_t>(kFlickerStepAt) + 40u)
+        {
+            const char* openEnv = std::getenv("KROM_GI_FLICKER_OPEN");
+            const size_t openFrames = static_cast<size_t>(openEnv ? std::max(1, std::atoi(openEnv)) : 120);
+            const size_t closeAt = std::min(static_cast<size_t>(kFlickerStepAt) + openFrames, flickerTimeline.size() - 1u);
+            double before = 0.0;
+            for (size_t i = 0; i < static_cast<size_t>(kFlickerStepAt); ++i)
+                before += flickerTimeline[i];
+            before /= static_cast<double>(kFlickerStepAt);
+            const float open = flickerTimeline[closeAt > 0u ? closeAt - 1u : 0u];
+            std::printf("GIFLICKER open_close meanLuma shut=%.2f open(after %zu frames)=%.2f; n frames after shutting again:",
+                        before, openFrames, open);
+            int dark = -1;
+            for (size_t i = closeAt; i < flickerTimeline.size(); ++i)
+            {
+                const int n = static_cast<int>(i - closeAt);
+                if (n == 1 || n == 4 || n == 16 || n == 64 || n == 128 || n == 256 || n == 512 || n == 1024 || n == 2048 || n == 4096)
+                    std::printf(" %d:%.2f", n, flickerTimeline[i]);
+                // Dark again: within a tenth of the step of the shut value, for good.
+                if (flickerTimeline[i] > before + 0.1 * (open - before))
+                    dark = -1;
+                else if (dark < 0)
+                    dark = n;
+            }
+            std::printf("; within 10 %% of the shut value from frame %d\n", dark);
+        }
+        if (std::string_view(fc.name) == "cache_reset" && flickerTimeline.size() > static_cast<size_t>(kFlickerStepAt) + 40u)
+        {
+            double end = 0.0;
+            for (size_t i = flickerTimeline.size() - 20u; i < flickerTimeline.size(); ++i)
+                end += flickerTimeline[i];
+            std::printf("GIFLICKER cache_reset mean |luma - image before| per pixel: at the end %.2f; n frames after the reset:",
+                        end / 20.0);
+            for (size_t i = static_cast<size_t>(kFlickerStepAt); i < flickerTimeline.size(); ++i)
+            {
+                const int n = static_cast<int>(i) - kFlickerStepAt;
+                if (n == 1 || n == 2 || n == 4 || n == 8 || n == 16 || n == 32 || n == 64 || n == 128 || n == 256 || n == 512)
+                    std::printf(" %d:%.2f", n, flickerTimeline[i]);
+            }
+            std::printf("\n");
+        }
+        std::fflush(stdout);
+    }
+
     bool UpdateGiBench(AppSceneContext& context)
     {
         namespace sc = renderer::addons::surface_cache;
@@ -2486,6 +2628,17 @@ struct EditorLoadingSmokeTest final : IAppScene
                 Check(res.lastUploads == giUploads, "GI bench: resting scene causes no BVH upload");
                 // KROM_GI_BENCH_CAPTURE_ONLY=1: captures only (no edits, no measuring).
                 giStage = (std::getenv("KROM_GI_BENCH_CAPTURE_ONLY") && !giCaptureDir.empty()) ? 3 : 6;
+                if (std::getenv("KROM_GI_FLICKER") && !giCaptureDir.empty())
+                {
+                    giStage = 20;
+                    flickerGtao = state.gtaoSettings.enabled;
+                    flickerSsr = state.ssrEnabled;
+                    std::printf("GIFLICKER project: gtao=%d ssr=%d exposure=%s ev=%.2f history=%d budgetK=%d rayLength=%.1f\n",
+                                flickerGtao ? 1 : 0, flickerSsr ? 1 : 0,
+                                state.tonemap.exposureMode == renderer::addons::forward::ExposureMode::Auto ? "auto" : "fixed",
+                                state.tonemap.exposureEv, state.surfaceCacheHistory, state.surfaceCacheRayBudgetK,
+                                state.surfaceCacheRayLength);
+                }
                 giWait = 0;
             }
             else if (giWait > 600)
@@ -2694,6 +2847,190 @@ struct EditorLoadingSmokeTest final : IAppScene
                 close();
             }
             break;
+        case 20:   // flicker of the resting image, one case after the other
+        {
+            using renderer::addons::forward::ExposureMode;
+            static const FlickerCase cases[] = {
+                { "baseline",        false, true,  true,  true,  true,  0u, 1u, 0.f },
+                { "auto_exposure",   true,  true,  true,  true,  true,  0u, 1u, 0.f },
+                { "gi_apply_off",    false, true,  false, true,  true,  0u, 1u, 0.f },
+                { "gi_off",          false, false, true,  true,  true,  0u, 1u, 0.f },
+                { "gtao_off",        false, true,  true,  false, true,  0u, 1u, 0.f },
+                { "contact_off",     false, true,  true,  true,  true,  renderer::DBG_DISABLE_CONTACT_SHADOW, 1u, 0.f },
+                { "shadows_off",     false, true,  true,  true,  true,  renderer::DBG_DISABLE_SHADOWS, 1u, 0.f },
+                { "ssr_off",         false, true,  true,  true,  false, 0u, 1u, 0.f },
+                { "view_irradiance", false, true,  true,  true,  true,  0u, 8u, 0.f },
+                { "view_indirect",   false, true,  true,  true,  true,  0u, 9u, 0.f },
+                { "view_coverage",   false, true,  true,  true,  true,  0u, 10u, 0.f },
+                { "view_cells",      false, true,  true,  true,  true,  0u, 5u, 1.f },
+                { "view_cache_irradiance", false, true, true, true, true, 0u, 6u, 1.f },
+                { "view_samples",    false, true,  true,  true,  true,  0u, 7u, 1.f },
+                { "light_step",      false, true,  true,  true,  true,  0u, 1u, 0.f },
+                { "cache_reset",     false, true,  true,  true,  true,  0u, 1u, 0.f },
+                { "light_step_gi",   false, true,  true,  true,  true,  0u, 8u, 0.f },
+                // KROM_GI_FLICKER_TOGGLE=<entity name>: that entity is switched off after
+                // kFlickerStepAt frames and on again KROM_GI_FLICKER_OPEN frames later (a
+                // wall of a sealed room: light comes in, then the room is shut again).
+                { "open_close",      false, true,  true,  true,  true,  0u, 8u, 0.f },
+            };
+            const auto wanted = [](const char* name) {
+                const char* filter = std::getenv("KROM_GI_FLICKER_CASES");
+                if (!filter)
+                    return true;
+                const std::string list = std::string(",") + filter + ",";
+                return list.find(std::string(",") + name + ",") != std::string::npos;
+            };
+            const int count = static_cast<int>(std::size(cases));
+            // KROM_GI_FLICKER_FRAMES / _SETTLE: window and settling time in frames.
+            const char* framesEnv = std::getenv("KROM_GI_FLICKER_FRAMES");
+            const char* settleEnv = std::getenv("KROM_GI_FLICKER_SETTLE");
+            const int flickerFrames = framesEnv ? std::max(2, std::atoi(framesEnv)) : kFlickerFrames;
+            const int flickerSettle = settleEnv ? std::max(1, std::atoi(settleEnv)) : kFlickerSettle;
+            if (flickerCase < 0 || giWait > flickerSettle + flickerFrames)
+            {
+                if (flickerCase >= 0)
+                    FinishFlickerCase(cases[flickerCase], res.lastUploads);
+                do
+                    ++flickerCase;
+                while (flickerCase < count && !wanted(cases[flickerCase].name));
+                giWait = 0;
+                if (flickerCase >= count)
+                {
+                    close();
+                    break;
+                }
+                // A new cache per case: every case settles from the same start.
+                sc::RequestSurfaceCacheReset(res);
+            }
+            const FlickerCase& fc = cases[flickerCase];
+            state.tonemap.exposureMode = fc.autoExposure ? ExposureMode::Auto : ExposureMode::Fixed;
+            if (const char* ev = std::getenv("KROM_GI_FLICKER_EV"))
+                state.tonemap.exposureEv = static_cast<float>(std::atof(ev));
+            state.surfaceCacheEnabled = fc.gi;
+            state.surfaceCacheApply = fc.apply;
+            state.surfaceCacheDebugView = fc.view;
+            state.surfaceCacheOverlay = fc.overlay;
+            state.gtaoSettings.enabled = flickerGtao && fc.gtao;
+            state.ssrEnabled = flickerSsr && fc.ssr;
+            // KROM_GI_FLICKER_PARTICLES=1: every emitter plays as with the toolbar switch.
+            if (std::getenv("KROM_GI_FLICKER_PARTICLES"))
+                state.playAllParticles = true;
+            state.editorDebugFlags = fc.debugFlags;
+            if (app.m_editorFrameCtx->setEditorDebugFlags)
+                app.m_editorFrameCtx->setEditorDebugFlags(fc.debugFlags);
+            if (giWait <= flickerSettle)
+            {
+                flickerCaptured = 0;
+                break;
+            }
+            auto* device = context.renderLoop.GetRenderSystem().GetDevice();
+            const TextureHandle texture = device->GetRenderTargetColorTexture(app.m_sceneView.rt);
+            std::vector<uint8_t> rgba;
+            uint32_t width = 0u, height = 0u;
+            if (!device->ReadTexturePixels(texture, rgba, width, height) ||
+                rgba.size() != static_cast<size_t>(width) * height * 4u)
+            {
+                Check(false, "GI flicker capture readback");
+                break;
+            }
+            const size_t pixels = static_cast<size_t>(width) * height;
+            const sc::SurfaceCacheCounters counters = sc::SurfaceCacheLastCounters(res);
+            if (flickerCaptured == 0 || width != flickerWidth || height != flickerHeight)
+            {
+                flickerCaptured = 0;
+                flickerWidth = width;
+                flickerHeight = height;
+                flickerMin.assign(pixels, 1e9f);
+                flickerMax.assign(pixels, -1e9f);
+                flickerSum.assign(pixels, 0.f);
+                flickerSumSq.assign(pixels, 0.f);
+                flickerRgb.assign(pixels * 3u, 0.f);
+                flickerCreated = flickerEvicted = flickerActiveMax = 0u;
+                flickerActiveMin = counters.active;
+                flickerUploads = res.lastUploads;
+                flickerTimeline.clear();
+                flickerReference.clear();
+            }
+            if (std::string_view(fc.name).substr(0, 10) == "light_step" && flickerCaptured == kFlickerStepAt)
+                app.m_world->View<LightComponent>([](EntityID, LightComponent& light) {
+                    light.intensity *= 3.f;
+                });
+            if (std::string_view(fc.name) == "open_close")
+            {
+                const char* toggle = std::getenv("KROM_GI_FLICKER_TOGGLE");
+                const char* openEnv = std::getenv("KROM_GI_FLICKER_OPEN");
+                const int openFrames = openEnv ? std::max(1, std::atoi(openEnv)) : 120;
+                const bool off = flickerCaptured == kFlickerStepAt;
+                const bool on = flickerCaptured == kFlickerStepAt + openFrames;
+                if (toggle && (off || on))
+                {
+                    bool found = false;
+                    app.m_world->ForEachAlive([&](EntityID e) {
+                        const auto* name = app.m_world->Get<NameComponent>(e);
+                        auto* active = app.m_world->Get<ActiveComponent>(e);
+                        if (name && active && name->name == toggle)
+                        {
+                            active->active = on;
+                            found = true;
+                        }
+                    });
+                    Check(found, "GI flicker: entity to toggle found");
+                }
+            }
+            const bool resetCase = std::string_view(fc.name) == "cache_reset";
+            if (resetCase && flickerCaptured == kFlickerStepAt)
+            {
+                flickerReference.resize(pixels);
+                for (size_t i = 0; i < pixels; ++i)
+                    flickerReference[i] = flickerSum[i] / static_cast<float>(kFlickerStepAt);
+                sc::RequestSurfaceCacheReset(res);
+            }
+            const bool compare = resetCase && flickerReference.size() == pixels && flickerCaptured >= kFlickerStepAt;
+            double frameLuma = 0.0;
+            for (size_t i = 0; i < pixels; ++i)
+            {
+                const float r = rgba[i * 4u], g = rgba[i * 4u + 1u], b = rgba[i * 4u + 2u];
+                const float luma = 0.2126f * r + 0.7152f * g + 0.0722f * b;
+                flickerMin[i] = std::min(flickerMin[i], luma);
+                flickerMax[i] = std::max(flickerMax[i], luma);
+                flickerSum[i] += luma;
+                flickerSumSq[i] += luma * luma;
+                flickerRgb[i * 3u] += r;
+                flickerRgb[i * 3u + 1u] += g;
+                flickerRgb[i * 3u + 2u] += b;
+                frameLuma += compare ? std::fabs(luma - flickerReference[i]) : luma;
+            }
+            // KROM_GI_FLICKER_PROBE="u,v;u,v;...": luma of these pixels (0..1 of
+            // the image) every frame, one line per frame.
+            if (const char* probe = std::getenv("KROM_GI_FLICKER_PROBE"))
+            {
+                std::printf("GIPROBE %s %d", fc.name, flickerCaptured);
+                for (const char* p = probe; *p;)
+                {
+                    char* end = nullptr;
+                    const float u = std::strtof(p, &end);
+                    if (end == p || *end != ',')
+                        break;
+                    p = end + 1;
+                    const float v = std::strtof(p, &end);
+                    if (end == p)
+                        break;
+                    p = *end == ';' ? end + 1 : end;
+                    const size_t x = std::min(static_cast<size_t>(u * static_cast<float>(width)), static_cast<size_t>(width) - 1u);
+                    const size_t y = std::min(static_cast<size_t>(v * static_cast<float>(height)), static_cast<size_t>(height) - 1u);
+                    const size_t i = y * width + x;
+                    std::printf(" %.1f", 0.2126f * rgba[i * 4u] + 0.7152f * rgba[i * 4u + 1u] + 0.0722f * rgba[i * 4u + 2u]);
+                }
+                std::printf("\n");
+            }
+            flickerTimeline.push_back(static_cast<float>(frameLuma / static_cast<double>(pixels)));
+            flickerCreated = std::max(flickerCreated, counters.created);
+            flickerEvicted = std::max(flickerEvicted, counters.evicted);
+            flickerActiveMin = std::min(flickerActiveMin, counters.active);
+            flickerActiveMax = std::max(flickerActiveMax, counters.active);
+            ++flickerCaptured;
+            break;
+        }
         default:
             break;
         }

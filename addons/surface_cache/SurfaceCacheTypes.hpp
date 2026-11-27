@@ -59,16 +59,21 @@ struct SurfaceCacheSettings
     float    rayLength      = 0.0f;     // m, 0 = unbounded; beyond it local probes, the sky only if nothing lies behind
     float    cellSize       = 0.5f;     // m, cell size near the camera
     float    levelDistance  = 8.0f;     // m from the camera with the smallest cells; doubles per level
-    uint32_t maxSamples     = 256u;     // history length (sample weight cap)
+    uint32_t maxSamples     = 256u;     // history length (sample weight cap, at least SC_LONG_HISTORY_FRAMES frames)
     uint32_t maxRaysPerCell = 32u;      // per visible cell and frame (cells outside the view: a quarter)
     bool     useCascades    = true;     // sun visibility from the CSM where it covers the hit (else rays)
     uint32_t registerStep   = 4u;       // one registration ray per 4 x 4 pixels
-    uint32_t maxAge         = 300u;     // frames without registration until a cell is freed
+    uint32_t maxAge         = 3600u;    // frames without registration until a cell is freed (a freed cell that
+                                        // comes back starts without history and breaks the probing chain behind it)
 
     // Shading (package 4).
     bool     apply          = true;     // the PBR shaders take the cache as indirect diffuse light
     float    strength       = 1.0f;     // 0 = probe/IBL only, 1 = GI, > 1 exaggerates the difference
     float    depthTolerance = 0.1f;     // upsampling: relative view-depth difference still taken
+    // The resolve for shading in half resolution: a quarter of its cost, but the
+    // upsampling assigns 2 x 2 pixel blocks to the wrong surface along edges
+    // (frayed silhouettes, steps in room corners).
+    bool     applyHalfResolution = false;
 };
 
 // The debug views the PBR shaders draw themselves (giDebugView, pbr_gi.hlsl).
@@ -122,6 +127,7 @@ static_assert(sizeof(SurfaceCacheConstants) == 112u, "SurfaceCacheConstants layo
 inline constexpr uint32_t kSurfaceCacheFlagIbl       = 1u << 0u;
 inline constexpr uint32_t kSurfaceCacheFlagShadowMap = 1u << 1u;
 inline constexpr uint32_t kSurfaceCacheFlagProbes    = 1u << 2u;
+inline constexpr uint32_t kSurfaceCacheFlagApplyHalf = 1u << 3u;   // resolve for shading in half resolution
 
 // Counters of the cache kernels (SC_COUNTER_*, shaders/surface_cache_update.hlsl).
 struct SurfaceCacheCounters
@@ -195,7 +201,7 @@ struct SurfaceCacheGrid
     BufferHandle cellA;       // uint4 per slot: irradiance, weight
     BufferHandle cellB;       // uint4 per slot: position, normal
     BufferHandle cellFrame;   // uint per slot
-    BufferHandle accum;       // 4 uint per slot
+    BufferHandle accum;       // 12 uint per slot: this frame's sums and count, the change detector, the display value
     BufferHandle activeList;  // uint per slot
     BufferHandle pending;     // uint per slot: cells hit by cache rays, active next frame
     BufferHandle counters;    // kCounterWords uint

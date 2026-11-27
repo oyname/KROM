@@ -1,0 +1,23 @@
+template pbr-lit
+doubleSided true
+castShadows true
+instanced false
+transparent false
+alphaMode opaque
+alphaCutoff 0.5
+baseColorFactor 0.07500000298023224 0.0689999982714653 0.054999999701976776 1
+emissiveFactor 0 0 0
+metallicFactor 0.7200000286102295
+roughnessFactor 0.699999988079071
+normalScale 1
+occlusionStrength 1
+emissiveStrength 1
+uvScale 1 1
+uvOffset 0 0
+uvProjection mesh
+boxTileSize 1
+baseColorTexture Textures/apache15_engine/white_color.png
+metallicRoughnessTexture Textures/apache15_engine/white_metalrough.png
+normalTexture Textures/apache15_engine/flat_normal.png
+occlusionTexture 
+emissiveTexture 

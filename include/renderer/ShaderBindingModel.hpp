@@ -94,9 +94,10 @@ struct TexSlots
     static constexpr uint32_t ContactShadow    = 20u;
 
     // Indirect diffuse irradiance of the surface cache GI (surface cache add-on,
-    // opaque pass only; doc/PLAN_GI.md, package 4). RGBA16F in half resolution:
-    // rgb = irradiance E, a = linear view depth (negative where the cache had no
-    // cell and the far field filled in). Vulkan binding 16 + 21 = 37.
+    // opaque pass only; doc/PLAN_GI.md, package 4). RGBA32F in full or half
+    // resolution: rgb = irradiance E, a = view depth and surface normal of the
+    // texel in one number (shaders/gi_texel.hlsl; negative where the cache had
+    // no cell and the far field filled in). Vulkan binding 16 + 21 = 37.
     static constexpr uint32_t GlobalIllumination = 21u;
 
     static constexpr uint32_t COUNT           = 22u;
