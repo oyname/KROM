@@ -1471,7 +1471,8 @@ void RunSurfaceCacheFurnace(test::TestContext& ctx, uint32_t rayBudget, uint32_t
               makeBuffer(materials, 2u, 16u, false, sceneBuffers[4], &sceneViews[4], nullptr) &&
               makeBuffer(dirtyBox, 2u, 16u, false, sceneBuffers[5], &sceneViews[5], nullptr);
     // u0 keys, u1 cellA, u2 cellB, u3 cellFrame, u4 accum, u5 active list, u6 counters, u7 pending
-    const uint32_t gridCounts[8] = { kCapacity, kCapacity, kCapacity, kCapacity, kCapacity * 4u, kCapacity,
+    // (sizes as EnsureGrid in SurfaceCachePass.cpp: accum holds SC_ACCUM_WORDS = 12 words per slot)
+    const uint32_t gridCounts[8] = { kCapacity, kCapacity, kCapacity, kCapacity, kCapacity * 12u, kCapacity,
                                      sc::SurfaceCacheGrid::kCounterWords, kCapacity };
     const uint32_t gridStrides[8] = { 4u, 16u, 16u, 4u, 4u, 4u, 4u, 4u };
     ComPtr<ID3D11Buffer> grid[8];
@@ -1787,7 +1788,7 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
     const float4 hp = mul(invViewProjMatrix, float4(uv.x * 2.0f - 1.0f, 1.0f - uv.y * 2.0f, d, 1.0f));
     float3 e;
     float coverage;
-    const bool applied = KromSampleGI(pos.xy, hp.xyz / hp.w, e, coverage);
+    const bool applied = KromSampleGI(pos.xy, hp.xyz / hp.w, float3(0.0f, 1.0f, 0.0f), e, coverage);
     return float4(e, applied ? coverage : -0.5f);
 }
 )";
@@ -1868,11 +1869,14 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
 
     // Cells of the floor (+Y bucket, q.y = 0) on four levels; hole: no cells with
     // a centre |x| < 1.5 (second run).
-    const auto fillGrid = [&](bool hole, std::vector<uint32_t>& keys, std::vector<uint32_t>& cellA, std::vector<uint32_t>& cellB)
+    // accum: SC_ACCUM_WORDS = 12 words per slot, the display value the resolve reads in words 8 to 10.
+    const auto fillGrid = [&](bool hole, std::vector<uint32_t>& keys, std::vector<uint32_t>& cellA, std::vector<uint32_t>& cellB,
+                              std::vector<uint32_t>& accum)
     {
         keys.assign(kCapacity, 0u);
         cellA.assign(kCapacity * 4u, 0u);
         cellB.assign(kCapacity * 4u, 0u);
+        accum.assign(kCapacity * 12u, 0u);
         uint32_t full = 0u;
         for (uint32_t level = 0u; level < 4u; ++level)
         {
@@ -1898,6 +1902,9 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
                     std::memcpy(&cellA[slot * 4u + 1u], &e.y, 4u);
                     std::memcpy(&cellA[slot * 4u + 2u], &e.z, 4u);
                     cellA[slot * 4u + 3u] = 64u;
+                    std::memcpy(&accum[slot * 12u + 8u], &e.x, 4u);
+                    std::memcpy(&accum[slot * 12u + 9u], &e.y, 4u);
+                    std::memcpy(&accum[slot * 12u + 10u], &e.z, 4u);
                     // Registered surface point: on the floor somewhere in the cell.
                     const Vec3 surface{ centre.x + 0.2f * size, 0.f, centre.z - 0.1f * size };
                     std::memcpy(&cellB[slot * 4u + 0u], &surface.x, 4u);
@@ -1972,20 +1979,12 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
         command->Unmap(staging.Get(), 0u);
         return true;
     };
-    const auto halfToFloat = [](uint16_t h)
-    {
-        const uint32_t sign = (h >> 15u) & 1u, exponent = (h >> 10u) & 0x1Fu, mantissa = h & 0x3FFu;
-        float v = exponent == 0u ? std::ldexp(static_cast<float>(mantissa), -24)
-                                 : std::ldexp(static_cast<float>(mantissa | 0x400u), static_cast<int>(exponent) - 25);
-        return sign ? -v : v;
-    };
-
     ComPtr<ID3D11Texture2D> depthTex, giTex, outTex, whiteTex;
     ComPtr<ID3D11ShaderResourceView> depthSrv, giSrv, whiteSrv;
     ComPtr<ID3D11RenderTargetView> giRtv, outRtv;
     const uint32_t white = 0xFFFFFFFFu;
     ok = makeTexture(kW, kH, DXGI_FORMAT_R32_FLOAT, depth.data(), kW * 4u, false, depthTex, &depthSrv, nullptr) &&
-         makeTexture(kHalfW, kHalfH, DXGI_FORMAT_R16G16B16A16_FLOAT, nullptr, 0u, true, giTex, &giSrv, &giRtv) &&
+         makeTexture(kHalfW, kHalfH, DXGI_FORMAT_R32G32B32A32_FLOAT, nullptr, 0u, true, giTex, &giSrv, &giRtv) &&
          makeTexture(kW, kH, DXGI_FORMAT_R32G32B32A32_FLOAT, nullptr, 0u, true, outTex, nullptr, &outRtv) &&
          makeTexture(1u, 1u, DXGI_FORMAT_R8G8B8A8_UNORM, &white, 4u, false, whiteTex, &whiteSrv, nullptr);
     CHECK(ctx, ok);
@@ -2033,7 +2032,7 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
         c.levelDistance = levelDistance;
         c.viewportWidth = kW;
         c.viewportHeight = kH;
-        c.flags = 0u;   // no IBL, no probes: the far field is ambient * pi
+        c.flags = sc::kSurfaceCacheFlagApplyHalf;   // half resolution; no IBL, no probes: the far field is ambient * pi
         command->UpdateSubresource(params.Get(), 0u, nullptr, &c, 0u, 0u);
     };
     D3D11_RASTERIZER_DESC rasterDesc{};
@@ -2097,28 +2096,30 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
     for (int run = 0; run < 2; ++run)
     {
         const bool hole = run == 1;
-        std::vector<uint32_t> keys, cellA, cellB;
-        CHECK_EQ(ctx, fillGrid(hole, keys, cellA, cellB), 0u);
-        ComPtr<ID3D11Buffer> bk, ba, bb;
-        ComPtr<ID3D11ShaderResourceView> sk, sa, sb;
-        ok = makeSrvBuffer(keys, 4u, bk, sk) && makeSrvBuffer(cellA, 16u, ba, sa) && makeSrvBuffer(cellB, 16u, bb, sb);
+        std::vector<uint32_t> keys, cellA, cellB, accum;
+        CHECK_EQ(ctx, fillGrid(hole, keys, cellA, cellB, accum), 0u);
+        ComPtr<ID3D11Buffer> bk, ba, bb, bc;
+        ComPtr<ID3D11ShaderResourceView> sk, sa, sb, sacc;
+        ok = makeSrvBuffer(keys, 4u, bk, sk) && makeSrvBuffer(cellA, 16u, ba, sa) && makeSrvBuffer(cellB, 16u, bb, sb) &&
+             makeSrvBuffer(accum, 4u, bc, sacc);
         CHECK(ctx, ok);
         if (!ok)
             return;
 
         // Resolve in half resolution.
         setFrame(sc::kSurfaceCacheShadeFlagEnabled);
-        ID3D11ShaderResourceView* applySrvs[15] = {};
+        ID3D11ShaderResourceView* applySrvs[16] = {};
         applySrvs[8] = depthSrv.Get();
         applySrvs[12] = sk.Get();
         applySrvs[13] = sa.Get();
         applySrvs[14] = sb.Get();
-        command->PSSetShaderResources(0u, 15u, applySrvs);
+        applySrvs[15] = sacc.Get();
+        command->PSSetShaderResources(0u, 16u, applySrvs);
         draw(applyPs.Get(), giRtv.Get(), kHalfW, kHalfH);
         ID3D11ShaderResourceView* noSrvs[22] = {};
         command->PSSetShaderResources(0u, 22u, noSrvs);
         std::vector<uint8_t> giBytes;
-        CHECK(ctx, readTexture(giTex.Get(), kHalfW, kHalfH, DXGI_FORMAT_R16G16B16A16_FLOAT, 8u, giBytes));
+        CHECK(ctx, readTexture(giTex.Get(), kHalfW, kHalfH, DXGI_FORMAT_R32G32B32A32_FLOAT, 16u, giBytes));
         if (giBytes.empty())
             return;
 
@@ -2127,8 +2128,8 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
         for (uint32_t y = 0u; y < kHalfH; ++y)
             for (uint32_t x = 0u; x < kHalfW; ++x)
             {
-                const uint16_t* t = reinterpret_cast<const uint16_t*>(giBytes.data()) + (y * kHalfW + x) * 4u;
-                const float r = halfToFloat(t[0]), g = halfToFloat(t[1]), b = halfToFloat(t[2]), a = halfToFloat(t[3]);
+                const float* t = reinterpret_cast<const float*>(giBytes.data()) + (y * kHalfW + x) * 4u;
+                const float r = t[0], g = t[1], b = t[2], a = t[3];
                 // Nearest of the 2 x 2 pixels, as the shader picks it.
                 float best = 1.f;
                 Vec3 p{ 0.f, 0.f, 0.f };
@@ -2248,11 +2249,11 @@ float4 main(float4 pos : SV_POSITION) : SV_Target
                             const size_t texel = static_cast<size_t>(qy) * kHalfW + static_cast<size_t>(qx);
                             if (texelDepth[texel] <= 0.f || std::fabs(texelDepth[texel] - d) > 0.2f * d)
                                 continue;
-                            const uint16_t* h = reinterpret_cast<const uint16_t*>(giBytes.data()) + texel * 4u;
+                            const float* h = reinterpret_cast<const float*>(giBytes.data()) + texel * 4u;
                             for (int ch = 0; ch < 3; ++ch)
                             {
-                                lo[ch] = std::min(lo[ch], halfToFloat(h[ch]));
-                                hi[ch] = std::max(hi[ch], halfToFloat(h[ch]));
+                                lo[ch] = std::min(lo[ch], h[ch]);
+                                hi[ch] = std::max(hi[ch], h[ch]);
                             }
                         }
                         for (int ch = 0; ch < 3; ++ch)
